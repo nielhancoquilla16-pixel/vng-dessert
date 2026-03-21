@@ -128,4 +128,30 @@ router.post('/register', async (req, res, next) => {
   }
 });
 
+router.get('/test-supabase', async (req, res, next) => {
+  try {
+    const url = process.env.SUPABASE_URL;
+    const key = process.env.SUPABASE_ANON_KEY;
+
+    // The user's requested fetch logic
+    const response = await fetch(url + '/rest/v1/profiles?select=count', {
+      method: "GET",
+      headers: {
+        "apikey": key,
+        "Authorization": `Bearer ${key}`,
+        "Content-Type": "application/json"
+      }
+    });
+
+    const data = await response.json();
+    res.json({
+      status: response.status,
+      statusText: response.statusText,
+      data
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 export default router;

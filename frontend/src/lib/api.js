@@ -1,6 +1,10 @@
 import { supabase, isSupabaseConfigured } from './supabase';
 
-export const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001').replace(/\/$/, '');
+const rawApiBaseUrl = (import.meta.env.VITE_API_BASE_URL ?? '').trim();
+const devFallbackBase = 'http://localhost:3001';
+const resolvedBase = rawApiBaseUrl || (import.meta.env.DEV ? devFallbackBase : '');
+
+export const API_BASE_URL = resolvedBase.replace(/\/$/, '');
 
 export class ApiError extends Error {
   constructor(message, status = 500, details = null) {
@@ -48,10 +52,19 @@ export const apiRequest = async (path, options = {}, config = {}) => {
     headers.set('Authorization', `Bearer ${accessToken}`);
   }
 
-  const response = await fetch(buildUrl(path), {
-    ...options,
-    headers,
-  });
+  let response;
+
+  try {
+    response = await fetch(buildUrl(path), {
+      ...options,
+      headers,
+    });
+  } catch (error) {
+    const message = rawApiBaseUrl
+      ? 'Backend server is unavailable. Please start it and try again.'
+      : 'Backend server is unavailable. Start dessert-ai-system on port 3001 or set VITE_API_BASE_URL.';
+    throw new ApiError(message, 503, error);
+  }
 
   if (response.status === 204) {
     return null;

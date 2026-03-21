@@ -19,7 +19,7 @@ const clientDir = join(__dirname, "../client");
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-app.use(cors({ origin: process.env.CORS_ORIGIN || "http://localhost:5173" }));
+app.use(cors({ origin: "*" })); // Allow all origins in development
 app.use(express.json());
 app.use(express.static(clientDir));
 
