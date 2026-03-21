@@ -10,12 +10,12 @@ const AdminOrders = () => {
 
   const statuses = ['All', 'Pending', 'Confirmed', 'Preparing', 'Ready', 'Delivered', 'Cancelled'];
 
-  const handleStatusUpdate = (orderId, newStatus) => {
-    updateOrderStatus(orderId, newStatus);
+  const handleStatusUpdate = async (orderId, newStatus) => {
+    await updateOrderStatus(orderId, newStatus);
   };
 
   const filteredOrders = orders.filter(o => {
-    const matchesSearch = o.id.toLowerCase().includes(searchTerm.toLowerCase()) || 
+      const matchesSearch = (o.displayId || o.id).toLowerCase().includes(searchTerm.toLowerCase()) || 
                           o.customer.toLowerCase().includes(searchTerm.toLowerCase());
     const matchesStatus = selectedStatus === 'All' || o.status === selectedStatus.toLowerCase();
     return matchesSearch && matchesStatus;
@@ -73,7 +73,7 @@ const AdminOrders = () => {
           <tbody>
             {filteredOrders.map((order) => (
               <tr key={order.id}>
-                <td style={{ paddingLeft: '2rem', fontWeight: 800, color: '#f97316' }}>{order.id}</td>
+                <td style={{ paddingLeft: '2rem', fontWeight: 800, color: '#f97316' }}>{order.displayId || order.id}</td>
                 <td>
                   <div style={{ fontWeight: 700, color: '#0f172a' }}>{order.customer}</div>
                   <div style={{ fontSize: '0.75rem', color: '#64748b' }}>{order.subtext}</div>

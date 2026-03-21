@@ -62,6 +62,18 @@ const Home = () => {
   if (orders) {
     orders.forEach(order => {
       if (order.items && order.status !== 'cancelled') {
+        if (Array.isArray(order.lineItems) && order.lineItems.length > 0) {
+          order.lineItems.forEach((item) => {
+            const qty = parseInt(item.quantity, 10) || 0;
+            const name = item.name || item.product?.productName;
+
+            if (name && qty > 0) {
+              salesCount[name] = (salesCount[name] || 0) + qty;
+            }
+          });
+          return;
+        }
+
         const itemsList = order.items.split(', ');
         itemsList.forEach(itemStr => {
           const match = itemStr.match(/^(\d+)×\s+(.+)$/);

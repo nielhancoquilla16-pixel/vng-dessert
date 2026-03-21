@@ -20,6 +20,10 @@ const Cart = () => {
     }
   }, [cartItems.length]);
 
+  useEffect(() => {
+    setSelectedIds((prev) => prev.filter((id) => cartItems.some((item) => item.id === id)));
+  }, [cartItems]);
+
   const toggleItem = (id) => {
     setSelectedIds(prev => 
       prev.includes(id) ? prev.filter(itemId => itemId !== id) : [...prev, id]
@@ -98,7 +102,13 @@ const Cart = () => {
                   <div className="quantity-controls" style={{ width: 'fit-content', marginTop: '0.5rem' }}>
                     <button className="qty-btn" onClick={() => updateQuantity(item.id, item.quantity - 1)}>-</button>
                     <span className="qty-value">{item.quantity}</span>
-                    <button className="qty-btn" onClick={() => updateQuantity(item.id, item.quantity + 1)}>+</button>
+                    <button
+                      className="qty-btn"
+                      onClick={() => updateQuantity(item.id, item.quantity + 1)}
+                      disabled={item.quantity >= (Number(item.stock) || item.quantity)}
+                    >
+                      +
+                    </button>
                   </div>
                 </div>
                 

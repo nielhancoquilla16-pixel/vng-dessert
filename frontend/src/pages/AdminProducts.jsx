@@ -32,15 +32,15 @@ const AdminProducts = () => {
     setIsModalOpen(true);
   };
 
-  const handleSave = (e) => {
+  const handleSave = async (e) => {
     e.preventDefault();
     const stock = parseInt(currentProduct.stock) || 0;
     const liveStatus = stock === 0 ? 'out' : stock <= 10 ? 'low' : 'active';
     const productToSave = { ...currentProduct, stock, status: liveStatus };
     if (currentProduct.id) {
-      editProduct(productToSave);
+      await editProduct(productToSave);
     } else {
-      addProduct(productToSave);
+      await addProduct(productToSave);
     }
     setIsModalOpen(false);
   };

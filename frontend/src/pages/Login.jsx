@@ -9,10 +9,17 @@ const Login = () => {
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const navigate = useNavigate();
-  const { loginAdmin, loginCustomer } = useAuth();
+  const {
+    loginAdmin,
+    loginCustomer,
+    registerCustomer,
+    requestPasswordReset,
+  } = useAuth();
   const [adminUser, setAdminUser] = useState('');
   const [adminPass, setAdminPass] = useState('');
   const [error, setError] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [forgotMessage, setForgotMessage] = useState('');
   
   // Customer login state
   const [customerUsername, setCustomerUsername] = useState('');
@@ -26,18 +33,19 @@ const Login = () => {
   const [regConfirmPassword, setRegConfirmPassword] = useState('');
   const [regError, setRegError] = useState('');
 
-  const handleAdminLogin = (e) => {
+  const handleAdminLogin = async (e) => {
     e.preventDefault();
-    const result = loginAdmin(adminUser, adminPass);
+    setIsSubmitting(true);
+    const result = await loginAdmin(adminUser, adminPass);
+    setIsSubmitting(false);
     if (result.success) {
-      console.log(`${result.role} logged in`);
       navigate('/admin/dashboard');
     } else {
       setError(result.message);
     }
   };
 
-  const handleCustomerLogin = (e) => {
+  const handleCustomerLogin = async (e) => {
     e.preventDefault();
     setCustomerError('');
     
@@ -50,31 +58,20 @@ const Login = () => {
       setCustomerError('Password must be at least 6 characters');
       return;
     }
-    
-    // Simple validation - store customer in localStorage
-    const customers = JSON.parse(localStorage.getItem('customers') || '[]');
-    const foundCustomer = customers.find(c => c.username === customerUsername);
-    
-    if (!foundCustomer) {
-      setCustomerError('Username not found. Please create an account first.');
+
+    setIsSubmitting(true);
+    const result = await loginCustomer(customerUsername, customerPassword);
+    setIsSubmitting(false);
+
+    if (!result.success) {
+      setCustomerError(result.message);
       return;
     }
-    
-    if (foundCustomer.password !== customerPassword) {
-      setCustomerError('Incorrect password');
-      return;
-    }
-    
-    // Save login state
-    loginCustomer({
-      username: customerUsername,
-      email: foundCustomer.email
-    });
-    
+
     navigate('/');
   };
 
-  const handleRegister = (e) => {
+  const handleRegister = async (e) => {
     e.preventDefault();
     setRegError('');
     
@@ -93,28 +90,20 @@ const Login = () => {
       return;
     }
     
-    // Check if username already exists
-    const customers = JSON.parse(localStorage.getItem('customers') || '[]');
-    if (customers.some(c => c.username === regUsername)) {
-      setRegError('Username already taken');
-      return;
-    }
-    
-    // Save new customer
-    customers.push({
+    setIsSubmitting(true);
+    const result = await registerCustomer({
       username: regUsername,
       email: regEmail,
-      password: regPassword
+      password: regPassword,
+      fullName: '',
     });
-    localStorage.setItem('customers', JSON.stringify(customers));
-    
-    // Auto-login
-    loginCustomer({
-      username: regUsername,
-      email: regEmail
-    });
-    
-    // Store welcome message
+    setIsSubmitting(false);
+
+    if (!result.success) {
+      setRegError(result.message);
+      return;
+    }
+
     const welcomeMsg = `Welcome to V&G website ${regUsername}`;
     
     // Reset form
@@ -135,12 +124,12 @@ const Login = () => {
           {error && <div style={{ color: '#ef4444', fontSize: '0.85rem', fontWeight: 600 }}>{error}</div>}
           
           <div>
-            <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 600, color: '#334155', fontSize: '0.9rem' }}>Username</label>
+            <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 600, color: '#334155', fontSize: '0.9rem' }}>Username or Email</label>
             <div style={{ position: 'relative' }}>
               <Mail size={18} style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }} />
               <input 
                 type="text" 
-                placeholder="Enter username"
+                placeholder="Enter username or email"
                 className="text-input" 
                 style={{ width: '100%', borderRadius: '0.75rem', padding: '0.75rem 1rem 0.75rem 3rem' }} 
                 value={adminUser}
@@ -178,7 +167,7 @@ const Login = () => {
             className="btn-primary" 
             style={{ width: '100%', marginTop: '1rem', background: '#ff9800', border: 'none', padding: '0.75rem', borderRadius: '9999px', fontSize: '1rem', fontWeight: 600, color: 'white' }}
           >
-            Login
+            {isSubmitting ? 'Logging in...' : 'Login'}
           </button>
           
           <div style={{ marginTop: '1.5rem' }}>
@@ -216,10 +205,10 @@ const Login = () => {
           </div>
 
           <div>
-            <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 600, color: '#334155', fontSize: '0.9rem' }}>Email or Mobile No.</label>
+            <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 600, color: '#334155', fontSize: '0.9rem' }}>Email Address</label>
             <input 
-              type="text" 
-              placeholder="you@example.com or 09123456789"
+              type="email" 
+              placeholder="you@example.com"
               className="text-input" 
               style={{ width: '100%', borderRadius: '0.75rem', padding: '0.75rem 1rem' }} 
               value={regEmail}
@@ -274,7 +263,7 @@ const Login = () => {
             className="btn-primary" 
             style={{ width: '100%', marginTop: '0.5rem', background: '#ff9800', border: 'none', padding: '0.75rem', borderRadius: '9999px', fontSize: '1rem', fontWeight: 600, color: 'white' }}
           >
-            Create Account
+            {isSubmitting ? 'Creating Account...' : 'Create Account'}
           </button>
           
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '1rem' }}>
@@ -307,10 +296,10 @@ const Login = () => {
           {customerError && <div style={{ color: '#ef4444', fontSize: '0.85rem', fontWeight: 600 }}>{customerError}</div>}
           
           <div>
-            <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 600, color: '#334155', fontSize: '0.9rem' }}>Username</label>
+            <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 600, color: '#334155', fontSize: '0.9rem' }}>Username or Email</label>
             <input 
               type="text" 
-              placeholder="Enter your username"
+              placeholder="Enter your username or email"
               className="text-input" 
               style={{ width: '100%', borderRadius: '0.75rem', padding: '0.75rem 1rem' }} 
               value={customerUsername}
@@ -346,7 +335,7 @@ const Login = () => {
             className="btn-primary" 
             style={{ width: '100%', marginTop: '0.5rem', background: '#ff9800', border: 'none', padding: '0.75rem', borderRadius: '9999px', fontSize: '1rem', fontWeight: 600, color: 'white', cursor: 'pointer' }}
           >
-            Login
+            {isSubmitting ? 'Logging in...' : 'Login'}
           </button>
           
           <div style={{ textAlign: 'center', marginTop: '0.5rem' }}>
@@ -389,12 +378,32 @@ const Login = () => {
         <h2 style={{ fontSize: '1.5rem', marginBottom: '1.5rem', color: '#0f172a' }}>Forgot Password</h2>
         <p style={{ color: '#64748b', marginBottom: '2rem', fontSize: '0.95rem' }}>Enter your email or mobile number and we'll send you a link to reset your password.</p>
         
-        <form style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }} onSubmit={(e) => { e.preventDefault(); alert('Password reset link sent!'); setView('customer'); }}>
+        <form
+          style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}
+          onSubmit={async (e) => {
+            e.preventDefault();
+            setForgotMessage('');
+            const formData = new FormData(e.currentTarget);
+            const identifier = String(formData.get('identifier') || '').trim();
+            const result = await requestPasswordReset(identifier);
+            if (result.success) {
+              setForgotMessage('Reset link sent. Please check your email inbox.');
+            } else {
+              setForgotMessage(result.message);
+            }
+          }}
+        >
+          {forgotMessage && (
+            <div style={{ color: forgotMessage.toLowerCase().includes('sent') ? '#15803d' : '#b91c1c', fontSize: '0.85rem', fontWeight: 600 }}>
+              {forgotMessage}
+            </div>
+          )}
           <div>
-            <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 600, color: '#334155', fontSize: '0.9rem' }}>Email or Mobile No.</label>
+            <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 600, color: '#334155', fontSize: '0.9rem' }}>Username or Email</label>
             <input 
+              name="identifier"
               type="text" 
-              placeholder="you@example.com or 09123456789"
+              placeholder="Enter your username or email"
               className="text-input" 
               style={{ width: '100%', borderRadius: '0.75rem', padding: '0.75rem 1rem' }} 
               required

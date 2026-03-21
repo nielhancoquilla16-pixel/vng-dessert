@@ -19,9 +19,16 @@ const Orders = () => {
     );
   }
 
-  const myOrders = orders.filter(
-    order => order.customer.toLowerCase() === loggedInCustomer.username.toLowerCase()
-  );
+  const accountUsername = loggedInCustomer.username.toLowerCase();
+  const accountFullName = (loggedInCustomer.fullName || '').trim().toLowerCase();
+  const myOrders = orders.filter((order) => {
+    const savedUsername = (order.customerUsername || '').toLowerCase();
+    const fallbackName = (order.customer || '').toLowerCase();
+
+    return savedUsername === accountUsername
+      || fallbackName === accountUsername
+      || (accountFullName && fallbackName === accountFullName);
+  });
 
   return (
     <div style={{ maxWidth: '1280px', margin: '2rem auto', padding: '0 2rem' }}>
@@ -39,7 +46,7 @@ const Orders = () => {
               <div key={order.id} style={{ border: '1px solid #e2e8f0', borderRadius: '0.75rem', padding: '1.5rem', display: 'flex', flexWrap: 'wrap', gap: '1.5rem', justifyContent: 'space-between', alignItems: 'center' }}>
                 
                 <div>
-                  <div style={{ fontWeight: 700, color: '#f97316', marginBottom: '0.25rem' }}>{order.id}</div>
+                  <div style={{ fontWeight: 700, color: '#f97316', marginBottom: '0.25rem' }}>{order.displayId || order.id}</div>
                   <div style={{ color: '#64748b', fontSize: '0.9rem' }}>{order.date}</div>
                 </div>
 
@@ -50,7 +57,7 @@ const Orders = () => {
 
                 <div style={{ textAlign: 'right' }}>
                   <div style={{ fontWeight: 800, fontSize: '1.1rem', color: '#0f172a', marginBottom: '0.25rem' }}>{order.total}</div>
-                  <div style={{ color: '#64748b', fontSize: '0.9rem' }}>{order.subtext.split(' / ')[0]}</div>
+                  <div style={{ color: '#64748b', fontSize: '0.9rem' }}>{(order.subtext || '').split(' / ')[0]}</div>
                 </div>
 
                 <div style={{ minWidth: '100px', textAlign: 'right' }}>

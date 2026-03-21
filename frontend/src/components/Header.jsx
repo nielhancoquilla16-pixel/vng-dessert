@@ -7,8 +7,9 @@ import './Header.css';
 
 const Header = () => {
   const { cartCount } = useCart();
-  const { isAdmin, loggedInCustomer, logout } = useAuth();
+  const { isAdmin, userRole, loggedInCustomer, logout } = useAuth();
   const location = useLocation();
+  const panelLabel = userRole === 'staff' ? 'Staff' : 'Admin';
 
   const navLinks = [
     { name: 'Home', path: '/' },
@@ -60,12 +61,12 @@ const Header = () => {
       <div className="header-actions">
         {isAdmin ? (
           <div style={{ display: 'flex', gap: '0.5rem' }}>
-            <Link to="/admin/dashboard" className="btn-login" style={{ background: '#f97316' }}>Admin</Link>
+            <Link to="/admin/dashboard" className="btn-login" style={{ background: '#f97316' }}>{panelLabel}</Link>
             <button onClick={logout} className="btn-login" style={{ background: '#ef4444', border: 'none', cursor: 'pointer' }}>Logout</button>
           </div>
         ) : loggedInCustomer ? (
           <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-            <span style={{ fontWeight: 600, color: '#334155' }}>Hi, {loggedInCustomer.username}</span>
+            <span style={{ fontWeight: 600, color: '#334155' }}>Hi, {loggedInCustomer.username || loggedInCustomer.fullName || 'Customer'}</span>
             <button onClick={logout} className="btn-login" style={{ background: '#ef4444', border: 'none', cursor: 'pointer', padding: '0.5rem 1rem' }}>Logout</button>
           </div>
         ) : (

@@ -4,7 +4,7 @@ import { useOrders } from './OrderContext';
 
 const AIContext = createContext();
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL
-  || (import.meta.env.DEV ? 'http://localhost:3000' : '');
+  || (import.meta.env.DEV ? 'http://localhost:3001' : '');
 const AI_REQUEST_TIMEOUT_MS = 2500;
 
 export const useAI = () => {

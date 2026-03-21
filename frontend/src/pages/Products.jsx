@@ -177,9 +177,10 @@ const Products = () => {
                     <button
                       className="btn-primary btn-icon"
                       style={{ padding: '0.5rem 1rem', width: '100%' }}
+                      disabled={Number(product.stock) <= 0}
                       onClick={() => addToCart(product)}
                     >
-                      <Plus size={16} /> Add to Cart
+                      <Plus size={16} /> {Number(product.stock) <= 0 ? 'Out of Stock' : 'Add to Cart'}
                     </button>
                   </div>
                 </div>

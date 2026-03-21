@@ -66,6 +66,128 @@
   color: var(--text-dark);
 }
 
+.report-section-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.report-section-header .chart-title {
+  margin-bottom: 0.35rem;
+}
+
+.chart-subtitle {
+  color: #64748b;
+  font-size: 0.92rem;
+  line-height: 1.5;
+}
+
+.report-highlight-chip {
+  background: #fff7ed;
+  border: 1px solid #fdba74;
+  color: #c2410c;
+  border-radius: 9999px;
+  padding: 0.55rem 0.9rem;
+  font-size: 0.85rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.reports-chart-shell {
+  height: 300px;
+}
+
+.chart-empty-state {
+  min-height: 300px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  color: #94a3b8;
+  line-height: 1.6;
+  padding: 2rem;
+  background: #f8fafc;
+  border-radius: 1rem;
+}
+
+.report-tooltip {
+  background: white;
+  border: 1px solid #e2e8f0;
+  border-radius: 0.85rem;
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.12);
+  padding: 0.85rem 1rem;
+}
+
+.report-tooltip-title {
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: #0f172a;
+  margin-bottom: 0.35rem;
+}
+
+.report-tooltip-value {
+  font-size: 0.95rem;
+  font-weight: 800;
+  color: #f97316;
+}
+
+.report-tooltip-meta {
+  color: #64748b;
+  font-size: 0.8rem;
+  margin-top: 0.25rem;
+}
+
+.weekly-history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+
+.weekly-history-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem 1.1rem;
+  border: 1px solid #e2e8f0;
+  border-radius: 1rem;
+  background: #fff;
+}
+
+.weekly-history-main {
+  min-width: 0;
+}
+
+.weekly-history-week {
+  font-size: 0.82rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #f97316;
+  margin-bottom: 0.25rem;
+}
+
+.weekly-history-range {
+  font-size: 1rem;
+  font-weight: 700;
+  color: #0f172a;
+  margin-bottom: 0.2rem;
+}
+
+.weekly-history-meta {
+  color: #64748b;
+  font-size: 0.9rem;
+}
+
+.weekly-history-value {
+  font-size: 1.1rem;
+  font-weight: 800;
+  color: #0f172a;
+  white-space: nowrap;
+}
+
 .chart-content {
   min-height: 300px;
   display: flex;
@@ -296,5 +418,16 @@
 @media (max-width: 768px) {
   .ai-content-grid {
     grid-template-columns: 1fr;
+  }
+
+  .report-section-header,
+  .weekly-history-row {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .report-highlight-chip,
+  .weekly-history-value {
+    white-space: normal;
   }
 }
