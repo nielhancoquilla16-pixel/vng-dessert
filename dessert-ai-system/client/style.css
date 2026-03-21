@@ -1,0 +1,118 @@
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: 'Segoe UI', sans-serif;
+  background: linear-gradient(135deg, #1e1b4b 0%, #312e81 100%);
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem;
+}
+
+.container {
+  max-width: 900px;
+  width: 100%;
+}
+
+header {
+  text-align: center;
+  margin-bottom: 3rem;
+  color: white;
+}
+
+.logo {
+  font-size: 2.5rem;
+  font-weight: 800;
+  margin-bottom: 0.5rem;
+}
+
+.subtitle {
+  color: #a5b4fc;
+  font-size: 1.1rem;
+}
+
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+  gap: 2rem;
+}
+
+.card {
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 1.5rem;
+  padding: 2rem;
+  color: white;
+ -webkit-backdrop-filter: blur(10px);
+backdrop-filter: blur(10px);
+
+}
+
+.card h2 {
+  font-size: 1.4rem;
+  margin-bottom: 0.75rem;
+}
+
+.card p {
+  color: #c7d2fe;
+  margin-bottom: 1.5rem;
+  font-size: 0.95rem;
+}
+
+textarea {
+  width: 100%;
+  padding: 0.85rem 1rem;
+  border-radius: 0.75rem;
+  border: 1px solid rgba(255,255,255,0.15);
+  background: rgba(255,255,255,0.08);
+  color: white;
+  font-size: 0.9rem;
+  font-family: inherit;
+  resize: vertical;
+  min-height: 80px;
+  margin-bottom: 1rem;
+  outline: none;
+}
+
+textarea::placeholder { color: #818cf8; }
+
+button {
+  background: #6366f1;
+  color: white;
+  border: none;
+  padding: 0.75rem 2rem;
+  border-radius: 0.75rem;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  width: 100%;
+}
+
+button:hover {
+  background: #4f46e5;
+  transform: translateY(-2px);
+}
+
+button:active {
+  transform: translateY(0);
+}
+
+.response {
+  margin-top: 1.25rem;
+  padding: 1rem 1.25rem;
+  background: rgba(99, 102, 241, 0.1);
+  border: 1px solid rgba(99, 102, 241, 0.3);
+  border-radius: 0.75rem;
+  font-size: 0.9rem;
+  line-height: 1.6;
+  color: #e0e7ff;
+  min-height: 50px;
+  white-space: pre-wrap;
+  display: none;
+}
+
+.response:empty {
+  display: none;
+}

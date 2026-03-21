@@ -1,0 +1,146 @@
+/* Admin QR Scanner Page */
+.admin-qr {
+  display: flex;
+  flex-direction: column;
+  gap: 2rem;
+}
+
+.qr-header {
+  background: white;
+  padding: 1.5rem;
+  border-radius: 1rem;
+  box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+}
+
+.qr-title {
+  font-size: 1.75rem;
+  color: var(--text-dark);
+  margin-bottom: 1rem;
+}
+
+.qr-scanner {
+  background: white;
+  padding: 2rem;
+  border-radius: 1rem;
+  box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+  text-align: center;
+}
+
+.qr-scanner-container {
+  max-width: 400px;
+  margin: 0 auto;
+  background: #f8fafc;
+  padding: 2rem;
+  border-radius: 1rem;
+  border: 2px dashed var(--border-color);
+}
+
+.qr-scanner-placeholder {
+  width: 300px;
+  height: 300px;
+  background: linear-gradient(45deg, #f8fafc 25%, #e2e8f0 25%, #e2e8f0 50%, #f8fafc 50%, #f8fafc 75%, #e2e8f0 75%, #e2e8f0);
+  background-size: 20px 20px;
+  border-radius: 1rem;
+  margin: 0 auto 1rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+}
+
+.qr-input-group {
+  margin: 1.5rem 0;
+}
+
+.qr-input-group label {
+  display: block;
+  font-weight: 600;
+  margin-bottom: 0.5rem;
+  color: var(--text-dark);
+}
+
+.qr-input {
+  width: 100%;
+  max-width: 400px;
+  padding: 0.75rem;
+  border: 1px solid var(--border-color);
+  border-radius: 0.5rem;
+  font-size: 1rem;
+}
+
+.qr-results {
+  background: white;
+  padding: 1.5rem;
+  border-radius: 1rem;
+  box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+  margin-top: 1rem;
+}
+
+.qr-result-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1rem;
+  background: #f8fafc;
+  border-radius: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.qr-result-info {
+  flex: 1;
+}
+
+.qr-result-product {
+  font-weight: 600;
+  color: var(--text-dark);
+}
+
+.qr-result-time {
+  color: var(--text-muted);
+  font-size: 0.875rem;
+}
+
+.qr-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.btn-verify {
+  background: var(--secondary-color);
+  color: white;
+  padding: 0.5rem 1rem;
+  border-radius: 0.5rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+  cursor: pointer;
+  border: none;
+  transition: all 0.2s;
+}
+
+.btn-verify:hover {
+  background: #e68300;
+}
+
+.btn-remove-scan {
+  background: var(--danger-color);
+  color: white;
+  padding: 0.5rem 1rem;
+  border-radius: 0.5rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+  cursor: pointer;
+  border: none;
+  transition: all 0.2s;
+}
+
+.btn-remove-scan:hover {
+  background: #dc2626;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .qr-scanner-placeholder {
+    width: 200px;
+    height: 200px;
+  }
+}

@@ -1,0 +1,168 @@
+/* Admin Orders Page */
+.admin-orders {
+  display: flex;
+  flex-direction: column;
+  gap: 2rem;
+}
+
+.orders-header {
+  background: white;
+  padding: 1.5rem;
+  border-radius: 1rem;
+  box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+}
+
+.orders-title {
+  font-size: 1.75rem;
+  color: var(--text-dark);
+  margin-bottom: 1rem;
+}
+
+.orders-filters {
+  display: flex;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.filter-group {
+  flex: 1;
+}
+
+.filter-group label {
+  display: block;
+  font-weight: 600;
+  margin-bottom: 0.5rem;
+  color: var(--text-dark);
+  font-size: 0.875rem;
+}
+
+.filter-group input,
+.filter-group select {
+  width: 100%;
+  padding: 0.5rem;
+  border: 1px solid var(--border-color);
+  border-radius: 0.5rem;
+  font-size: 0.875rem;
+}
+
+.orders-table-container {
+  background: white;
+  border-radius: 1rem;
+  overflow: hidden;
+  box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+}
+
+.orders-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.orders-table thead tr {
+  background: #1e293b;
+}
+
+.orders-table th {
+  padding: 1rem;
+  text-align: left;
+  font-weight: 600;
+  color: white;
+}
+
+.orders-table td {
+  padding: 1rem;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.orders-table tbody tr:hover {
+  background: #f8fafc;
+}
+
+.order-id {
+  font-weight: 600;
+  color: var(--text-dark);
+}
+
+.status-badge {
+  display: inline-block;
+  padding: 0.25rem 0.75rem;
+  border-radius: 9999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.status-pending {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.status-processing {
+  background: #bfdbfe;
+  color: #1e40af;
+}
+
+.status-delivered {
+  background: #d1fae5;
+  color: #065f46;
+}
+
+.status-cancelled {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.order-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.action-btn {
+  padding: 0.5rem 1rem;
+  border-radius: 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+  border: none;
+  transition: all 0.2s;
+}
+
+.btn-view {
+  background: var(--secondary-color);
+  color: white;
+}
+
+.btn-view:hover {
+  background: #e68300;
+}
+
+.btn-update {
+  background: #3b82f6;
+  color: white;
+}
+
+.btn-update:hover {
+  background: #2563eb;
+}
+
+.orders-empty {
+  text-align: center;
+  padding: 3rem;
+  background: white;
+  border-radius: 1rem;
+  color: var(--text-muted);
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .orders-filters {
+    flex-direction: column;
+  }
+  
+  .orders-table {
+    font-size: 0.875rem;
+  }
+  
+  .orders-table th,
+  .orders-table td {
+    padding: 0.5rem;
+  }
+}

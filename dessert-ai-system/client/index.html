@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dessert AI</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main class="container">
+    <header>
+      <h1 class="logo">Dessert Shop AI</h1>
+      <p class="subtitle">Ask the assistant about products or generate a quick stock report.</p>
+    </header>
+
+    <section class="cards">
+      <article class="card">
+        <h2>Ask the AI</h2>
+        <p>Try a customer question and get a response from the V&amp;G dessert assistant.</p>
+        <textarea id="questionInput" placeholder="What dessert do you recommend today?"></textarea>
+        <button type="button" onclick="askAI()">Send Question</button>
+        <div id="aiResponse" class="response" aria-live="polite"></div>
+      </article>
+
+      <article class="card">
+        <h2>Inventory Report</h2>
+        <p>Run a sample inventory analysis to check low-stock and sold-out items.</p>
+        <button type="button" onclick="getInventoryReport()">Generate Report</button>
+        <div id="inventoryResponse" class="response" aria-live="polite"></div>
+      </article>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>

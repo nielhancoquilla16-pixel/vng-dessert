@@ -1,0 +1,141 @@
+/* Orders Page */
+.orders-container {
+  background: white;
+  border-radius: 1rem;
+  padding: 2rem;
+  box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+}
+
+.orders-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 2rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.orders-title {
+  font-size: 1.75rem;
+  color: var(--text-dark);
+}
+
+.orders-filter {
+  display: flex;
+  gap: 1rem;
+}
+
+.orders-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.orders-table thead tr {
+  background: #f8fafc;
+  border-bottom: 2px solid var(--border-color);
+}
+
+.orders-table th {
+  padding: 1rem;
+  text-align: left;
+  font-weight: 600;
+  color: var(--text-dark);
+}
+
+.orders-table tbody tr {
+  border-bottom: 1px solid var(--border-color);
+  transition: background 0.2s;
+}
+
+.orders-table tbody tr:hover {
+  background: #f9fafb;
+}
+
+.orders-table td {
+  padding: 1rem;
+  color: var(--text-muted);
+}
+
+.order-id {
+  color: var(--text-dark);
+  font-weight: 600;
+}
+
+.order-status {
+  display: inline-block;
+  padding: 0.25rem 0.75rem;
+  border-radius: 9999px;
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.status-completed {
+  background: #d1fae5;
+  color: #065f46;
+}
+
+.status-pending {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.status-cancelled {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.order-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.order-btn {
+  padding: 0.5rem 1rem;
+  border-radius: 0.5rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  border: none;
+}
+
+.btn-view {
+  background: var(--secondary-color);
+  color: white;
+}
+
+.btn-view:hover {
+  background: #e68300;
+}
+
+.btn-cancel {
+  background: var(--danger-color);
+  color: white;
+}
+
+.btn-cancel:hover {
+  background: #dc2626;
+}
+
+.orders-empty {
+  text-align: center;
+  padding: 3rem;
+  color: var(--text-muted);
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .orders-header {
+    flex-direction: column;
+    gap: 1rem;
+  }
+  
+  .orders-table {
+    font-size: 0.875rem;
+  }
+  
+  .orders-table th,
+  .orders-table td {
+    padding: 0.5rem;
+  }
+}
