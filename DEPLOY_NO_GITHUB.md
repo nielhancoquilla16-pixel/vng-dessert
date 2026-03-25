@@ -46,14 +46,15 @@ Notes:
 From the project root:
 
 ```bash
-cd frontend
-npm install
 npm install -g vercel
 vercel
 vercel --prod
 ```
 
-When Vercel asks for the project root, use the `frontend` directory.
+Vercel will use the root `vercel.json` when you deploy from the repo root.
+
+- Repo root: uses the root `vercel.json` and builds `frontend/dist`
+- `frontend` directory: still works if you want the older frontend-only setup
 
 Add these environment variables in Vercel:
 
