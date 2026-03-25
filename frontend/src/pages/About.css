@@ -1,6 +1,87 @@
 /* Information Pages (About, Contact) */
+.about-page {
+  display: flex;
+  flex-direction: column;
+  gap: 2rem;
+}
+
+.about-hero {
+  background: #979775;
+  text-align: center;
+  padding: 4rem 2rem;
+}
+
+.about-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.4rem 0.9rem;
+  margin-bottom: 1rem;
+  border-radius: 999px;
+  background: rgba(206, 193, 193, 0.9);
+  color: #b1775a;
+  font-family: var(--font-heading);
+  font-size: 0.85rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.about-hero h1 {
+  font-size: clamp(2.25rem, 4vw, 3rem);
+  margin-bottom: 1rem;
+  color: #0f172a;
+}
+
+.about-storefront {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(320px, 480px);
+  align-items: center;
+  gap: 2rem;
+}
+
+.about-store-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.about-section-label {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  padding: 0.35rem 0.85rem;
+  border-radius: 999px;
+  background: #090909;
+  color: #dad5d5;
+  font-family: var(--font-heading);
+  font-size: 0.8rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.about-store-copy h2 {
+  color: #020202;
+  font-size: clamp(1.8rem, 3vw, 2.5rem);
+  line-height: 1.15;
+  margin-bottom: 0;
+}
+
+.about-store-copy p {
+  margin-bottom: 0;
+  font-size: 1.05rem;
+}
+
+.about-image-panel {
+  text-align: center;
+  padding: 0;
+  display: flex;
+  justify-content: center;
+}
+
 .info-section {
-  background: white;
+  background: rgb(245, 239, 239);
   border-radius: 1rem;
   padding: 3rem;
   margin-bottom: 2rem;
@@ -28,7 +109,7 @@
 }
 
 .info-card {
-  background: linear-gradient(135deg, #fff9c4 0%, #ffe0b2 100%);
+  background: linear-gradient(135deg, #f9f8f8 0%, #ebe6e6 100%);
   padding: 2rem;
   border-radius: 1rem;
   text-align: center;
@@ -50,6 +131,157 @@
   font-size: 0.95rem;
 }
 
+/* Store Image */
+.store-image {
+  max-width: 100%;
+  width: 100%;
+  max-width: 480px;
+  height: 100%;
+  min-height: 340px;
+  border-radius: 1.5rem;
+  border: 1px solid rgba(15, 23, 42, 0.06);
+  box-shadow: 0 18px 36px rgba(15, 23, 42, 0.12);
+  object-fit: cover;
+  background: linear-gradient(135deg, #090807 0%, #0b0a0a 100%);
+}
+
+/* Flip Cards Container */
+.flip-cards-container {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 2rem;
+  padding: 0 1rem 1rem;
+}
+
+/* Flip Card Styles */
+.about-flip-card {
+  min-height: 350px;
+  perspective: 1200px;
+  transition: transform 0.3s ease;
+}
+
+.about-flip-card:hover {
+  transform: translateY(-4px);
+}
+
+.about-flip-card-inner {
+  position: relative;
+  height: 100%;
+  min-height: 350px;
+  transform-style: preserve-3d;
+  transition: transform 0.6s ease;
+}
+
+.about-flip-card.is-flipped .about-flip-card-inner {
+  transform: rotateY(180deg);
+}
+
+.about-flip-face {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border-radius: 1rem;
+  padding: 2rem;
+  border: none;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  text-align: center;
+  box-shadow: 0 8px 16px rgba(0, 0, 0, 0.12);
+  transition: box-shadow 0.3s ease, transform 0.3s ease;
+  -webkit-backface-visibility: hidden;
+  backface-visibility: hidden;
+}
+
+.about-flip-face:hover {
+  box-shadow: 0 12px 24px rgba(0, 0, 0, 0.15);
+}
+
+.about-flip-face h2 {
+  font-size: 1.75rem;
+  margin-bottom: 1.5rem;
+}
+
+.about-flip-face p {
+  line-height: 1.6;
+  font-size: 1rem;
+  margin: 0;
+}
+
+.about-flip-face-back {
+  transform: rotateY(180deg);
+}
+
+/* Story Card Front */
+.story-card {
+  background: linear-gradient(135deg, #6b7280 0%, #4b5563 100%);
+  color: white;
+}
+
+.story-card h2 {
+  color: rgb(5, 4, 4);
+}
+
+.story-card p {
+  color: rgba(13, 10, 10, 0.95);
+  line-height: 1.6;
+  font-size: 1rem;
+  margin: 0;
+}
+
+/* Story Card Back */
+.story-card-back {
+  background: #e0e7ff;
+  color: #1e293b;
+}
+
+.story-card-back p {
+  color: #334155;
+  line-height: 1.6;
+  font-size: 0.95rem;
+  margin: 0 0 1rem 0;
+}
+
+/* Mission Card Front */
+.mission-card {
+  background: linear-gradient(135deg, #ff6b1a 0%, #ffa500 100%);
+  color: white;
+}
+
+.mission-card h2 {
+  color: white;
+}
+
+.mission-card p {
+  color: rgba(255, 255, 255, 0.95);
+  line-height: 1.6;
+  font-size: 1rem;
+  margin: 0;
+}
+
+/* Mission Card Back */
+.mission-card-back {
+  background: #fef3c7;
+  color: #1e293b;
+}
+
+.mission-card-back p {
+  color: #334155;
+  line-height: 1.6;
+  font-size: 0.95rem;
+  margin: 0 0 1rem 0;
+}
+
+/* Click to flip indicator */
+.click-to-flip {
+  font-size: 0.75rem;
+  opacity: 0.6;
+  margin-top: 1.5rem;
+  font-style: italic;
+}
+
 /* Responsive */
 @media (max-width: 768px) {
   .info-section {
@@ -62,5 +294,42 @@
   
   .info-grid {
     grid-template-columns: 1fr;
+  }
+
+  .flip-cards-container {
+    grid-template-columns: 1fr;
+    padding: 0;
+  }
+
+  .about-storefront {
+    grid-template-columns: 1fr;
+  }
+
+  .about-image-panel {
+    justify-content: stretch;
+  }
+
+  .about-flip-card,
+  .about-flip-card-inner,
+  .about-flip-face {
+    height: 300px;
+    min-height: 300px;
+  }
+
+  .about-flip-face {
+    padding: 1.5rem;
+  }
+
+  .about-flip-face h2 {
+    font-size: 1.5rem;
+  }
+
+  .about-flip-face p {
+    font-size: 0.95rem;
+  }
+
+  .store-image {
+    max-width: 100%;
+    min-height: 280px;
   }
 }

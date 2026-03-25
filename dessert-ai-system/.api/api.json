@@ -1,0 +1,11 @@
+{
+  "version": "1.0",
+  "apis": [
+    {
+      "identifier": "paymongo",
+      "source": "@paymongo/v2#1fzuu181tmdopg9dp",
+      "integrity": "sha512-5lC8dLcQm8iXqsxufKfmNusGTl0kSQWZ/pfqFczNBG1oOOQbO2ImZfEBdE8RdA2QtgOAEss6wOPaKiCeJthPJA==",
+      "installerVersion": "6.1.3"
+    }
+  ]
+}

@@ -1,45 +1,94 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
+import { MapPin, Sparkles, ShoppingCart } from 'lucide-react';
+import ReactPlayer from 'react-player';
 import { useProducts } from '../context/ProductContext';
-import { useOrders } from '../context/OrderContext';
 import { useAI } from '../context/AIContext';
 import { useContent } from '../context/ContentContext';
-import { MapPin, Sparkles, ShoppingCart, Plus } from 'lucide-react';
-import adverVideo from '../assets/adver.mp4';
-import promoVideo from '../assets/promo.mp4';
-import ReactPlayer from 'react-player';
+import { apiRequest } from '../lib/api';
+import { formatCurrency } from '../utils/orderAnalytics';
 import './Home.css';
+
+const BEST_SELLER_LIMIT = 3;
 
 const VideoEmbed = ({ url }) => {
   if (!url) return null;
-  
-  // Custom intercept for Facebook links to bypass react-player's strict regex
+
   if (url.includes('facebook.com') || url.includes('fb.watch')) {
     const fbIframeSrc = `https://www.facebook.com/plugins/video.php?href=${encodeURIComponent(url)}&show_text=0`;
     return (
-      <iframe 
+      <iframe
         src={fbIframeSrc}
-        width="100%" 
-        height="100%" 
-        style={{ border: 'none', overflow: 'hidden' }} 
-        scrolling="no" 
-        frameBorder="0" 
-        allowFullScreen={true} 
-        allow="autoplay; clipboard-write; encrypted-media; picture-in-picture; web-share" 
+        width="100%"
+        height="100%"
+        style={{ border: 'none', overflow: 'hidden' }}
+        scrolling="no"
+        frameBorder="0"
+        allowFullScreen
+        allow="autoplay; clipboard-write; encrypted-media; picture-in-picture; web-share"
       />
     );
   }
 
-  // Fallback to ReactPlayer for YouTube, Vimeo, and raw MP4s
   return <ReactPlayer url={url} controls width="100%" height="100%" />;
 };
+
+const normalizeBestSeller = (product = {}, fallbackRank = 1) => ({
+  id: product.id,
+  name: product.name || product.productName || product.product_name || 'Dessert Item',
+  productName: product.productName || product.product_name || product.name || 'Dessert Item',
+  description: product.description || 'Freshly prepared dessert made with care.',
+  price: Number(product.price) || 0,
+  category: product.category || 'Dessert',
+  imageUrl: product.imageUrl || product.image_url || product.image || '/logo.png',
+  image: product.imageUrl || product.image_url || product.image || '/logo.png',
+  soldCount: Number(product.soldCount) || 0,
+  orderCount: Number(product.orderCount) || 0,
+  averageUnitsPerOrder: Number(product.averageUnitsPerOrder) || 0,
+  rank: Number(product.rank) || fallbackRank,
+});
+
+const buildFallbackBestSellers = (products = []) => (
+  products
+    .filter((product) => !product.type || product.type === 'product')
+    .slice(0, BEST_SELLER_LIMIT)
+    .map((product, index) => normalizeBestSeller({
+      ...product,
+      soldCount: 0,
+      orderCount: 0,
+      averageUnitsPerOrder: 0,
+      rank: index + 1,
+    }, index + 1))
+);
+
+const getAverageUnitsLabel = (product) => {
+  const explicitAverage = Number(product.averageUnitsPerOrder);
+  if (explicitAverage > 0) {
+    return `${explicitAverage} pcs/order`;
+  }
+
+  if (product.orderCount > 0 && product.soldCount > 0) {
+    return `${(product.soldCount / product.orderCount).toFixed(1)} pcs/order`;
+  }
+
+  return 'Fresh Daily';
+};
+
+const ProductPreviewCollage = ({ product, variant = 'card' }) => (
+  <div className={`preview-collage preview-collage-${variant}`}>
+    <div className="preview-collage-main">
+      <img src={product.image} alt={product.name} />
+    </div>
+  </div>
+);
 
 const Home = () => {
   const location = useLocation();
   const [showWelcome, setShowWelcome] = useState(false);
   const [welcomeMessage, setWelcomeMessage] = useState('');
+  const [bestSellers, setBestSellers] = useState([]);
+  const [isBestSellersLoading, setIsBestSellersLoading] = useState(true);
   const { products, isProductsLoading } = useProducts();
-  const { orders } = useOrders();
   const { getSmartRecommendations } = useAI();
   const { siteVideos } = useContent();
 
@@ -49,202 +98,202 @@ const Home = () => {
       setShowWelcome(true);
 
       const timer = setTimeout(() => setShowWelcome(false), 5000);
-
-      // Clear state so it doesn't show again on refresh
       window.history.replaceState({}, document.title);
 
       return () => clearTimeout(timer);
     }
+
+    return undefined;
   }, [location]);
 
-  // Dynamically calculate best sellers from Order History
-  const salesCount = {};
-  if (orders) {
-    orders.forEach(order => {
-      if (order.items && order.status !== 'cancelled') {
-        if (Array.isArray(order.lineItems) && order.lineItems.length > 0) {
-          order.lineItems.forEach((item) => {
-            const qty = parseInt(item.quantity, 10) || 0;
-            const name = item.name || item.product?.productName;
+  useEffect(() => {
+    let isActive = true;
 
-            if (name && qty > 0) {
-              salesCount[name] = (salesCount[name] || 0) + qty;
-            }
-          });
+    const loadBestSellers = async () => {
+      try {
+        setIsBestSellersLoading(true);
+        const response = await apiRequest('/api/orders/best-sellers');
+        const nextBestSellers = (response?.items || []).map((product, index) => (
+          normalizeBestSeller(product, index + 1)
+        ));
+
+        if (!isActive) {
           return;
         }
 
-        const itemsList = order.items.split(', ');
-        itemsList.forEach(itemStr => {
-          const match = itemStr.match(/^(\d+)×\s+(.+)$/);
-          if (match) {
-            const qty = parseInt(match[1]);
-            const name = match[2];
-            salesCount[name] = (salesCount[name] || 0) + qty;
-          }
-        });
+        setBestSellers(nextBestSellers);
+      } catch (error) {
+        console.warn('Failed to load bestseller rankings:', error);
+        if (isActive) {
+          setBestSellers([]);
+        }
+      } finally {
+        if (isActive) {
+          setIsBestSellersLoading(false);
+        }
       }
-    });
-  }
+    };
 
-  const finishedProducts = products ? products.filter(p => !p.type || p.type === 'product') : [];
-  const bestSellers = [...finishedProducts]
-    .map(p => ({
-      ...p,
-      soldCount: salesCount[p.name] || 0
-    }))
-    .sort((a, b) => b.soldCount - a.soldCount)
-    .slice(0, 3);
+    loadBestSellers();
 
-  // Fallback in case there are no products
-  const featuredProduct = bestSellers.length > 0 ? bestSellers[0] : null;
+    return () => {
+      isActive = false;
+    };
+  }, []);
+
+  const storeProducts = products.filter((product) => !product.type || product.type === 'product');
+  const fallbackBestSellers = buildFallbackBestSellers(storeProducts);
+  const hasLiveBestSellers = bestSellers.length > 0;
+  const displayedBestSellers = hasLiveBestSellers ? bestSellers : fallbackBestSellers;
+  const featuredProduct = displayedBestSellers[0] || null;
+  const recommendationSeedId = featuredProduct?.id || storeProducts[0]?.id;
+  const aiRecommendations = getSmartRecommendations(recommendationSeedId).slice(0, 3);
+
+  const isHeroLoading = isProductsLoading || (isBestSellersLoading && !hasLiveBestSellers);
 
   return (
-    <div className="home-container" style={{ padding: '2rem 0', position: 'relative' }}>
-
+    <div className="home-container">
       {showWelcome && (
-        <div style={{
-          position: 'fixed',
-          top: '100px',
-          left: '50%',
-          transform: 'translateX(-50%)',
-          background: '#10b981',
-          color: 'white',
-          padding: '1rem 2rem',
-          borderRadius: '9999px',
-          boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.1)',
-          zIndex: 1000,
-          display: 'flex',
-          alignItems: 'center',
-          gap: '1rem',
-          fontWeight: 600,
-          fontSize: '1.1rem',
-        }}>
-          🎉 {welcomeMessage}
+        <div className="welcome-banner">
+          {welcomeMessage}
           <button
             onClick={() => setShowWelcome(false)}
-            style={{
-              background: 'rgba(255,255,255,0.2)',
-              border: 'none',
-              color: 'white',
-              fontSize: '1.25rem',
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              width: '28px',
-              height: '28px',
-              borderRadius: '50%',
-              padding: 0
-            }}
+            className="welcome-banner-close"
           >
             &times;
           </button>
         </div>
       )}
 
-      {/* Hero Section */}
-      <section className="hero-section" style={{ marginBottom: '6rem' }}>
+      <section className="hero-section">
         <div className="hero-content">
-          <div className="hero-subtitle">
-            <span className="dot"></span>
-            Fresh desserts, delivered daily
-          </div>
-
-          <h1 style={{ fontSize: '4rem', fontWeight: 800, lineHeight: 1.1, marginBottom: '2rem' }}>
-            Welcome to <span className="highlight" style={{ color: '#ff0000' }}>V & G</span>
+          <h1 className="hero-title">
+            Welcome to <span className="highlight">V &amp; G</span> Leche Flan
           </h1>
 
-          <p className="hero-description" style={{ fontSize: '1.2rem', maxWidth: '500px' }}>
-            Leche Flan - Pambansang Dessert. Experience the authentic taste of premium leche flan, crafted with love and tradition. Our secret family recipe delivers a creamy, rich dessert that melts in your mouth.
+          <p className="hero-description">
+            Leche Flan is our pambansang dessert, and this homepage now puts your real best sellers first.
+            The featured product and the top ranked cards below stay synced to actual customer orders, so the desserts
+            people keep buying are always the ones we highlight.
           </p>
 
-          <div className="hero-actions" style={{ marginTop: '3rem' }}>
-            <Link to="/products" className="btn-primary" style={{ padding: '1rem 2.5rem', fontSize: '1.1rem' }}>Order Now</Link>
-            <Link to="/about" className="btn-secondary" style={{ padding: '1rem 2.5rem', fontSize: '1.1rem', background: 'white', borderRadius: '1rem' }}>Learn More About Us</Link>
+          <div className="hero-proof-strip">
+            <span className="hero-proof-pill">Fresh Daily Batches</span>
+          </div>
+
+          <div className="hero-actions">
+            <Link to="/products" className="btn-primary hero-cta">Order Now</Link>
+            <Link to="/about" className="btn-secondary hero-cta">Learn More About Us</Link>
           </div>
         </div>
 
-        <div className="hero-image-container" style={{ borderRadius: '3rem', background: '#fff' }}>
-          {isProductsLoading ? (
-            <div className="skeleton" style={{ width: '100%', height: '450px', borderRadius: '3rem' }}></div>
-          ) : (
+        <div className="hero-spotlight-card">
+          {isHeroLoading ? (
+            <div className="skeleton-card hero-skeleton-card">
+              <div className="skeleton skeleton-image" style={{ height: '360px', marginBottom: '1rem' }}></div>
+              <div style={{ display: 'flex', gap: '0.75rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
+                <div className="skeleton" style={{ width: '126px', height: '34px', borderRadius: '999px' }}></div>
+                <div className="skeleton" style={{ width: '110px', height: '34px', borderRadius: '999px' }}></div>
+              </div>
+              <div className="skeleton skeleton-title" style={{ width: '70%' }}></div>
+              <div className="skeleton skeleton-text"></div>
+              <div className="skeleton skeleton-text" style={{ width: '50%' }}></div>
+            </div>
+          ) : featuredProduct ? (
             <>
-              <img
-                src={featuredProduct?.image}
-                alt={featuredProduct?.name}
-                style={{ width: '100%', height: '450px', objectFit: 'cover', borderRadius: '3rem' }}
+              <ProductPreviewCollage
+                product={featuredProduct}
+                variant="featured"
               />
-              <div className="hero-image-overlay" style={{ padding: '2rem' }}>
-                <h3 style={{ fontSize: '1.8rem', marginBottom: '0.5rem' }}>{featuredProduct?.name || 'Delicious Leche Flan'}</h3>
-                <p style={{ color: '#64748b', marginBottom: '1.5rem' }}>{featuredProduct?.description || 'Sweet, creamy, and caramelized to perfection—made fresh daily.'}</p>
-                <div className="tags" style={{ display: 'flex', gap: '0.75rem' }}>
-                  <span className="tag" style={{ background: '#fef08a', color: '#854d0e', padding: '0.5rem 1rem', borderRadius: '0.75rem' }}>Best Seller</span>
-                  <span className="tag" style={{ background: 'white', border: '1px solid #e2e8f0', padding: '0.5rem 1rem', borderRadius: '0.75rem' }}>Fresh Daily</span>
+
+              <div className="spotlight-body">
+                <div className="product-card-heading">
+                  <h3 className="hero-image-title">{featuredProduct.name}</h3>
+                  <span className="premium-price">{formatCurrency(featuredProduct.price)}</span>
                 </div>
+
+                <p className="hero-image-copy">{featuredProduct.description}</p>
+
+                <div className="spotlight-metrics">
+                  <span className="metric-pill metric-pill-highlight">
+                    {hasLiveBestSellers ? '#1 Best Seller' : 'Fresh Pick'}
+                  </span>
+                  <span className="metric-pill">Fresh Daily</span>
+                  <span className="metric-pill metric-pill-soft">{featuredProduct.category}</span>
+                </div>
+
+                {hasLiveBestSellers ? (
+                  <>
+                    <p className="spotlight-note">
+                      Synced to total customer orders
+                    </p>
+
+                    <p className="spotlight-summary">
+                      {`${featuredProduct.soldCount} total units sold across ${featuredProduct.orderCount} customer orders.`}
+                    </p>
+                  </>
+                ) : null}
               </div>
             </>
-          )}
+          ) : null}
         </div>
       </section>
 
-      {/* Best Sellers Section */}
       <section className="best-sellers-section">
         <div className="section-header">
-          <h2>Best Sellers</h2>
-          <p>Our most popular items, loved by customers</p>
-        </div>
+          <span className="section-eyebrow">Best Sellers</span>
+          <h2>Customer favorites</h2>
+        
+          </div>
 
         <div className="best-sellers-grid">
-          {isProductsLoading ? (
-            [1, 2, 3].map(i => (
-              <div key={i} className="skeleton-card">
-                <div className="skeleton" style={{ width: '120px', height: '24px', borderRadius: '12px', marginBottom: '16px' }}></div>
-                <div className="skeleton skeleton-image" style={{ height: '200px' }}></div>
-                <div style={{ display: 'flex', gap: '8px', marginBottom: '16px' }}>
-                  <div className="skeleton" style={{ width: '30%', height: '60px', borderRadius: '8px' }}></div>
-                  <div className="skeleton" style={{ width: '30%', height: '60px', borderRadius: '8px' }}></div>
-                  <div className="skeleton" style={{ width: '30%', height: '60px', borderRadius: '8px' }}></div>
+          {(isProductsLoading || (isBestSellersLoading && !displayedBestSellers.length)) ? (
+            [1, 2, 3].map((item) => (
+              <div key={item} className="skeleton-card">
+                <div className="skeleton" style={{ width: '120px', height: '24px', borderRadius: '999px', marginBottom: '1rem' }}></div>
+                <div className="skeleton skeleton-image" style={{ height: '260px', marginBottom: '1rem' }}></div>
+                <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
+                  <div className="skeleton" style={{ width: '116px', height: '34px', borderRadius: '999px' }}></div>
+                  <div className="skeleton" style={{ width: '102px', height: '34px', borderRadius: '999px' }}></div>
                 </div>
-                <div className="skeleton skeleton-title" style={{ width: '80%' }}></div>
+                <div className="skeleton skeleton-title" style={{ width: '75%' }}></div>
                 <div className="skeleton skeleton-text"></div>
                 <div className="skeleton skeleton-text" style={{ width: '60%' }}></div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '16px', marginBottom: '16px' }}>
-                  <div className="skeleton" style={{ width: '80px', height: '28px' }}></div>
-                  <div className="skeleton" style={{ width: '100px', height: '24px', borderRadius: '12px' }}></div>
+                <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', marginTop: '1rem' }}>
+                  <div className="skeleton" style={{ width: '110px', height: '34px', borderRadius: '999px' }}></div>
+                  <div className="skeleton" style={{ width: '110px', height: '34px', borderRadius: '999px' }}></div>
+                  <div className="skeleton" style={{ width: '140px', height: '34px', borderRadius: '999px' }}></div>
                 </div>
-                <div className="skeleton" style={{ width: '100%', height: '48px', borderRadius: '12px' }}></div>
               </div>
             ))
           ) : (
-            bestSellers.map((product, index) => (
-              <div key={product.id} className="product-card-premium">
+            displayedBestSellers.map((product, index) => (
+              <div key={product.id || `${product.name}-${index}`} className="best-seller-card">
                 <div className="rank-badge">#{index + 1} Best Seller</div>
 
-                <div className="main-img-container">
-                  <img src={product.image} alt={product.name} />
-                </div>
-
-                <div className="thumb-grid">
-                  {[1, 2, 3].map(i => (
-                    <div key={i} className="thumb-img">
-                      <img src={product.image} alt="thumbnail" />
-                    </div>
-                  ))}
-                </div>
+                <ProductPreviewCollage product={product} />
 
                 <div className="premium-card-content">
-                  <h3>{product.name}</h3>
+                  <div className="product-card-heading">
+                    <h3>{product.name}</h3>
+                    <span className="premium-price">{formatCurrency(product.price)}</span>
+                  </div>
+
                   <p>{product.description}</p>
 
-                  <div className="price-sold-row">
-                    <span className="premium-price">₱{product.price.toFixed(2)}</span>
-                    <span className="sold-badge">
-                      {product.soldCount > 0 ? `${product.soldCount} sold recently` : 'Hot item'}
+                  <div className="metric-pill-row">
+                    <span className="metric-pill metric-pill-highlight">
+                      {hasLiveBestSellers ? `${product.soldCount} units sold` : 'Fresh Daily'}
+                    </span>
+                    <span className="metric-pill">
+                      {hasLiveBestSellers ? `${product.orderCount} orders` : 'Made fresh'}
+                    </span>
+                    <span className="metric-pill metric-pill-soft">
+                      {hasLiveBestSellers ? `Avg ${getAverageUnitsLabel(product)}` : 'Ready to order'}
                     </span>
                   </div>
 
-                  <Link to="/products" className="btn-primary" style={{ width: '100%', textAlign: 'center', borderRadius: '0.75rem', background: '#ff9800' }}>
+                  <Link to="/products" className="btn-primary best-seller-cta">
                     View in Shop
                   </Link>
                 </div>
@@ -254,57 +303,36 @@ const Home = () => {
         </div>
       </section>
 
-      {/* Llama AI Recommendations */}
       {(!isProductsLoading && products.length > 0) && (
-        <section className="ai-home-recommendations" style={{ padding: '6rem 0', background: '#f8fafc' }}>
+        <section className="ai-home-recommendations">
           <div className="section-header">
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.75rem', marginBottom: '1rem' }}>
-              <Sparkles size={18} style={{ color: '#6366f1' }} />
-              <span style={{ color: '#6366f1', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em', fontSize: '0.8rem' }}>AI Powered</span>
+            <div className="ai-section-label">
+              <Sparkles size={18} style={{ color: '#b45309' }} />
+              <span>AI Powered</span>
             </div>
             <h2>Personalized Picks for You</h2>
-            <p>Our Llama AI analyzed our treats to find what you'll love most</p>
+            <p>Our AI looked at your dessert catalog and paired treats that fit the current bestseller spotlight.</p>
           </div>
 
           <div className="best-sellers-grid">
-            {getSmartRecommendations(bestSellers[0]?.id).map((p) => (
-              <div key={p.id} className="product-card-premium ai-card">
-                <div className="main-img-container" style={{ height: '200px' }}>
-                  <img src={p.image} alt={p.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                  <div className="ai-tag-overlay" style={{
-                    position: 'absolute',
-                    top: '1rem',
-                    right: '1rem',
-                    background: 'rgba(99, 102, 241, 0.9)',
-                    color: 'white',
-                    padding: '0.25rem 0.75rem',
-                    borderRadius: '9999px',
-                    fontSize: '0.7rem',
-                    fontWeight: 700
-                  }}>Smart Pick</div>
-                </div>
+            {aiRecommendations.map((product) => (
+              <div key={product.id} className="best-seller-card ai-card">
+                <ProductPreviewCollage product={normalizeBestSeller(product)} />
 
-                <div className="premium-card-content" style={{ display: 'flex', flexDirection: 'column', flex: 1 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                    <h3 style={{ margin: 0, fontSize: '1.25rem' }}>{p.name}</h3>
-                    <span className="premium-price" style={{ color: '#6366f1' }}>₱{p.price}</span>
+                <div className="premium-card-content">
+                  <div className="product-card-heading">
+                    <h3>{product.name}</h3>
+                    <span className="premium-price ai-price">{formatCurrency(product.price)}</span>
                   </div>
-                  <p style={{ fontSize: '0.9rem', color: '#64748b', margin: '0.75rem 0 1.5rem', flex: 1 }}>{p.description}</p>
 
-                  <Link to="/products" className="btn-primary" style={{
-                    width: '100%',
-                    textAlign: 'center',
-                    borderRadius: '0.75rem',
-                    background: '#6366f1',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    gap: '0.5rem',
-                    padding: '0.75rem',
-                    color: 'white',
-                    textDecoration: 'none',
-                    fontWeight: 600
-                  }}>
+                  <p>{product.description}</p>
+
+                  <div className="metric-pill-row">
+                    <span className="metric-pill metric-pill-soft">Pairs well with best sellers</span>
+                    <span className="metric-pill">Fresh Daily</span>
+                  </div>
+
+                  <Link to="/products" className="btn-primary ai-card-cta">
                     <ShoppingCart size={18} /> Shop Now
                   </Link>
                 </div>
@@ -314,11 +342,11 @@ const Home = () => {
         </section>
       )}
 
-      {/* Visit Our Shop Section */}
       <section className="visit-shop-section">
         <div className="section-header">
-          <h2>Visit Our Shop</h2>
-          <p>Find us on the map and get directions to our storefront.</p>
+          <span className="section-eyebrow">Visit Our Shop</span>
+          <h2>Find V &amp; G easily</h2>
+          <p>Stop by the shop, pick up your desserts, or use the map below to plan your visit.</p>
         </div>
 
         <div className="visit-shop-layout">
@@ -352,30 +380,31 @@ const Home = () => {
         </div>
       </section>
 
-      {/* Experience V & G Section */}
       <section className="experience-section">
         <div className="section-header">
-          <h2>Experience V & G Leche Flan</h2>
-          <p>Watch our story and see why our desserts are loved by families across the Philippines</p>
+          <span className="section-eyebrow">Experience V &amp; G</span>
+          <h2>Watch the desserts people love</h2>
+          <p>See the story behind the brand and the moments that make your desserts worth coming back for.</p>
         </div>
 
         <div className="video-grid">
-          {siteVideos.map(video => {
+          {(siteVideos || []).map((video) => {
             const isReel = video.src && (video.src.includes('/share/r/') || video.src.includes('/reel/'));
             return (
-            <div key={video.id} className="video-card">
-              <div 
-                className="video-player-container" 
-                style={isReel ? { aspectRatio: '9/16', maxHeight: '550px', maxWidth: '310px', margin: '0 auto' } : {}}
-              >
-                <VideoEmbed url={video.src} />
+              <div key={video.id} className="video-card">
+                <div
+                  className="video-player-container"
+                  style={isReel ? { aspectRatio: '9/16', maxHeight: '550px', maxWidth: '310px', margin: '0 auto' } : {}}
+                >
+                  <VideoEmbed url={video.src} />
+                </div>
+                <div className="video-info">
+                  <h3>{video.title}</h3>
+                  <p>{video.text}</p>
+                </div>
               </div>
-              <div className="video-info">
-                <h3>{video.title}</h3>
-                <p>{video.text}</p>
-              </div>
-            </div>
-          )})}
+            );
+          })}
         </div>
       </section>
     </div>

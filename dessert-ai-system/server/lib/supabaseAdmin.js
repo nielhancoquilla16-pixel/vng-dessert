@@ -6,19 +6,45 @@ const getSupabaseConfig = () => ({
   serviceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY,
 });
 
-export const isSupabaseConfigured = () => {
-  const { url, anonKey, serviceRoleKey } = getSupabaseConfig();
-  return Boolean(url && anonKey && serviceRoleKey);
+const isPlaceholderValue = (value = '') => (
+  /your-project-ref|your-anon-or-project-api-key|your-service-role-key/i.test(String(value).trim())
+);
+
+const isValidSupabaseUrl = (value = '') => {
+  try {
+    const url = new URL(String(value).trim());
+    return url.protocol === 'https:' && url.hostname.endsWith('.supabase.co') && !isPlaceholderValue(value);
+  } catch {
+    return false;
+  }
 };
 
-const createMissingConfigError = () => new Error(
-  'Supabase environment variables are missing. Set SUPABASE_URL, SUPABASE_ANON_KEY, and SUPABASE_SERVICE_ROLE_KEY.'
-);
+const hasValue = (value) => Boolean(String(value || '').trim()) && !isPlaceholderValue(value);
+
+export const hasSupabasePublicConfig = () => {
+  const { url, anonKey } = getSupabaseConfig();
+  return isValidSupabaseUrl(url) && hasValue(anonKey);
+};
+
+export const hasSupabaseAdminConfig = () => {
+  const { url, anonKey, serviceRoleKey } = getSupabaseConfig();
+  return isValidSupabaseUrl(url) && hasValue(anonKey) && hasValue(serviceRoleKey);
+};
+
+export const isSupabaseConfigured = hasSupabaseAdminConfig;
+
+const createConfigError = (requiredKeys) => {
+  const error = new Error(
+    `Supabase configuration is incomplete. Replace the placeholder values for ${requiredKeys.join(', ')} in dessert-ai-system/server/.env and restart the backend.`
+  );
+  error.status = 503;
+  return error;
+};
 
 export const getSupabaseAdmin = () => {
   const { url, serviceRoleKey } = getSupabaseConfig();
-  if (!url || !serviceRoleKey) {
-    throw createMissingConfigError();
+  if (!isValidSupabaseUrl(url) || !hasValue(serviceRoleKey)) {
+    throw createConfigError(['SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY']);
   }
 
   return createClient(url, serviceRoleKey, {
@@ -31,8 +57,8 @@ export const getSupabaseAdmin = () => {
 
 export const getSupabaseAnon = (accessToken) => {
   const { url, anonKey } = getSupabaseConfig();
-  if (!url || !anonKey) {
-    throw createMissingConfigError();
+  if (!isValidSupabaseUrl(url) || !hasValue(anonKey)) {
+    throw createConfigError(['SUPABASE_URL', 'SUPABASE_ANON_KEY']);
   }
 
   return createClient(url, anonKey, {

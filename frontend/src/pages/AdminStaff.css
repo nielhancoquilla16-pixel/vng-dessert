@@ -186,6 +186,20 @@
   font-weight: 600;
 }
 
+.admin-staff-modal {
+  width: calc(100vw - 2rem);
+  max-width: 560px;
+  max-height: calc(100vh - 2rem);
+  box-sizing: border-box;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.admin-staff-modal form {
+  display: flex;
+  flex-direction: column;
+}
+
 /* Responsive */
 @media (max-width: 1024px) {
   .staff-grid {
@@ -197,6 +211,13 @@
   .staff-header {
     flex-direction: column;
     gap: 1rem;
+  }
+
+  .admin-staff-modal {
+    width: calc(100vw - 1rem);
+    max-height: calc(100vh - 1rem);
+    padding: 1.25rem;
+    border-radius: 1.25rem;
   }
   
   .staff-grid {

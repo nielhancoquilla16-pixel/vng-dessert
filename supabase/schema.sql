@@ -25,7 +25,7 @@ create table if not exists public.profiles (
   username text,
   email text,
   full_name text,
-  role text not null default 'customer' check (role in ('customer', 'admin', 'staff')),
+  role text not null default 'customern' check (role in ('customer', 'admin', 'staff')),
   address text,
   phone_number text,
   created_at timestamptz not null default timezone('utc', now())
@@ -57,14 +57,46 @@ create table if not exists public.products (
 create table if not exists public.orders (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references public.profiles(id) on delete cascade,
+  order_code text,
   customer_name text,
   phone_number text,
   address text,
   delivery_method text not null default 'pickup' check (delivery_method in ('delivery', 'pickup')),
   payment_method text not null default 'cash' check (payment_method in ('cash', 'gcash')),
   total_price numeric(10, 2) not null default 0 check (total_price >= 0),
-  order_status text not null default 'pending' check (order_status in ('pending', 'confirmed', 'preparing', 'ready', 'processing', 'completed', 'delivered', 'cancelled')),
+  order_status text not null default 'pending' check (order_status in ('pending', 'confirmed', 'preparing', 'ready', 'processing', 'completed', 'received', 'delivered', 'cancelled')),
+  qr_claimed_at timestamptz,
+  ready_notified_at timestamptz,
+  ready_notification_message text,
+  receipt_image_url text,
+  receipt_received_at timestamptz,
   created_at timestamptz not null default timezone('utc', now())
+);
+
+create table if not exists public.payment_checkouts (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references public.profiles(id) on delete cascade,
+  provider text not null default 'paymongo' check (provider in ('paymongo')),
+  status text not null default 'created' check (status in ('created', 'paid', 'failed', 'expired', 'cancelled', 'fulfilled')),
+  payment_method text not null default 'online' check (payment_method in ('gcash', 'online')),
+  reference_number text not null unique,
+  checkout_session_id text unique,
+  checkout_url text,
+  amount numeric(10, 2) not null default 0 check (amount >= 0),
+  currency text not null default 'PHP',
+  customer_name text,
+  customer_email text,
+  phone_number text,
+  address text,
+  delivery_method text not null default 'pickup' check (delivery_method in ('delivery', 'pickup')),
+  line_items jsonb not null default '[]'::jsonb,
+  payment_intent_id text,
+  payment_id text,
+  failure_reason text,
+  order_id uuid references public.orders(id) on delete set null,
+  paid_at timestamptz,
+  created_at timestamptz not null default timezone('utc', now()),
+  updated_at timestamptz not null default timezone('utc', now())
 );
 
 create table if not exists public.order_items (
@@ -100,8 +132,29 @@ alter table if exists public.orders
   add column if not exists customer_name text,
   add column if not exists phone_number text,
   add column if not exists address text,
+  add column if not exists order_code text,
   add column if not exists delivery_method text not null default 'pickup',
-  add column if not exists payment_method text not null default 'cash';
+  add column if not exists payment_method text not null default 'cash',
+  add column if not exists qr_claimed_at timestamptz,
+  add column if not exists ready_notified_at timestamptz,
+  add column if not exists ready_notification_message text,
+  add column if not exists receipt_image_url text,
+  add column if not exists receipt_received_at timestamptz;
+
+alter table if exists public.payment_checkouts
+  add column if not exists customer_name text,
+  add column if not exists customer_email text,
+  add column if not exists phone_number text,
+  add column if not exists address text,
+  add column if not exists delivery_method text not null default 'pickup',
+  add column if not exists payment_method text not null default 'online',
+  add column if not exists line_items jsonb not null default '[]'::jsonb,
+  add column if not exists payment_intent_id text,
+  add column if not exists payment_id text,
+  add column if not exists failure_reason text,
+  add column if not exists order_id uuid references public.orders(id) on delete set null,
+  add column if not exists paid_at timestamptz,
+  add column if not exists updated_at timestamptz not null default timezone('utc', now());
 
 create unique index if not exists profiles_username_unique_idx
 on public.profiles (lower(username))
@@ -129,7 +182,7 @@ alter table if exists public.products
 alter table if exists public.orders drop constraint if exists orders_order_status_check;
 alter table if exists public.orders
   add constraint orders_order_status_check
-  check (order_status in ('pending', 'confirmed', 'preparing', 'ready', 'processing', 'completed', 'delivered', 'cancelled'));
+  check (order_status in ('pending', 'confirmed', 'preparing', 'ready', 'processing', 'completed', 'received', 'delivered', 'cancelled'));
 
 alter table if exists public.orders drop constraint if exists orders_delivery_method_check;
 alter table if exists public.orders
@@ -139,7 +192,31 @@ alter table if exists public.orders
 alter table if exists public.orders drop constraint if exists orders_payment_method_check;
 alter table if exists public.orders
   add constraint orders_payment_method_check
-  check (payment_method in ('cash', 'gcash'));
+  check (payment_method in ('cash', 'gcash', 'online'));
+
+create unique index if not exists orders_order_code_unique_idx
+on public.orders (order_code)
+where order_code is not null;
+
+alter table if exists public.payment_checkouts drop constraint if exists payment_checkouts_provider_check;
+alter table if exists public.payment_checkouts
+  add constraint payment_checkouts_provider_check
+  check (provider in ('paymongo'));
+
+alter table if exists public.payment_checkouts drop constraint if exists payment_checkouts_status_check;
+alter table if exists public.payment_checkouts
+  add constraint payment_checkouts_status_check
+  check (status in ('created', 'paid', 'failed', 'expired', 'cancelled', 'fulfilled'));
+
+alter table if exists public.payment_checkouts drop constraint if exists payment_checkouts_delivery_method_check;
+alter table if exists public.payment_checkouts
+  add constraint payment_checkouts_delivery_method_check
+  check (delivery_method in ('delivery', 'pickup'));
+
+alter table if exists public.payment_checkouts drop constraint if exists payment_checkouts_payment_method_check;
+alter table if exists public.payment_checkouts
+  add constraint payment_checkouts_payment_method_check
+  check (payment_method in ('gcash', 'online'));
 
 drop trigger if exists set_inventory_updated_at on public.inventory;
 create trigger set_inventory_updated_at
@@ -153,10 +230,17 @@ before update on public.products
 for each row
 execute function public.set_updated_at();
 
+drop trigger if exists set_payment_checkouts_updated_at on public.payment_checkouts;
+create trigger set_payment_checkouts_updated_at
+before update on public.payment_checkouts
+for each row
+execute function public.set_updated_at();
+
 alter table public.profiles enable row level security;
 alter table public.inventory enable row level security;
 alter table public.products enable row level security;
 alter table public.orders enable row level security;
+alter table public.payment_checkouts enable row level security;
 alter table public.order_items enable row level security;
 alter table public.carts enable row level security;
 alter table public.cart_items enable row level security;
@@ -235,6 +319,40 @@ for update
 to authenticated
 using (public.get_my_role() in ('admin', 'staff'))
 with check (public.get_my_role() in ('admin', 'staff'));
+
+drop policy if exists "payment_checkouts_select_own_or_staff" on public.payment_checkouts;
+create policy "payment_checkouts_select_own_or_staff"
+on public.payment_checkouts
+for select
+to authenticated
+using (
+  user_id = auth.uid()
+  or public.get_my_role() in ('admin', 'staff')
+);
+
+drop policy if exists "payment_checkouts_insert_own_or_staff" on public.payment_checkouts;
+create policy "payment_checkouts_insert_own_or_staff"
+on public.payment_checkouts
+for insert
+to authenticated
+with check (
+  user_id = auth.uid()
+  or public.get_my_role() in ('admin', 'staff')
+);
+
+drop policy if exists "payment_checkouts_update_own_or_staff" on public.payment_checkouts;
+create policy "payment_checkouts_update_own_or_staff"
+on public.payment_checkouts
+for update
+to authenticated
+using (
+  user_id = auth.uid()
+  or public.get_my_role() in ('admin', 'staff')
+)
+with check (
+  user_id = auth.uid()
+  or public.get_my_role() in ('admin', 'staff')
+);
 
 drop policy if exists "order_items_select_own_or_staff" on public.order_items;
 create policy "order_items_select_own_or_staff"

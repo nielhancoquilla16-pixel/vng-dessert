@@ -6,9 +6,10 @@
   "main": "server/server.js",
   "scripts": {
     "start": "node server/server.js",
-    "dev": "nodemon server/server.js"
+    "dev": "nodemon"
   },
   "dependencies": {
+    "@api/paymongo": "file:.api/apis/paymongo",
     "@supabase/supabase-js": "^2.99.3",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",

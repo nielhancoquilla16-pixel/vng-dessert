@@ -1,8 +1,39 @@
+/* eslint-disable react-refresh/only-export-components */
 import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
-import { apiRequest, ApiError } from '../lib/api';
-import { supabase, isSupabaseConfigured } from '../lib/supabase';
+import { apiRequest, ApiError, isBackendIssueError } from '../lib/api';
+import { supabase, isSupabaseConfigured, clearSupabaseSessionStorage } from '../lib/supabase';
 
 const AuthContext = createContext();
+const PASSWORD_RECOVERY_STORAGE_KEY = 'vng-password-recovery-active';
+
+const hasRecoveryMarkerInLocation = () => {
+  if (typeof window === 'undefined') {
+    return false;
+  }
+
+  const urlBits = `${window.location.search || ''}${window.location.hash || ''}`;
+  return /(^|[?#&])type=recovery(?:[&#]|$)/i.test(urlBits);
+};
+
+const readPasswordRecoveryFlag = () => {
+  if (typeof window === 'undefined' || !window.sessionStorage) {
+    return false;
+  }
+
+  return window.sessionStorage.getItem(PASSWORD_RECOVERY_STORAGE_KEY) === '1';
+};
+
+const writePasswordRecoveryFlag = (isActive) => {
+  if (typeof window === 'undefined' || !window.sessionStorage) {
+    return;
+  }
+
+  if (isActive) {
+    window.sessionStorage.setItem(PASSWORD_RECOVERY_STORAGE_KEY, '1');
+  } else {
+    window.sessionStorage.removeItem(PASSWORD_RECOVERY_STORAGE_KEY);
+  }
+};
 
 const normalizeProfile = (profile, authUser = null) => ({
   id: profile?.id || authUser?.id || '',
@@ -12,8 +43,17 @@ const normalizeProfile = (profile, authUser = null) => ({
   role: profile?.role || 'customer',
   address: profile?.address || '',
   phoneNumber: profile?.phoneNumber || profile?.phone_number || '',
+  avatarUrl: profile?.avatarUrl || profile?.avatar_url || authUser?.user_metadata?.avatar_url || '',
   createdAt: profile?.createdAt || profile?.created_at || authUser?.created_at || '',
 });
+
+const isMissingRegisterCheckRouteError = (error) => (
+  error instanceof ApiError
+  && error.status === 404
+  && /Cannot POST \/api\/auth\/register\/check/i.test(
+    `${error.message || ''} ${typeof error.details === 'string' ? error.details : ''}`
+  )
+);
 
 export const useAuth = () => {
   const context = useContext(AuthContext);
@@ -28,6 +68,9 @@ export const AuthProvider = ({ children }) => {
   const [profile, setProfile] = useState(null);
   const [staffAccounts, setStaffAccounts] = useState([]);
   const [isAuthLoading, setIsAuthLoading] = useState(true);
+  const [isPasswordRecovery, setIsPasswordRecovery] = useState(
+    () => readPasswordRecoveryFlag() || hasRecoveryMarkerInLocation()
+  );
 
   const refreshProfile = useCallback(async (nextSession = null) => {
     if (!nextSession?.access_token) {
@@ -35,17 +78,30 @@ export const AuthProvider = ({ children }) => {
       return null;
     }
 
-    const nextProfile = await apiRequest('/api/profiles/me', {}, {
-      auth: true,
-      accessToken: nextSession.access_token,
-    });
+    try {
+      const nextProfile = await apiRequest('/api/profiles/me', {}, {
+        auth: true,
+        accessToken: nextSession.access_token,
+      });
 
-    const normalized = normalizeProfile(nextProfile, nextSession.user);
-    setProfile(normalized);
-    return normalized;
+      const normalized = normalizeProfile(nextProfile, nextSession.user);
+      setProfile(normalized);
+      return normalized;
+    } catch (error) {
+      if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
+        if (supabase) {
+          await supabase.auth.signOut();
+        }
+        setSession(null);
+        setProfile(null);
+        setStaffAccounts([]);
+        return null;
+      }
+      throw error;
+    }
   }, []);
 
-  const fetchStaffAccounts = useCallback(async (nextSession = session) => {
+  const fetchStaffAccounts = useCallback(async (nextSession = null) => {
     if (!nextSession?.access_token) {
       setStaffAccounts([]);
       return [];
@@ -59,7 +115,7 @@ export const AuthProvider = ({ children }) => {
     const normalizedAccounts = (accounts || []).map((staff) => normalizeProfile(staff));
     setStaffAccounts(normalizedAccounts);
     return normalizedAccounts;
-  }, [session]);
+  }, []);
 
   useEffect(() => {
     if (!isSupabaseConfigured || !supabase) {
@@ -69,7 +125,14 @@ export const AuthProvider = ({ children }) => {
 
     let isActive = true;
 
+    if (hasRecoveryMarkerInLocation()) {
+      writePasswordRecoveryFlag(true);
+      setIsPasswordRecovery(true);
+    }
+
     const loadSession = async () => {
+      let nextSession = null;
+
       try {
         const { data, error } = await supabase.auth.getSession();
         if (error) {
@@ -80,21 +143,45 @@ export const AuthProvider = ({ children }) => {
           return;
         }
 
-        const nextSession = data.session || null;
+        nextSession = data.session || null;
         setSession(nextSession);
+      } catch (error) {
+        if (isBackendIssueError(error)) {
+          console.warn('Auth session restore paused:', error.message);
+        } else {
+          console.error('Failed to restore auth session:', error);
+        }
+        clearSupabaseSessionStorage();
+        if (isActive) {
+          setSession(null);
+          setProfile(null);
+          setStaffAccounts([]);
+        }
+        return;
+      }
 
-        if (nextSession) {
-          const nextProfile = await refreshProfile(nextSession);
-          if (nextProfile?.role === 'admin') {
-            await fetchStaffAccounts(nextSession);
-          } else if (isActive) {
+      try {
+        if (!nextSession) {
+          if (isActive) {
+            setProfile(null);
             setStaffAccounts([]);
           }
+          return;
+        }
+
+        const nextProfile = await refreshProfile(nextSession);
+        if (nextProfile?.role === 'admin') {
+          await fetchStaffAccounts(nextSession);
+        } else if (isActive) {
+          setStaffAccounts([]);
         }
       } catch (error) {
-        console.error('Failed to restore auth session:', error);
+        if (isBackendIssueError(error)) {
+          console.warn('Profile refresh is unavailable right now:', error.message);
+        } else {
+          console.error('Failed to refresh profile after restoring auth session:', error);
+        }
         if (isActive) {
-          setProfile(null);
           setStaffAccounts([]);
         }
       } finally {
@@ -108,6 +195,24 @@ export const AuthProvider = ({ children }) => {
 
     const { data: listener } = supabase.auth.onAuthStateChange((event, nextSession) => {
       if (!isActive) {
+        return;
+      }
+
+      if (event === 'PASSWORD_RECOVERY') {
+        writePasswordRecoveryFlag(true);
+        setIsPasswordRecovery(true);
+      } else if (event === 'SIGNED_OUT') {
+        writePasswordRecoveryFlag(false);
+        setIsPasswordRecovery(false);
+      }
+
+      if (event === 'TOKEN_REFRESH_FAILED') {
+        console.warn('Supabase token refresh failed. Signing out.');
+        supabase.auth.signOut().catch(() => {});
+        setSession(null);
+        setProfile(null);
+        setStaffAccounts([]);
+        setIsAuthLoading(false);
         return;
       }
 
@@ -129,7 +234,11 @@ export const AuthProvider = ({ children }) => {
             setStaffAccounts([]);
           }
         } catch (error) {
-          console.error(`Failed to handle auth event "${event}":`, error);
+          if (isBackendIssueError(error)) {
+            console.warn(`Auth event "${event}" is waiting on the backend:`, error.message);
+          } else {
+            console.error(`Failed to handle auth event "${event}":`, error);
+          }
         } finally {
           if (isActive) {
             setIsAuthLoading(false);
@@ -166,6 +275,15 @@ export const AuthProvider = ({ children }) => {
       });
 
       if (error) {
+        if (/email not confirmed/i.test(error.message || '')) {
+          return {
+            success: false,
+            requiresVerification: true,
+            email,
+            message: 'Please enter the 6-digit verification code sent to your email before logging in.',
+          };
+        }
+
         throw error;
       }
 
@@ -202,26 +320,156 @@ export const AuthProvider = ({ children }) => {
     }
 
     try {
-      await apiRequest('/api/auth/register', {
-        method: 'POST',
-        body: JSON.stringify({
-          username,
-          email,
+      const normalizedEmail = String(email || '').trim().toLowerCase();
+      const normalizedUsername = String(username || '').trim().toLowerCase();
+
+      try {
+        await apiRequest('/api/auth/register/check', {
+          method: 'POST',
+          body: JSON.stringify({
+            username: normalizedUsername,
+            email: normalizedEmail,
+          }),
+        });
+      } catch (error) {
+        if (!isMissingRegisterCheckRouteError(error)) {
+          throw error;
+        }
+
+        await apiRequest('/api/auth/register', {
+          method: 'POST',
+          body: JSON.stringify({
+            username: normalizedUsername,
+            email: normalizedEmail,
+            password,
+            full_name: fullName,
+            address,
+            phone_number: phoneNumber,
+          }),
+        });
+
+        const { data, error: signInError } = await supabase.auth.signInWithPassword({
+          email: normalizedEmail,
           password,
-          full_name: fullName,
-          address,
-          phone_number: phoneNumber,
-        }),
+        });
+
+        if (signInError) {
+          return {
+            success: true,
+            email: normalizedEmail,
+            username: normalizedUsername,
+            needsVerification: false,
+            autoLoggedIn: false,
+            message: 'Account created successfully. Please log in with your new account.',
+          };
+        }
+
+        if (data.session) {
+          setSession(data.session);
+          try {
+            await refreshProfile(data.session);
+          } catch (profileError) {
+            console.warn('Created account, but profile sync will finish after sign-in settles:', profileError);
+          }
+        }
+
+        return {
+          success: true,
+          email: normalizedEmail,
+          username: normalizedUsername,
+          needsVerification: false,
+          autoLoggedIn: true,
+        };
+      }
+
+      const { data, error } = await supabase.auth.signUp({
+        email: normalizedEmail,
+        password,
+        options: {
+          emailRedirectTo: `${window.location.origin}/login`,
+          data: {
+            username: normalizedUsername,
+            full_name: fullName,
+            address,
+            phone_number: phoneNumber,
+          },
+        },
       });
 
-      return await signInWithRole(username, password, ['customer']);
+      if (error) {
+        throw error;
+      }
+
+      return {
+        success: true,
+        email: normalizedEmail,
+        username: normalizedUsername,
+        needsVerification: !data.session,
+        autoLoggedIn: Boolean(data.session),
+      };
     } catch (error) {
       return {
         success: false,
         message: error instanceof ApiError ? error.message : (error.message || 'Unable to create the account right now.'),
       };
     }
-  }, [signInWithRole]);
+  }, [refreshProfile]);
+
+  const verifyCustomerSignupCode = useCallback(async (email, token) => {
+    if (!isSupabaseConfigured || !supabase) {
+      return { success: false, message: 'Supabase is not configured yet. Add your frontend env keys first.' };
+    }
+
+    try {
+      const { data, error } = await supabase.auth.verifyOtp({
+        email: String(email || '').trim().toLowerCase(),
+        token: String(token || '').trim(),
+        type: 'email',
+      });
+
+      if (error) {
+        throw error;
+      }
+
+      const nextProfile = await refreshProfile(data.session);
+      return {
+        success: true,
+        profile: nextProfile,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        message: error instanceof ApiError ? error.message : (error.message || 'Unable to verify the code right now.'),
+      };
+    }
+  }, [refreshProfile]);
+
+  const resendCustomerSignupCode = useCallback(async (email) => {
+    if (!isSupabaseConfigured || !supabase) {
+      return { success: false, message: 'Supabase is not configured yet. Add your frontend env keys first.' };
+    }
+
+    try {
+      const { error } = await supabase.auth.resend({
+        type: 'signup',
+        email: String(email || '').trim().toLowerCase(),
+        options: {
+          emailRedirectTo: `${window.location.origin}/login`,
+        },
+      });
+
+      if (error) {
+        throw error;
+      }
+
+      return { success: true };
+    } catch (error) {
+      return {
+        success: false,
+        message: error instanceof ApiError ? error.message : (error.message || 'Unable to resend the code right now.'),
+      };
+    }
+  }, []);
 
   const requestPasswordReset = useCallback(async (identifier) => {
     if (!isSupabaseConfigured || !supabase) {
@@ -238,16 +486,69 @@ export const AuthProvider = ({ children }) => {
         throw error;
       }
 
-      return { success: true };
+      return { success: true, email };
     } catch (error) {
       return {
         success: false,
-        message: error instanceof ApiError ? error.message : (error.message || 'Unable to send the reset link right now.'),
+        message: error instanceof ApiError ? error.message : (error.message || 'Unable to send the recovery email right now.'),
       };
     }
   }, [resolveLoginEmail]);
 
-  const updateLoggedInCustomer = useCallback(async (updates) => {
+  const verifyPasswordRecoveryCode = useCallback(async (email, token) => {
+    if (!isSupabaseConfigured || !supabase) {
+      return { success: false, message: 'Supabase is not configured yet. Add your frontend env keys first.' };
+    }
+
+    try {
+      const { error } = await supabase.auth.verifyOtp({
+        email: String(email || '').trim().toLowerCase(),
+        token: String(token || '').trim(),
+        type: 'recovery',
+      });
+
+      if (error) {
+        throw error;
+      }
+
+      writePasswordRecoveryFlag(true);
+      setIsPasswordRecovery(true);
+      return { success: true };
+    } catch (error) {
+      return {
+        success: false,
+        message: error instanceof ApiError ? error.message : (error.message || 'Unable to verify the recovery code right now.'),
+      };
+    }
+  }, []);
+
+  const completePasswordRecovery = useCallback(async (password) => {
+    if (!isSupabaseConfigured || !supabase) {
+      return { success: false, message: 'Supabase is not configured yet. Add your frontend env keys first.' };
+    }
+
+    try {
+      const { error } = await supabase.auth.updateUser({
+        password,
+      });
+
+      if (error) {
+        throw error;
+      }
+
+      writePasswordRecoveryFlag(false);
+      setIsPasswordRecovery(false);
+      await supabase.auth.signOut();
+      return { success: true };
+    } catch (error) {
+      return {
+        success: false,
+        message: error instanceof ApiError ? error.message : (error.message || 'Unable to update the password right now.'),
+      };
+    }
+  }, []);
+
+  const updateMyProfile = useCallback(async (updates) => {
     if (!session?.access_token) {
       return null;
     }
@@ -259,6 +560,7 @@ export const AuthProvider = ({ children }) => {
         full_name: updates.fullName,
         address: updates.address,
         phone_number: updates.phoneNumber,
+        avatar_url: updates.avatarUrl,
       }),
     }, {
       auth: true,
@@ -269,6 +571,10 @@ export const AuthProvider = ({ children }) => {
     setProfile(normalized);
     return normalized;
   }, [session]);
+
+  const updateLoggedInCustomer = useCallback((updates) => (
+    updateMyProfile(updates)
+  ), [updateMyProfile]);
 
   const createStaffAccount = useCallback(async (staffData) => {
     if (!session?.access_token) {
@@ -285,6 +591,7 @@ export const AuthProvider = ({ children }) => {
         role: staffData.role || 'staff',
         address: staffData.address || '',
         phone_number: staffData.phoneNumber || '',
+        avatar_url: staffData.avatarUrl || '',
       }),
     }, {
       auth: true,
@@ -315,6 +622,8 @@ export const AuthProvider = ({ children }) => {
       await supabase.auth.signOut();
     }
 
+    writePasswordRecoveryFlag(false);
+    setIsPasswordRecovery(false);
     setSession(null);
     setProfile(null);
     setStaffAccounts([]);
@@ -330,6 +639,7 @@ export const AuthProvider = ({ children }) => {
         fullName: profile.fullName,
         address: profile.address,
         phoneNumber: profile.phoneNumber,
+        avatarUrl: profile.avatarUrl,
       }
     : null;
 
@@ -346,12 +656,18 @@ export const AuthProvider = ({ children }) => {
         loginAdmin,
         loginCustomer,
         registerCustomer,
+        verifyCustomerSignupCode,
+        resendCustomerSignupCode,
         requestPasswordReset,
+        verifyPasswordRecoveryCode,
+        completePasswordRecovery,
+        updateMyProfile,
         updateLoggedInCustomer,
         logout,
         createStaffAccount,
         deleteStaffAccount,
         refreshProfile,
+        isPasswordRecovery,
       }}
     >
       {children}

@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components */
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { apiRequest } from '../lib/api';
 import { useAuth } from './AuthContext';
@@ -42,7 +43,10 @@ export const CartProvider = ({ children }) => {
   const { session, loggedInCustomer, isAuthLoading } = useAuth();
   const { products } = useProducts();
   const [cartItems, setCartItems] = useState(() => readGuestCart());
+  const cartItemsRef = useRef(cartItems);
   const mergeAttemptedRef = useRef(false);
+  const remoteItemIdsRef = useRef(new Map());
+  const remoteSyncQueueRef = useRef(Promise.resolve());
 
   const isRemoteCart = Boolean(session?.access_token && loggedInCustomer);
 
@@ -50,8 +54,44 @@ export const CartProvider = ({ children }) => {
     localStorage.setItem(GUEST_CART_KEY, JSON.stringify(nextItems));
   }, []);
 
+  const rememberRemoteItemIds = useCallback((items) => {
+    items.forEach((item) => {
+      if (item?.id && item?.cartItemId) {
+        remoteItemIdsRef.current.set(item.id, item.cartItemId);
+      }
+    });
+  }, []);
+
+  const replaceRemoteItemIds = useCallback((items) => {
+    remoteItemIdsRef.current = new Map(
+      items
+        .filter((item) => item?.id && item?.cartItemId)
+        .map((item) => [item.id, item.cartItemId])
+    );
+  }, []);
+
+  const commitCartItems = useCallback((nextItems) => {
+    cartItemsRef.current = nextItems;
+    rememberRemoteItemIds(nextItems);
+    setCartItems(nextItems);
+    return nextItems;
+  }, [rememberRemoteItemIds]);
+
+  const updateCartItems = useCallback((updater) => (
+    commitCartItems(updater(cartItemsRef.current))
+  ), [commitCartItems]);
+
+  const queueRemoteCartSync = useCallback((task) => {
+    remoteSyncQueueRef.current = remoteSyncQueueRef.current
+      .catch(() => {})
+      .then(task);
+
+    return remoteSyncQueueRef.current;
+  }, []);
+
   const refreshRemoteCart = useCallback(async () => {
     if (!session?.access_token) {
+      replaceRemoteItemIds([]);
       return [];
     }
 
@@ -61,9 +101,15 @@ export const CartProvider = ({ children }) => {
     });
 
     const mappedItems = (response?.items || []).map(normalizeCartItem);
-    setCartItems(mappedItems);
+    replaceRemoteItemIds(mappedItems);
+    commitCartItems(mappedItems);
     return mappedItems;
-  }, [session]);
+  }, [commitCartItems, replaceRemoteItemIds, session]);
+
+  useEffect(() => {
+    cartItemsRef.current = cartItems;
+    rememberRemoteItemIds(cartItems);
+  }, [cartItems, rememberRemoteItemIds]);
 
   useEffect(() => {
     if (isAuthLoading) {
@@ -75,17 +121,17 @@ export const CartProvider = ({ children }) => {
     const loadCart = async () => {
       if (!isRemoteCart) {
         mergeAttemptedRef.current = false;
+        replaceRemoteItemIds([]);
         const guestItems = readGuestCart();
         if (isActive) {
-          setCartItems(guestItems);
+          commitCartItems(guestItems);
         }
         return;
       }
 
       try {
-        const remoteItems = await refreshRemoteCart();
         if (isActive) {
-          setCartItems(remoteItems);
+          await refreshRemoteCart();
         }
       } catch (error) {
         console.error('Failed to load cart:', error);
@@ -97,7 +143,7 @@ export const CartProvider = ({ children }) => {
     return () => {
       isActive = false;
     };
-  }, [isAuthLoading, isRemoteCart, refreshRemoteCart]);
+  }, [commitCartItems, isAuthLoading, isRemoteCart, refreshRemoteCart, replaceRemoteItemIds]);
 
   useEffect(() => {
     if (isRemoteCart || isAuthLoading) {
@@ -137,9 +183,8 @@ export const CartProvider = ({ children }) => {
 
         localStorage.removeItem(GUEST_CART_KEY);
         mergeAttemptedRef.current = true;
-        const mergedItems = await refreshRemoteCart();
         if (isActive) {
-          setCartItems(mergedItems);
+          await refreshRemoteCart();
         }
       } catch (error) {
         console.error('Failed to merge guest cart:', error);
@@ -153,33 +198,67 @@ export const CartProvider = ({ children }) => {
     };
   }, [isRemoteCart, refreshRemoteCart, session]);
 
-  const syncRemoteQuantity = useCallback(async (productId, nextQuantity) => {
-    const existingItem = cartItems.find((item) => item.id === productId);
+  const syncRemoteQuantity = useCallback((productId, nextQuantity) => (
+    queueRemoteCartSync(async () => {
+      try {
+        const remoteItemId = remoteItemIdsRef.current.get(productId);
 
-    if (!existingItem) {
-      await apiRequest('/api/carts/mine/items', {
-        method: 'POST',
-        body: JSON.stringify({
-          product_id: productId,
-          quantity: nextQuantity,
-        }),
-      }, {
-        auth: true,
-        accessToken: session?.access_token,
-      });
-      return refreshRemoteCart();
-    }
+        if (nextQuantity < 1) {
+          if (!remoteItemId) {
+            return;
+          }
 
-    await apiRequest(`/api/carts/mine/items/${existingItem.cartItemId}`, {
-      method: 'PATCH',
-      body: JSON.stringify({ quantity: nextQuantity }),
-    }, {
-      auth: true,
-      accessToken: session?.access_token,
-    });
+          await apiRequest(`/api/carts/mine/items/${remoteItemId}`, {
+            method: 'DELETE',
+          }, {
+            auth: true,
+            accessToken: session?.access_token,
+          });
+          remoteItemIdsRef.current.delete(productId);
+          return;
+        }
 
-    return refreshRemoteCart();
-  }, [cartItems, refreshRemoteCart, session]);
+        if (!remoteItemId) {
+          const createdItem = await apiRequest('/api/carts/mine/items', {
+            method: 'POST',
+            body: JSON.stringify({
+              product_id: productId,
+              quantity: nextQuantity,
+            }),
+          }, {
+            auth: true,
+            accessToken: session?.access_token,
+          });
+
+          if (createdItem?.id) {
+            remoteItemIdsRef.current.set(productId, createdItem.id);
+            updateCartItems((prev) => prev.map((item) => (
+              item.id === productId
+                ? { ...item, cartItemId: item.cartItemId || createdItem.id }
+                : item
+            )));
+          }
+          return;
+        }
+
+        await apiRequest(`/api/carts/mine/items/${remoteItemId}`, {
+          method: 'PATCH',
+          body: JSON.stringify({ quantity: nextQuantity }),
+        }, {
+          auth: true,
+          accessToken: session?.access_token,
+        });
+      } catch (error) {
+        console.error('Failed to sync cart item:', error);
+
+        try {
+          await refreshRemoteCart();
+        } catch (refreshError) {
+          console.error('Failed to refresh cart after sync error:', refreshError);
+        }
+      }
+    })
+  ), [queueRemoteCartSync, refreshRemoteCart, session, updateCartItems]);
 
   const addToCart = useCallback(async (product, quantity = 1) => {
     const normalizedProduct = normalizeCartItem({ ...product, quantity });
@@ -189,17 +268,29 @@ export const CartProvider = ({ children }) => {
       return;
     }
 
+    const existingItem = cartItemsRef.current.find((item) => item.id === normalizedProduct.id);
+    const nextQuantity = Math.min((existingItem?.quantity || 0) + quantity, maxStock);
+
     if (isRemoteCart) {
-      const existingItem = cartItems.find((item) => item.id === normalizedProduct.id);
-      const nextQuantity = Math.min((existingItem?.quantity || 0) + quantity, maxStock);
+      updateCartItems((prev) => {
+        const liveItem = prev.find((item) => item.id === normalizedProduct.id);
+        if (liveItem) {
+          return prev.map((item) => (
+            item.id === normalizedProduct.id
+              ? { ...item, ...normalizedProduct, quantity: nextQuantity }
+              : item
+          ));
+        }
+
+        return [...prev, { ...normalizedProduct, quantity: Math.min(quantity, maxStock) }];
+      });
       await syncRemoteQuantity(normalizedProduct.id, nextQuantity);
       return;
     }
 
-    setCartItems((prev) => {
-      const existingItem = prev.find((item) => item.id === normalizedProduct.id);
-      if (existingItem) {
-        const nextQuantity = Math.min(existingItem.quantity + quantity, maxStock);
+    updateCartItems((prev) => {
+      const liveItem = prev.find((item) => item.id === normalizedProduct.id);
+      if (liveItem) {
         return prev.map((item) => (
           item.id === normalizedProduct.id
             ? { ...item, ...normalizedProduct, quantity: nextQuantity }
@@ -209,91 +300,88 @@ export const CartProvider = ({ children }) => {
 
       return [...prev, { ...normalizedProduct, quantity: Math.min(quantity, maxStock) }];
     });
-  }, [cartItems, isRemoteCart, syncRemoteQuantity]);
+  }, [isRemoteCart, syncRemoteQuantity, updateCartItems]);
 
   const removeFromCart = useCallback(async (id) => {
     if (isRemoteCart) {
-      const existingItem = cartItems.find((item) => item.id === id);
-      if (!existingItem?.cartItemId) {
+      if (
+        !cartItemsRef.current.some((item) => item.id === id)
+        && !remoteItemIdsRef.current.get(id)
+      ) {
         return;
       }
 
-      await apiRequest(`/api/carts/mine/items/${existingItem.cartItemId}`, {
-        method: 'DELETE',
-      }, {
-        auth: true,
-        accessToken: session?.access_token,
-      });
-      await refreshRemoteCart();
+      updateCartItems((prev) => prev.filter((item) => item.id !== id));
+      await syncRemoteQuantity(id, 0);
       return;
     }
 
-    setCartItems((prev) => prev.filter((item) => item.id !== id));
-  }, [cartItems, isRemoteCart, refreshRemoteCart, session]);
+    updateCartItems((prev) => prev.filter((item) => item.id !== id));
+  }, [isRemoteCart, syncRemoteQuantity, updateCartItems]);
 
   const updateQuantity = useCallback(async (id, quantity) => {
     if (quantity < 1) {
       return;
     }
 
-    const liveItem = cartItems.find((item) => item.id === id);
+    const liveItem = cartItemsRef.current.find((item) => item.id === id);
     const maxStock = Math.max(1, Number(liveItem?.stock) || quantity);
     const nextQuantity = Math.min(quantity, maxStock);
 
     if (isRemoteCart) {
+      updateCartItems((prev) => prev.map((item) => (
+        item.id === id ? { ...item, quantity: nextQuantity } : item
+      )));
       await syncRemoteQuantity(id, nextQuantity);
       return;
     }
 
-    setCartItems((prev) => prev.map((item) => (
+    updateCartItems((prev) => prev.map((item) => (
       item.id === id ? { ...item, quantity: nextQuantity } : item
     )));
-  }, [cartItems, isRemoteCart, syncRemoteQuantity]);
+  }, [isRemoteCart, syncRemoteQuantity, updateCartItems]);
 
   const clearCart = useCallback(async () => {
     if (isRemoteCart) {
-      await Promise.all(cartItems
-        .filter((item) => item.cartItemId)
-        .map((item) => apiRequest(`/api/carts/mine/items/${item.cartItemId}`, {
-          method: 'DELETE',
-        }, {
-          auth: true,
-          accessToken: session?.access_token,
-        })));
-
-      await refreshRemoteCart();
+      const productIds = cartItemsRef.current.map((item) => item.id);
+      commitCartItems([]);
+      await Promise.all(productIds.map((productId) => syncRemoteQuantity(productId, 0)));
       return;
     }
 
-    setCartItems([]);
-  }, [cartItems, isRemoteCart, refreshRemoteCart, session]);
+    commitCartItems([]);
+  }, [commitCartItems, isRemoteCart, syncRemoteQuantity]);
 
   useEffect(() => {
     if (!products.length) {
       return;
     }
 
-    setCartItems((prev) => prev
-      .map((item) => {
-        const liveProduct = products.find((product) => product.id === item.id);
-        if (!liveProduct) {
-          return item;
-        }
+    const timer = window.setTimeout(() => {
+      updateCartItems((prev) => prev
+        .map((item) => {
+          const liveProduct = products.find((product) => product.id === item.id);
+          if (!liveProduct) {
+            return item;
+          }
 
-        const liveStock = Math.max(0, Number(liveProduct.stock) || 0);
-        if (liveStock === 0) {
-          return null;
-        }
+          const liveStock = Math.max(0, Number(liveProduct.stock) || 0);
+          if (liveStock === 0) {
+            return null;
+          }
 
-        return {
-          ...item,
-          ...normalizeCartItem(liveProduct),
-          cartItemId: item.cartItemId,
-          quantity: Math.min(item.quantity, liveStock),
-        };
-      })
-      .filter(Boolean));
-  }, [products]);
+          return {
+            ...item,
+            ...normalizeCartItem(liveProduct),
+            cartItemId: item.cartItemId,
+            quantity: Math.min(item.quantity, liveStock),
+          };
+        })
+        .filter(Boolean));
+    }, 0);
+
+    return () => window.clearTimeout(timer);
+  }, [products, updateCartItems]);
 
   const cartTotal = useMemo(() => (
     cartItems.reduce((total, item) => total + (item.price * item.quantity), 0)

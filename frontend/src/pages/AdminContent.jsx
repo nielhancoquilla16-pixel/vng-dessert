@@ -1,31 +1,7 @@
 import React, { useState } from 'react';
 import { useContent } from '../context/ContentContext';
 import { Save, RefreshCw, PenTool, PlayCircle } from 'lucide-react';
-import ReactPlayer from 'react-player';
-
-const VideoPreview = ({ url }) => {
-  if (!url) return null;
-  
-  // Custom intercept for Facebook links to bypass react-player's strict regex
-  if (url.includes('facebook.com') || url.includes('fb.watch')) {
-    const fbIframeSrc = `https://www.facebook.com/plugins/video.php?href=${encodeURIComponent(url)}&show_text=0`;
-    return (
-      <iframe 
-        src={fbIframeSrc}
-        width="100%" 
-        height="100%" 
-        style={{ border: 'none', overflow: 'hidden' }} 
-        scrolling="no" 
-        frameBorder="0" 
-        allowFullScreen={true} 
-        allow="autoplay; clipboard-write; encrypted-media; picture-in-picture; web-share" 
-      />
-    );
-  }
-
-  // Fallback to ReactPlayer for YouTube, Vimeo, and raw MP4s
-  return <ReactPlayer url={url} controls width="100%" height="100%" />;
-};
+import MediaEmbed from '../components/MediaEmbed';
 
 const AdminContent = () => {
   const { siteVideos, updateVideo, defaultVideos } = useContent();
@@ -96,7 +72,10 @@ const AdminContent = () => {
               overflow: 'hidden',
               marginBottom: '1.5rem'
             }}>
-              <VideoPreview url={editingId === video.id ? formData.src : video.src} />
+              <MediaEmbed
+                url={editingId === video.id ? formData.src : video.src}
+                title={`Section ${video.id} preview`}
+              />
             </div>
 
             {editingId === video.id ? (

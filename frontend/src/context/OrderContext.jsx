@@ -1,5 +1,6 @@
+/* eslint-disable react-refresh/only-export-components */
 import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
-import { apiRequest } from '../lib/api';
+import { apiRequest, isBackendIssueError } from '../lib/api';
 import { useAuth } from './AuthContext';
 
 const OrderContext = createContext();
@@ -26,10 +27,25 @@ const buildItemsText = (lineItems = []) => (
   lineItems.map((item) => `${item.quantity}x ${item.name || item.product?.productName || 'Unknown Product'}`).join(', ')
 );
 
+const getPaymentLabel = (value = 'cash') => {
+  const normalized = String(value || 'cash').toLowerCase();
+
+  if (normalized === 'gcash') {
+    return 'GCash';
+  }
+
+  if (normalized === 'online') {
+    return 'Online Payment';
+  }
+
+  return 'Cash';
+};
+
 const normalizeOrder = (order) => {
   const lineItems = normalizeLineItems(order.lineItems || order.items || []);
   const totalAmount = Number(order.totalAmount ?? order.totalPrice) || parseCurrencyAmount(order.total);
   const createdAt = order.createdAt || order.created_at || new Date().toISOString();
+  const paymentLabel = getPaymentLabel(order.paymentMethod);
   const itemsText = typeof order.items === 'string'
     ? order.items
     : (order.itemsText || buildItemsText(lineItems));
@@ -38,6 +54,7 @@ const normalizeOrder = (order) => {
     ...order,
     id: order.id,
     displayId: order.displayId || order.display_id || order.id,
+    orderCode: order.orderCode || order.order_code || order.displayId || order.display_id || order.id,
     createdAt,
     date: order.date || createdAt.split('T')[0],
     status: (order.status || order.orderStatus || 'pending').toLowerCase(),
@@ -48,7 +65,21 @@ const normalizeOrder = (order) => {
     lineItems,
     items: itemsText,
     itemsText,
-    subtext: order.subtext || (order.deliveryMethod === 'delivery' ? order.address : `Walk-in / ${order.paymentMethod === 'gcash' ? 'GCash' : 'Cash'}`),
+    subtext: order.subtext || (order.deliveryMethod === 'delivery'
+      ? order.address
+      : `Walk-in / ${paymentLabel}${paymentLabel === 'Cash' ? ' on Pickup' : ''}`),
+    qrClaimedAt: order.qrClaimedAt || order.qr_claimed_at || null,
+    readyNotifiedAt: order.readyNotifiedAt || order.ready_notified_at || null,
+    readyNotificationMessage: order.readyNotificationMessage || order.ready_notification_message || '',
+    receiptImageUrl: order.receiptImageUrl || order.receipt_image_url || '',
+    receiptReceivedAt: order.receiptReceivedAt || order.receipt_received_at || null,
+    qrActive: Boolean(order.qrActive ?? order.qr_active ?? (
+      String(order.deliveryMethod || '').toLowerCase() === 'pickup'
+      && String(order.paymentMethod || '').toLowerCase() === 'cash'
+      && !order.qrClaimedAt
+      && !order.qr_claimed_at
+      && !['completed', 'received', 'cancelled'].includes((order.status || order.orderStatus || 'pending').toLowerCase())
+    )),
   };
 };
 
@@ -97,7 +128,11 @@ export const OrderProvider = ({ children }) => {
           setOrders(nextOrders);
         }
       } catch (error) {
-        console.error('Failed to load orders:', error);
+        if (isBackendIssueError(error)) {
+          console.warn('Orders are temporarily unavailable:', error.message);
+        } else {
+          console.error('Failed to load orders:', error);
+        }
         if (isActive) {
           setOrders([]);
         }
@@ -160,6 +195,24 @@ export const OrderProvider = ({ children }) => {
     return normalizedOrder;
   }, [session]);
 
+  const markOrderAsReceived = useCallback(async (orderId, receiptImageDataUrl = '') => {
+    const receivedOrder = await apiRequest(`/api/orders/${orderId}/receive`, {
+      method: 'POST',
+      body: JSON.stringify({
+        receiptImageDataUrl,
+      }),
+    }, {
+      auth: true,
+      accessToken: session?.access_token,
+    });
+
+    const normalizedOrder = normalizeOrder(receivedOrder);
+    setOrders((prev) => prev.map((order) => (
+      order.id === normalizedOrder.id ? normalizedOrder : order
+    )));
+    return normalizedOrder;
+  }, [session]);
+
   return (
     <OrderContext.Provider
       value={{
@@ -167,6 +220,7 @@ export const OrderProvider = ({ children }) => {
         isOrdersLoading,
         addOrder,
         updateOrderStatus,
+        markOrderAsReceived,
         refreshOrders,
       }}
     >

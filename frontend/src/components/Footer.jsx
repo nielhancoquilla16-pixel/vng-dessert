@@ -49,7 +49,7 @@ const Footer = () => {
       </div>
 
       <div className="footer-bottom">
-        &copy; {new Date().getFullYear()} V&G LECHEFLAN - All Rights Reserved - Powered by Supabase & Express.js
+        &copy; {new Date().getFullYear()} V&G LECHEFLAN
       </div>
     </footer>
   );

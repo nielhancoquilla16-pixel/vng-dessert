@@ -5,6 +5,87 @@ const router = express.Router();
 
 const normalizeIdentifier = (value = '') => value.trim().toLowerCase();
 
+const listAuthUsers = async (supabase) => {
+  const users = [];
+  let page = 1;
+  let hasMore = true;
+
+  while (hasMore) {
+    const { data, error } = await supabase.auth.admin.listUsers({
+      page,
+      perPage: 200,
+    });
+
+    if (error) {
+      throw error;
+    }
+
+    const batch = data?.users || [];
+    users.push(...batch);
+    hasMore = batch.length === 200;
+    page += 1;
+  }
+
+  return users;
+};
+
+const findAuthUserByUsername = (users, username) => (
+  users.find((user) => normalizeIdentifier(user.user_metadata?.username) === username)
+);
+
+const findAuthUserByEmail = (users, email) => (
+  users.find((user) => normalizeIdentifier(user.email) === email)
+);
+
+const getRegistrationConflicts = async (supabase, normalizedEmail, normalizedUsername) => {
+  const [
+    { data: existingByUsername, error: existingUsernameError },
+    { data: existingByEmail, error: existingEmailError },
+    authUsers,
+  ] = await Promise.all([
+    supabase
+      .from('profiles')
+      .select('id')
+      .ilike('username', normalizedUsername)
+      .maybeSingle(),
+    supabase
+      .from('profiles')
+      .select('id')
+      .ilike('email', normalizedEmail)
+      .maybeSingle(),
+    listAuthUsers(supabase),
+  ]);
+
+  if (existingUsernameError) {
+    throw existingUsernameError;
+  }
+
+  if (existingEmailError) {
+    throw existingEmailError;
+  }
+
+  return {
+    username: Boolean(existingByUsername || findAuthUserByUsername(authUsers, normalizedUsername)),
+    email: Boolean(existingByEmail || findAuthUserByEmail(authUsers, normalizedEmail)),
+  };
+};
+
+const buildRegistrationConflictMessage = (conflicts) => {
+  if (conflicts.username && conflicts.email) {
+    return 'That username or email is already in use.';
+  }
+
+  if (conflicts.username) {
+    return 'That username is already in use.';
+  }
+
+  if (conflicts.email) {
+    return 'That email is already in use.';
+  }
+
+  return 'That username or email is already in use.';
+};
+
 router.post('/resolve-login', async (req, res, next) => {
   try {
     const identifier = normalizeIdentifier(req.body?.identifier);
@@ -28,11 +109,43 @@ router.post('/resolve-login', async (req, res, next) => {
       throw error;
     }
 
-    if (!data?.email) {
+    if (data?.email) {
+      return res.json({ email: data.email });
+    }
+
+    const authUsers = await listAuthUsers(supabase);
+    const authUser = findAuthUserByUsername(authUsers, identifier);
+
+    if (!authUser?.email) {
       return res.status(404).json({ error: 'Account not found.' });
     }
 
-    res.json({ email: data.email });
+    res.json({ email: normalizeIdentifier(authUser.email) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/register/check', async (req, res, next) => {
+  try {
+    const email = normalizeIdentifier(req.body?.email);
+    const username = normalizeIdentifier(req.body?.username);
+
+    if (!email || !username) {
+      return res.status(400).json({ error: 'email and username are required.' });
+    }
+
+    const supabase = getSupabaseAdmin();
+    const conflicts = await getRegistrationConflicts(supabase, email, username);
+
+    if (conflicts.username || conflicts.email) {
+      return res.status(409).json({
+        error: buildRegistrationConflictMessage(conflicts),
+        conflicts,
+      });
+    }
+
+    res.json({ available: true });
   } catch (error) {
     next(error);
   }
@@ -56,29 +169,13 @@ router.post('/register', async (req, res, next) => {
     const normalizedEmail = normalizeIdentifier(email);
     const normalizedUsername = normalizeIdentifier(username);
     const supabase = getSupabaseAdmin();
+    const conflicts = await getRegistrationConflicts(supabase, normalizedEmail, normalizedUsername);
 
-    const { data: existingByUsername, error: existingUsernameError } = await supabase
-      .from('profiles')
-      .select('id')
-      .ilike('username', normalizedUsername)
-      .maybeSingle();
-
-    if (existingUsernameError) {
-      throw existingUsernameError;
-    }
-
-    const { data: existingByEmail, error: existingEmailError } = await supabase
-      .from('profiles')
-      .select('id')
-      .ilike('email', normalizedEmail)
-      .maybeSingle();
-
-    if (existingEmailError) {
-      throw existingEmailError;
-    }
-
-    if (existingByUsername || existingByEmail) {
-      return res.status(409).json({ error: 'That username or email is already in use.' });
+    if (conflicts.username || conflicts.email) {
+      return res.status(409).json({
+        error: buildRegistrationConflictMessage(conflicts),
+        conflicts,
+      });
     }
 
     const { data: createdUser, error: createError } = await supabase.auth.admin.createUser({

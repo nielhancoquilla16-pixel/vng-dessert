@@ -1,5 +1,6 @@
+/* eslint-disable react-refresh/only-export-components */
 import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
-import { apiRequest } from '../lib/api';
+import { apiRequest, isBackendIssueError } from '../lib/api';
 import { useAuth } from './AuthContext';
 
 const ProductContext = createContext();
@@ -113,7 +114,11 @@ export const ProductProvider = ({ children }) => {
 
         setProducts(nextProducts);
       } catch (error) {
-        console.error('Failed to load products:', error);
+        if (isBackendIssueError(error)) {
+          console.warn('Products are temporarily unavailable:', error.message);
+        } else {
+          console.error('Failed to load products:', error);
+        }
         if (isActive) {
           setProducts([]);
         }
@@ -145,7 +150,11 @@ export const ProductProvider = ({ children }) => {
           setInventoryItems(nextInventory);
         }
       } catch (error) {
-        console.error('Failed to load inventory:', error);
+        if (isBackendIssueError(error)) {
+          console.warn('Inventory is temporarily unavailable:', error.message);
+        } else {
+          console.error('Failed to load inventory:', error);
+        }
         if (isActive) {
           setInventoryItems([]);
         }

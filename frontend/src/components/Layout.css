@@ -3,11 +3,12 @@
   display: flex;
   flex-direction: column;
   min-height: 100vh;
+  overflow-x: clip;
 }
 
 .main-content {
   flex: 1;
-  padding: 2rem;
+  padding: clamp(1rem, 3vw, 2rem);
   max-width: 1280px;
   margin: 0 auto;
   width: 100%;
@@ -16,6 +17,6 @@
 /* Responsive */
 @media (max-width: 768px) {
   .main-content {
-    padding: 1rem;
+    padding: 0.85rem;
   }
 }

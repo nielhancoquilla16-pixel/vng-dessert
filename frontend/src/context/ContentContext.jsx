@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components */
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import adverVideo from '../assets/adver.mp4';
 import promoVideo from '../assets/promo.mp4';
@@ -28,14 +29,42 @@ const defaultVideos = [
   }
 ];
 
-export const ContentProvider = ({ children }) => {
-  const [siteVideos, setSiteVideos] = useState(() => {
+const readStoredVideos = () => {
+  if (typeof window === 'undefined' || !window.localStorage) {
+    return defaultVideos;
+  }
+
+  try {
     const saved = localStorage.getItem('vng_site_videos');
-    return saved ? JSON.parse(saved) : defaultVideos;
-  });
+    if (!saved) {
+      return defaultVideos;
+    }
+
+    const parsed = JSON.parse(saved);
+    return Array.isArray(parsed) ? parsed : defaultVideos;
+  } catch {
+    try {
+      localStorage.removeItem('vng_site_videos');
+    } catch {
+      // ignore storage errors
+    }
+    return defaultVideos;
+  }
+};
+
+export const ContentProvider = ({ children }) => {
+  const [siteVideos, setSiteVideos] = useState(() => readStoredVideos());
 
   useEffect(() => {
-    localStorage.setItem('vng_site_videos', JSON.stringify(siteVideos));
+    if (typeof window === 'undefined' || !window.localStorage) {
+      return;
+    }
+
+    try {
+      localStorage.setItem('vng_site_videos', JSON.stringify(siteVideos));
+    } catch {
+      // ignore storage errors
+    }
   }, [siteVideos]);
 
   const updateVideo = (id, newVideoData) => {

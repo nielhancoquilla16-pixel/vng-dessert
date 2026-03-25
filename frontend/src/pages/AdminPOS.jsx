@@ -61,7 +61,7 @@ const AdminPOS = () => {
         paymentMethod: paymentMode,
         deliveryMethod: 'pickup',
         status: 'confirmed',
-        subtext: `Walk-in / ${paymentMode === 'gcash' ? 'GCash' : 'Cash'}`,
+        subtext: `Walk-in / ${paymentMode === 'gcash' ? 'GCash' : 'Cash on Pickup'}`,
       });
 
       await refreshProducts();

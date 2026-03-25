@@ -5,6 +5,9 @@
   "main": "index.js",
   "scripts": {
     "dev": "node scripts/dev.mjs",
+    "build": "npm --prefix frontend run build",
+    "build:app": "npm --prefix frontend run build",
+    "dev:app": "npm --prefix frontend run dev",
     "dev:frontend": "npm --prefix frontend run dev",
     "dev:backend": "npm --prefix dessert-ai-system run dev",
     "test": "echo \"Error: no test specified\" && exit 1"

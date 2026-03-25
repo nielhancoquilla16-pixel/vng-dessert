@@ -1,125 +1,289 @@
 import express from 'express';
-import { getSupabaseAdmin } from '../lib/supabaseAdmin.js';
+import { getSupabaseAdmin, hasSupabaseAdminConfig } from '../lib/supabaseAdmin.js';
+import {
+  DELIVERY_FEE,
+  DEFAULT_READY_NOTIFICATION_MESSAGE,
+  VALID_ORDER_STATUSES,
+  createFulfilledOrder,
+  enrichItemsFromProducts,
+  fetchProductsByIds,
+  getShortagesForItems,
+  mapOrder,
+  normalizeRequestedItems,
+  orderSelect,
+} from '../lib/orderUtils.js';
+import { validateReceiptImageDataUrl } from '../lib/receiptImages.js';
 import { requireAuth } from '../middleware/requireAuth.js';
 import { requireRole } from '../middleware/requireRole.js';
 
 const router = express.Router();
+const BEST_SELLER_LIMIT = 3;
 
-const VALID_ORDER_STATUSES = ['pending', 'confirmed', 'preparing', 'ready', 'processing', 'completed', 'delivered', 'cancelled'];
-
-const orderSelect = `
-  id,
-  user_id,
-  customer_name,
-  phone_number,
-  address,
-  delivery_method,
-  payment_method,
-  total_price,
-  order_status,
-  created_at,
-  profiles (
-    id,
-    username,
-    email,
-    full_name,
-    role
-  ),
-  order_items (
-    id,
-    product_id,
-    quantity,
-    price,
-    products (
-      id,
-      product_name,
-      category,
-      image_url
-    )
-  )
-`;
-
-const toDisplayId = (id) => `ORD-${String(id).replace(/-/g, '').slice(0, 4).toUpperCase()}`;
-
-const formatCurrency = (value) => `PHP ${Number(value || 0).toFixed(2)}`;
-
-const buildItemsText = (items = []) => (
-  items
-    .map((item) => `${item.quantity}x ${item.product?.productName || 'Unknown Product'}`)
-    .join(', ')
-);
-
-const mapOrder = (row) => {
-  const mappedItems = (row.order_items || []).map((item) => ({
-    id: item.id,
-    productId: item.product_id,
-    quantity: Number(item.quantity) || 0,
-    price: Number(item.price) || 0,
-    name: item.products?.product_name || 'Unknown Product',
-    category: item.products?.category || 'Uncategorized',
-    lineTotal: (Number(item.price) || 0) * (Number(item.quantity) || 0),
-    product: item.products
-      ? {
-          id: item.products.id,
-          productName: item.products.product_name,
-          category: item.products.category,
-          imageUrl: item.products.image_url,
-        }
-      : null,
-  }));
-
-  const customerName = row.customer_name
-    || row.profiles?.full_name
-    || row.profiles?.username
-    || 'Customer';
-
-  const paymentLabel = row.payment_method === 'gcash' ? 'GCash' : 'Cash';
-  const subtext = row.delivery_method === 'delivery'
-    ? (row.address || 'Delivery')
-    : `Walk-in / ${paymentLabel}`;
-  const createdAt = row.created_at || new Date().toISOString();
-  const totalPrice = Number(row.total_price) || 0;
-
-  return {
-    id: row.id,
-    displayId: toDisplayId(row.id),
-    userId: row.user_id,
-    customer: customerName,
-    customerUsername: row.profiles?.username || '',
-    customerEmail: row.profiles?.email || '',
-    phoneNumber: row.phone_number || '',
-    address: row.address || '',
-    deliveryMethod: row.delivery_method || 'pickup',
-    paymentMethod: row.payment_method || 'cash',
-    subtext,
-    totalPrice,
-    totalAmount: totalPrice,
-    total: formatCurrency(totalPrice),
-    orderStatus: row.order_status,
-    status: (row.order_status || 'pending').toLowerCase(),
-    createdAt,
-    date: createdAt.split('T')[0],
-    lineItems: mappedItems,
-    items: buildItemsText(mappedItems),
-    itemsText: buildItemsText(mappedItems),
-  };
+const toTimestamp = (value) => {
+  const parsed = new Date(value || '').getTime();
+  return Number.isFinite(parsed) ? parsed : 0;
 };
 
-const getAvailabilityForStock = (stockQuantity) => (stockQuantity <= 0 ? 'out of stock' : 'available');
+const QR_CODE_ALREADY_USED_MESSAGE = 'QR Code already used or expired.';
 
-const hydrateOrderById = async (supabase, orderId) => {
-  const { data, error } = await supabase
+const normalizeLookupValue = (value = '') => String(value || '').trim();
+const normalizeLookupCode = (value = '') => normalizeLookupValue(value).toUpperCase();
+
+const isPickupCashOrder = (order = {}) => (
+  String(order.delivery_method || '').toLowerCase() === 'pickup'
+  && String(order.payment_method || '').toLowerCase() === 'cash'
+);
+
+const isFinalizedPickupQr = (order = {}) => {
+  const status = String(order.order_status || '').toLowerCase();
+  return Boolean(order.qr_claimed_at) || ['completed', 'received', 'cancelled'].includes(status);
+};
+
+const fetchOrderByIdentifier = async (supabase, identifier = '') => {
+  const normalized = normalizeLookupValue(identifier);
+  const normalizedCode = normalizeLookupCode(identifier);
+
+  if (!normalized) {
+    return null;
+  }
+
+  const lookupQueries = [];
+
+  if (normalizedCode) {
+    lookupQueries.push(
+      supabase
+        .from('orders')
+        .select(orderSelect)
+        .eq('order_code', normalizedCode)
+        .maybeSingle(),
+    );
+  }
+
+  if (normalized) {
+    lookupQueries.push(
+      supabase
+        .from('orders')
+        .select(orderSelect)
+        .eq('id', normalized)
+        .maybeSingle(),
+    );
+  }
+
+  for (const query of lookupQueries) {
+    const { data, error } = await query;
+
+    if (error) {
+      throw error;
+    }
+
+    if (data) {
+      return data;
+    }
+  }
+
+  return null;
+};
+
+const buildOrderStatusUpdate = (currentOrder, nextStatus) => {
+  const normalizedNextStatus = String(nextStatus || '').toLowerCase();
+  const currentStatus = String(currentOrder?.order_status || '').toLowerCase();
+  const now = new Date().toISOString();
+  const updates = {
+    order_status: normalizedNextStatus,
+  };
+
+  if (normalizedNextStatus === 'ready' && !currentOrder?.ready_notified_at) {
+    updates.ready_notified_at = now;
+    updates.ready_notification_message = DEFAULT_READY_NOTIFICATION_MESSAGE;
+  }
+
+  if (normalizedNextStatus === 'completed' && isPickupCashOrder(currentOrder)) {
+    if (isFinalizedPickupQr(currentOrder)) {
+      const error = new Error(QR_CODE_ALREADY_USED_MESSAGE);
+      error.status = 409;
+      throw error;
+    }
+
+    if (currentStatus !== 'ready') {
+      const error = new Error('The order must be ready before it can be confirmed.');
+      error.status = 400;
+      throw error;
+    }
+
+    updates.qr_claimed_at = now;
+  }
+
+  if (normalizedNextStatus === 'received') {
+    if (currentStatus !== 'completed') {
+      const error = new Error('The order must be completed before it can be marked as received.');
+      error.status = 400;
+      throw error;
+    }
+
+    if (currentOrder?.receipt_received_at) {
+      const error = new Error('This order has already been marked as received.');
+      error.status = 409;
+      throw error;
+    }
+  }
+
+  return updates;
+};
+
+const updateOrderWithStatus = async (supabase, orderId, nextStatus) => {
+  const { data: currentOrder, error: currentError } = await supabase
     .from('orders')
     .select(orderSelect)
     .eq('id', orderId)
-    .single();
+    .maybeSingle();
+
+  if (currentError) {
+    throw currentError;
+  }
+
+  if (!currentOrder) {
+    const error = new Error('Order not found.');
+    error.status = 404;
+    throw error;
+  }
+
+  const updates = buildOrderStatusUpdate(currentOrder, nextStatus);
+
+  const { data, error } = await supabase
+    .from('orders')
+    .update(updates)
+    .eq('id', orderId)
+    .select(orderSelect)
+    .maybeSingle();
 
   if (error) {
     throw error;
   }
 
+  if (!data) {
+    const error = new Error('Order not found.');
+    error.status = 404;
+    throw error;
+  }
+
   return data;
 };
+
+const createBestSellerEntry = (product) => ({
+  id: product.id,
+  name: product.product_name || 'Dessert Item',
+  productName: product.product_name || 'Dessert Item',
+  description: product.description || '',
+  price: Number(product.price) || 0,
+  category: product.category || 'Uncategorized',
+  stockQuantity: Number(product.stock_quantity) || 0,
+  availability: product.availability || 'available',
+  imageUrl: product.image_url || '/logo.png',
+  image: product.image_url || '/logo.png',
+  soldCount: 0,
+  orderCount: 0,
+  lastOrderedAt: '',
+  createdAt: product.created_at || '',
+  updatedAt: product.updated_at || '',
+});
+
+router.get('/best-sellers', async (req, res, next) => {
+  try {
+    if (!hasSupabaseAdminConfig()) {
+      return res.status(503).json({
+        error: 'Best seller rankings are unavailable until SUPABASE_SERVICE_ROLE_KEY is configured on the server.',
+      });
+    }
+
+    const limit = Math.min(12, Math.max(1, Number(req.query.limit) || BEST_SELLER_LIMIT));
+    const supabase = getSupabaseAdmin();
+    const { data, error } = await supabase
+      .from('orders')
+      .select(`
+        created_at,
+        order_status,
+        order_items (
+          quantity,
+          product_id,
+          products (
+            id,
+            product_name,
+            description,
+            price,
+            category,
+            stock_quantity,
+            availability,
+            image_url,
+            created_at,
+            updated_at
+          )
+        )
+      `)
+      .neq('order_status', 'cancelled')
+      .order('created_at', { ascending: true });
+
+    if (error) {
+      throw error;
+    }
+
+    const productSales = new Map();
+
+    (data || []).forEach((order) => {
+      const countedInOrder = new Set();
+
+      (order.order_items || []).forEach((item) => {
+        const product = item.products;
+        const quantity = Math.max(0, Number(item.quantity) || 0);
+
+        if (!product?.id || quantity <= 0) {
+          return;
+        }
+
+        const existing = productSales.get(product.id) || createBestSellerEntry(product);
+        existing.soldCount += quantity;
+        existing.lastOrderedAt = order.created_at || existing.lastOrderedAt;
+
+        if (!countedInOrder.has(product.id)) {
+          existing.orderCount += 1;
+          countedInOrder.add(product.id);
+        }
+
+        productSales.set(product.id, existing);
+      });
+    });
+
+    const items = Array.from(productSales.values())
+      .sort((left, right) => {
+        if (right.soldCount !== left.soldCount) {
+          return right.soldCount - left.soldCount;
+        }
+
+        const leftLastOrderedAt = toTimestamp(left.lastOrderedAt);
+        const rightLastOrderedAt = toTimestamp(right.lastOrderedAt);
+        if (leftLastOrderedAt !== rightLastOrderedAt) {
+          return leftLastOrderedAt - rightLastOrderedAt;
+        }
+
+        return left.name.localeCompare(right.name);
+      })
+      .slice(0, limit)
+      .map((item, index) => ({
+        ...item,
+        rank: index + 1,
+        averageUnitsPerOrder: item.orderCount > 0
+          ? Number((item.soldCount / item.orderCount).toFixed(1))
+          : 0,
+      }));
+
+    res.json({
+      generatedAt: new Date().toISOString(),
+      rankingMode: 'total-units-sold',
+      items,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
 
 router.get('/', requireAuth, requireRole('admin', 'staff'), async (req, res, next) => {
   try {
@@ -162,7 +326,6 @@ router.post('/', requireAuth, async (req, res, next) => {
   try {
     const {
       items = [],
-      total_price,
       order_status = 'pending',
       customer_name = '',
       phone_number = '',
@@ -179,42 +342,18 @@ router.post('/', requireAuth, async (req, res, next) => {
       return res.status(400).json({ error: 'Invalid order status.' });
     }
 
-    const normalizedItems = items.map((item) => ({
-      product_id: item.product_id || item.productId,
-      quantity: Math.max(1, Number(item.quantity) || 1),
-      price: Math.max(0, Number(item.price) || 0),
-    }));
+    const normalizedItems = normalizeRequestedItems(items);
 
     if (normalizedItems.some((item) => !item.product_id)) {
       return res.status(400).json({ error: 'Each order item must include a product_id.' });
     }
 
-    const requestedProductIds = [...new Set(normalizedItems.map((item) => item.product_id))];
     const supabase = getSupabaseAdmin();
-    const { data: products, error: productsError } = await supabase
-      .from('products')
-      .select('*')
-      .in('id', requestedProductIds);
-
-    if (productsError) {
-      throw productsError;
-    }
-
-    const productsById = new Map((products || []).map((product) => [product.id, product]));
-    const shortages = [];
-
-    normalizedItems.forEach((item) => {
-      const matchingProduct = productsById.get(item.product_id);
-      const availableStock = Number(matchingProduct?.stock_quantity) || 0;
-      if (!matchingProduct || availableStock < item.quantity) {
-        shortages.push({
-          productId: item.product_id,
-          productName: matchingProduct?.product_name || 'Unknown Product',
-          available: availableStock,
-          requested: item.quantity,
-        });
-      }
-    });
+    const productsById = await fetchProductsByIds(
+      supabase,
+      [...new Set(normalizedItems.map((item) => item.product_id))],
+    );
+    const shortages = getShortagesForItems(normalizedItems, productsById);
 
     if (shortages.length > 0) {
       return res.status(409).json({
@@ -223,83 +362,115 @@ router.post('/', requireAuth, async (req, res, next) => {
       });
     }
 
-    const calculatedTotal = normalizedItems.reduce((sum, item) => sum + (item.quantity * item.price), 0);
-    const finalStatus = String(order_status).toLowerCase();
-
-    const { data: createdOrder, error: orderError } = await supabase
-      .from('orders')
-      .insert({
-        user_id: req.authUser.id,
-        customer_name: customer_name || req.profile?.full_name || req.profile?.username || 'Customer',
-        phone_number: phone_number || req.profile?.phone_number || null,
-        address: address || req.profile?.address || null,
-        delivery_method,
-        payment_method,
-        total_price: Number(total_price) || calculatedTotal,
-        order_status: finalStatus,
-      })
-      .select('*')
-      .single();
-
-    if (orderError) {
-      throw orderError;
-    }
-
-    const orderItemsPayload = normalizedItems.map((item) => ({
-      order_id: createdOrder.id,
-      product_id: item.product_id,
-      quantity: item.quantity,
-      price: item.price,
+    const finalizedItems = enrichItemsFromProducts(normalizedItems, productsById).map((item) => ({
+      ...item,
+      available_stock_quantity: Number(productsById.get(item.product_id)?.stock_quantity) || 0,
     }));
 
-    const { error: itemsError } = await supabase
-      .from('order_items')
-      .insert(orderItemsPayload);
+    const subtotal = finalizedItems.reduce((sum, item) => sum + (item.quantity * item.price), 0);
+    const finalTotal = subtotal + (delivery_method === 'delivery' ? DELIVERY_FEE : 0);
 
-    if (itemsError) {
-      throw itemsError;
+    const createdOrder = await createFulfilledOrder(supabase, {
+      userId: req.authUser.id,
+      profile: req.profile,
+      customerName: customer_name,
+      phoneNumber: phone_number,
+      address,
+      deliveryMethod: delivery_method,
+      paymentMethod: payment_method,
+      totalPrice: finalTotal,
+      orderStatus: String(order_status).toLowerCase(),
+      items: finalizedItems,
+    });
+
+    res.status(201).json(createdOrder);
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/lookup', requireAuth, requireRole('admin', 'staff'), async (req, res, next) => {
+  try {
+    const identifier = req.body?.identifier || req.body?.orderCode || req.body?.orderId || '';
+    const supabase = getSupabaseAdmin();
+    const order = await fetchOrderByIdentifier(supabase, identifier);
+
+    if (!order) {
+      return res.status(404).json({ error: 'Order not found.' });
     }
 
-    for (const item of normalizedItems) {
-      const matchingProduct = productsById.get(item.product_id);
-      const nextStock = Math.max(0, (Number(matchingProduct?.stock_quantity) || 0) - item.quantity);
-
-      const { error: updateProductError } = await supabase
-        .from('products')
-        .update({
-          stock_quantity: nextStock,
-          availability: getAvailabilityForStock(nextStock),
-        })
-        .eq('id', item.product_id);
-
-      if (updateProductError) {
-        throw updateProductError;
-      }
+    if (isFinalizedPickupQr(order)) {
+      return res.status(409).json({ error: QR_CODE_ALREADY_USED_MESSAGE });
     }
 
-    const { data: cart, error: cartError } = await supabase
-      .from('carts')
-      .select('id')
+    res.json(mapOrder(order));
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/:id/confirm-pickup', requireAuth, requireRole('admin', 'staff'), async (req, res, next) => {
+  try {
+    const supabase = getSupabaseAdmin();
+    const updatedOrder = await updateOrderWithStatus(supabase, req.params.id, 'completed');
+    res.json(mapOrder(updatedOrder));
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/:id/receive', requireAuth, async (req, res, next) => {
+  try {
+    const supabase = getSupabaseAdmin();
+    const { data: currentOrder, error: currentError } = await supabase
+      .from('orders')
+      .select(orderSelect)
+      .eq('id', req.params.id)
       .eq('user_id', req.authUser.id)
       .maybeSingle();
 
-    if (cartError) {
-      throw cartError;
+    if (currentError) {
+      throw currentError;
     }
 
-    if (cart?.id) {
-      const { error: clearCartError } = await supabase
-        .from('cart_items')
-        .delete()
-        .eq('cart_id', cart.id);
-
-      if (clearCartError) {
-        throw clearCartError;
-      }
+    if (!currentOrder) {
+      return res.status(404).json({ error: 'Order not found.' });
     }
 
-    const hydratedOrder = await hydrateOrderById(supabase, createdOrder.id);
-    res.status(201).json(mapOrder(hydratedOrder));
+    if (String(currentOrder.order_status || '').toLowerCase() !== 'completed') {
+      return res.status(400).json({ error: 'The order must be completed before it can be marked as received.' });
+    }
+
+    if (currentOrder.receipt_received_at) {
+      return res.status(409).json({ error: 'This order has already been marked as received.' });
+    }
+
+    const receiptImageDataUrl = validateReceiptImageDataUrl(
+      req.body?.receipt_image_data_url
+      || req.body?.receiptImageDataUrl
+      || '',
+    );
+
+    const { data, error } = await supabase
+      .from('orders')
+      .update({
+        order_status: 'received',
+        receipt_image_url: receiptImageDataUrl,
+        receipt_received_at: new Date().toISOString(),
+      })
+      .eq('id', currentOrder.id)
+      .select(orderSelect)
+      .maybeSingle();
+
+    if (error) {
+      throw error;
+    }
+
+    if (!data) {
+      return res.status(404).json({ error: 'Order not found.' });
+    }
+
+    res.json(mapOrder(data));
   } catch (error) {
     next(error);
   }
@@ -314,22 +485,8 @@ router.patch('/:id/status', requireAuth, requireRole('admin', 'staff'), async (r
     }
 
     const supabase = getSupabaseAdmin();
-    const { data, error } = await supabase
-      .from('orders')
-      .update({ order_status: nextStatus })
-      .eq('id', req.params.id)
-      .select(orderSelect)
-      .maybeSingle();
-
-    if (error) {
-      throw error;
-    }
-
-    if (!data) {
-      return res.status(404).json({ error: 'Order not found.' });
-    }
-
-    res.json(mapOrder(data));
+    const updatedOrder = await updateOrderWithStatus(supabase, req.params.id, nextStatus);
+    res.json(mapOrder(updatedOrder));
   } catch (error) {
     next(error);
   }

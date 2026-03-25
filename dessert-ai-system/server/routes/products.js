@@ -1,5 +1,5 @@
 import express from 'express';
-import { getSupabaseAdmin } from '../lib/supabaseAdmin.js';
+import { getSupabaseAdmin, getSupabaseAnon, hasSupabaseAdminConfig } from '../lib/supabaseAdmin.js';
 import { requireAuth } from '../middleware/requireAuth.js';
 import { requireRole } from '../middleware/requireRole.js';
 
@@ -23,9 +23,15 @@ const mapProduct = (row) => ({
   updatedAt: row.updated_at,
 });
 
+const getProductsClient = () => (
+  hasSupabaseAdminConfig()
+    ? getSupabaseAdmin()
+    : getSupabaseAnon()
+);
+
 router.get('/', async (req, res, next) => {
   try {
-    const supabase = getSupabaseAdmin();
+    const supabase = getProductsClient();
     const { data, error } = await supabase
       .from('products')
       .select('*')
@@ -43,7 +49,7 @@ router.get('/', async (req, res, next) => {
 
 router.get('/:id', async (req, res, next) => {
   try {
-    const supabase = getSupabaseAdmin();
+    const supabase = getProductsClient();
     const { data, error } = await supabase
       .from('products')
       .select('*')

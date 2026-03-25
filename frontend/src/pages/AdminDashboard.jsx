@@ -35,6 +35,30 @@ const DEFAULT_CATEGORY_SALES = [
   { name: 'Ube', color: '#feaaf3' },
 ];
 
+const safeStorage = {
+  getItem(key) {
+    try {
+      return window.localStorage.getItem(key);
+    } catch {
+      return null;
+    }
+  },
+  setItem(key, value) {
+    try {
+      window.localStorage.setItem(key, value);
+    } catch {
+      // ignore storage errors
+    }
+  },
+  removeItem(key) {
+    try {
+      window.localStorage.removeItem(key);
+    } catch {
+      // ignore storage errors
+    }
+  },
+};
+
 const parseCurrencyAmount = (value) => {
   if (typeof value === 'number') return value;
   if (typeof value !== 'string') return 0;
@@ -107,6 +131,34 @@ const getOrderItemCount = (order, productsByName) => (
   getOrderLineItems(order, productsByName).reduce((sum, item) => sum + (Number(item.quantity) || 0), 0)
 );
 
+const DashboardTooltip = ({ active, payload }) => {
+  if (active && payload && payload.length) {
+    return (
+      <div style={{
+        background: 'white',
+        padding: '10px 15px',
+        borderRadius: '8px',
+        boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+        border: '1px solid #e2e8f0'
+      }}>
+        <p style={{ margin: 0, color: '#1e293b', fontWeight: 600 }}>
+          {payload[0].payload.day || payload[0].payload.name}
+        </p>
+        <p style={{ margin: '4px 0 0 0', color: '#f97316', fontWeight: 600 }}>
+          {formatCurrency(payload[0].value || 0)}
+        </p>
+        {payload[0].payload.orders && (
+          <p style={{ margin: '4px 0 0 0', color: '#64748b', fontSize: '0.85rem' }}>
+            Orders: {payload[0].payload.orders}
+          </p>
+        )}
+      </div>
+    );
+  }
+
+  return null;
+};
+
 const AdminDashboard = () => {
   const { orders } = useOrders();
   const { products } = useProducts();
@@ -128,29 +180,29 @@ const AdminDashboard = () => {
   }, [currentDateMarker]);
 
   const [weeklyResetAt, setWeeklyResetAt] = useState(() => {
-    return localStorage.getItem(WEEKLY_RESET_STORAGE_KEY) || '';
+    return safeStorage.getItem(WEEKLY_RESET_STORAGE_KEY) || '';
   });
 
   const [categoryResetAt, setCategoryResetAt] = useState(() => {
-    return localStorage.getItem(CATEGORY_RESET_STORAGE_KEY) || '';
+    return safeStorage.getItem(CATEGORY_RESET_STORAGE_KEY) || '';
   });
 
   useEffect(() => {
     if (weeklyResetAt) {
-      localStorage.setItem(WEEKLY_RESET_STORAGE_KEY, weeklyResetAt);
+      safeStorage.setItem(WEEKLY_RESET_STORAGE_KEY, weeklyResetAt);
       return;
     }
 
-    localStorage.removeItem(WEEKLY_RESET_STORAGE_KEY);
+    safeStorage.removeItem(WEEKLY_RESET_STORAGE_KEY);
   }, [weeklyResetAt]);
 
   useEffect(() => {
     if (categoryResetAt) {
-      localStorage.setItem(CATEGORY_RESET_STORAGE_KEY, categoryResetAt);
+      safeStorage.setItem(CATEGORY_RESET_STORAGE_KEY, categoryResetAt);
       return;
     }
 
-    localStorage.removeItem(CATEGORY_RESET_STORAGE_KEY);
+    safeStorage.removeItem(CATEGORY_RESET_STORAGE_KEY);
   }, [categoryResetAt]);
 
   const storeProducts = products.filter((product) => !product.type || product.type === 'product');
@@ -165,20 +217,15 @@ const AdminDashboard = () => {
 
   const currentWeekStartTimestamp = currentWeekStart.getTime();
   const nextWeekStartTimestamp = nextWeekStart.getTime();
-  const parsedWeeklyResetTimestamp = weeklyResetAt ? new Date(weeklyResetAt).getTime() : NaN;
+  const parsedStoredWeeklyResetTimestamp = weeklyResetAt ? new Date(weeklyResetAt).getTime() : NaN;
+  const effectiveWeeklyResetAt = Number.isFinite(parsedStoredWeeklyResetTimestamp)
+    && parsedStoredWeeklyResetTimestamp >= currentWeekStartTimestamp
+    ? weeklyResetAt
+    : '';
+  const parsedWeeklyResetTimestamp = effectiveWeeklyResetAt ? new Date(effectiveWeeklyResetAt).getTime() : NaN;
   const weeklyResetTimestamp = Number.isFinite(parsedWeeklyResetTimestamp)
     ? Math.max(parsedWeeklyResetTimestamp, currentWeekStartTimestamp)
     : currentWeekStartTimestamp;
-
-  useEffect(() => {
-    if (!weeklyResetAt) {
-      return;
-    }
-
-    if (!Number.isFinite(parsedWeeklyResetTimestamp) || parsedWeeklyResetTimestamp < currentWeekStartTimestamp) {
-      setWeeklyResetAt('');
-    }
-  }, [weeklyResetAt, parsedWeeklyResetTimestamp, currentWeekStartTimestamp]);
 
   const weeklySalesData = WEEKLY_DAY_LABELS.map((day) => ({
     day,
@@ -281,33 +328,6 @@ const AdminDashboard = () => {
     date: new Date(order.createdAt || order.date).toLocaleDateString()
   }));
 
-  const CustomTooltip = ({ active, payload }) => {
-    if (active && payload && payload.length) {
-      return (
-        <div style={{
-          background: 'white',
-          padding: '10px 15px',
-          borderRadius: '8px',
-          boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
-          border: '1px solid #e2e8f0'
-        }}>
-          <p style={{ margin: 0, color: '#1e293b', fontWeight: 600 }}>
-            {payload[0].payload.day || payload[0].payload.name}
-          </p>
-          <p style={{ margin: '4px 0 0 0', color: '#f97316', fontWeight: 600 }}>
-            {formatCurrency(payload[0].value || 0)}
-          </p>
-          {payload[0].payload.orders && (
-            <p style={{ margin: '4px 0 0 0', color: '#64748b', fontSize: '0.85rem' }}>
-              Orders: {payload[0].payload.orders}
-            </p>
-          )}
-        </div>
-      );
-    }
-    return null;
-  };
-
   return (
     <div>
       <div className="admin-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
@@ -366,7 +386,7 @@ const AdminDashboard = () => {
                   <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
                   <XAxis dataKey="day" stroke="#64748b" />
                   <YAxis stroke="#64748b" />
-                  <Tooltip content={<CustomTooltip />} />
+                  <Tooltip content={<DashboardTooltip />} />
                   <Bar
                     dataKey="sales"
                     fill="#f97316"

@@ -1,11 +1,14 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useCart } from '../context/CartContext';
 import { useAuth } from '../context/AuthContext';
 import { useOrders } from '../context/OrderContext';
 import { useProducts } from '../context/ProductContext';
-import { MapPin, CreditCard, Banknote, Truck, Store } from 'lucide-react';
+import { apiRequest } from '../lib/api';
+import { CreditCard, Banknote, MapPin, Store, Truck } from 'lucide-react';
 import './Checkout.css';
+
+const DELIVERY_FEE = 50;
 
 const Checkout = () => {
   const { cartItems, clearCart } = useCart();
@@ -19,11 +22,15 @@ const Checkout = () => {
     phone: '',
     address: '',
     deliveryMethod: 'delivery',
-    paymentMethod: 'gcash'
+    paymentMethod: 'online',
   });
-
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState('');
+  const [isPaymentStatusLoading, setIsPaymentStatusLoading] = useState(true);
+  const [paymentStatus, setPaymentStatus] = useState({
+    configured: false,
+    paymentMethodTypes: [],
+  });
 
   useEffect(() => {
     if (cartItems.length === 0 && !isSubmitting) {
@@ -31,25 +38,75 @@ const Checkout = () => {
     }
   }, [cartItems, navigate, isSubmitting]);
 
+  useEffect(() => {
+    let isActive = true;
+
+    const loadPaymentStatus = async () => {
+      try {
+        const status = await apiRequest('/api/payments/status');
+        if (isActive) {
+          setPaymentStatus(status || { configured: false, paymentMethodTypes: [] });
+        }
+      } catch {
+        if (isActive) {
+          setPaymentStatus({ configured: false, paymentMethodTypes: [] });
+        }
+      } finally {
+        if (isActive) {
+          setIsPaymentStatusLoading(false);
+        }
+      }
+    };
+
+    loadPaymentStatus();
+
+    return () => {
+      isActive = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!paymentStatus.configured && formData.paymentMethod === 'online') {
+      setFormData((current) => ({
+        ...current,
+        paymentMethod: 'cash',
+      }));
+    }
+  }, [formData.paymentMethod, paymentStatus.configured]);
+
+  useEffect(() => {
+    if (formData.deliveryMethod === 'pickup' && formData.paymentMethod !== 'cash') {
+      setFormData((current) => ({
+        ...current,
+        paymentMethod: 'cash',
+      }));
+    }
+  }, [formData.deliveryMethod, formData.paymentMethod]);
+
   const subtotal = cartItems.reduce((total, item) => total + (item.price * item.quantity), 0);
-  const deliveryFee = formData.deliveryMethod === 'delivery' ? 50.00 : 0;
+  const deliveryFee = formData.deliveryMethod === 'delivery' ? DELIVERY_FEE : 0;
   const total = subtotal + deliveryFee;
 
   const handleChange = (e) => {
-    setFormData({
-      ...formData,
-      [e.target.name]: e.target.value
-    });
+    setFormData((current) => ({
+      ...current,
+      [e.target.name]: e.target.value,
+    }));
   };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setIsSubmitting(true);
     setSubmitError('');
+
     try {
+      if (!loggedInCustomer) {
+        throw new Error('Please log in first before checking out.');
+      }
+
       const submittedFullName = formData.fullName.trim();
 
-      if (loggedInCustomer && submittedFullName) {
+      if (submittedFullName) {
         await updateLoggedInCustomer({
           fullName: submittedFullName,
           address: formData.address.trim(),
@@ -78,6 +135,33 @@ const Checkout = () => {
         return;
       }
 
+      if (formData.paymentMethod === 'online') {
+        if (!paymentStatus.configured) {
+          throw new Error('Online payment is not configured yet. Switch to cash for now, or add the PayMongo keys and restart the backend.');
+        }
+
+        const checkoutSession = await apiRequest('/api/payments/checkout-sessions', {
+          method: 'POST',
+          body: JSON.stringify({
+            customerName: submittedFullName || loggedInCustomer.username || 'Customer',
+            phoneNumber: formData.phone.trim(),
+            address: formData.address.trim(),
+            deliveryMethod: formData.deliveryMethod,
+            paymentMethod: 'online',
+            lineItems,
+          }),
+        }, {
+          auth: true,
+        });
+
+        if (!checkoutSession?.checkoutUrl) {
+          throw new Error('PayMongo did not return a checkout URL.');
+        }
+
+        window.location.assign(checkoutSession.checkoutUrl);
+        return;
+      }
+
       await addOrder({
         customer: submittedFullName || (loggedInCustomer ? loggedInCustomer.username : 'Guest'),
         customerUsername: loggedInCustomer?.username || '',
@@ -85,7 +169,7 @@ const Checkout = () => {
         address: formData.address,
         subtext: formData.deliveryMethod === 'delivery'
           ? formData.address
-          : `Walk-in / ${formData.paymentMethod === 'gcash' ? 'GCash' : 'Cash'}`,
+          : 'Walk-in / Cash on Pickup',
         lineItems,
         totalAmount: total,
         total: `PHP ${total.toFixed(2)}`,
@@ -94,7 +178,7 @@ const Checkout = () => {
       });
 
       await refreshProducts();
-      clearCart();
+      await clearCart();
       navigate('/orders');
     } catch (error) {
       const shortageItems = error?.details?.shortages;
@@ -138,6 +222,24 @@ const Checkout = () => {
               {submitError}
             </div>
           )}
+
+          {!isPaymentStatusLoading && formData.deliveryMethod === 'delivery' && !paymentStatus.configured && (
+            <div
+              style={{
+                marginBottom: '1rem',
+                padding: '0.95rem 1rem',
+                borderRadius: '0.85rem',
+                background: '#fff7ed',
+                border: '1px solid #fdba74',
+                color: '#9a3412',
+                fontSize: '0.92rem',
+                lineHeight: 1.6,
+              }}
+            >
+              Online payment is currently unavailable. Cash checkout still works, or you can add PayMongo to the backend and restart the server.
+            </div>
+          )}
+
           <div className="form-section">
             <h2 className="section-title">1. Contact Information</h2>
             <div className="form-group">
@@ -227,21 +329,28 @@ const Checkout = () => {
           <div className="form-section">
             <h2 className="section-title">3. Payment Method</h2>
             <div className="method-options">
-              <label className={`method-card ${formData.paymentMethod === 'gcash' ? 'selected' : ''}`}>
-                <input
-                  type="radio"
-                  name="paymentMethod"
-                  value="gcash"
-                  checked={formData.paymentMethod === 'gcash'}
-                  onChange={handleChange}
-                  style={{ display: 'none' }}
-                />
-                <CreditCard size={24} className="method-icon" style={{ color: '#3b82f6' }} />
-                <div className="method-details">
-                  <span className="method-name">GCash (Online)</span>
-                  <span className="method-desc">Pay securely via GCash.</span>
-                </div>
-              </label>
+              {formData.deliveryMethod === 'delivery' && (
+                <label className={`method-card ${formData.paymentMethod === 'online' ? 'selected' : ''}`}>
+                  <input
+                    type="radio"
+                    name="paymentMethod"
+                    value="online"
+                    checked={formData.paymentMethod === 'online'}
+                    onChange={handleChange}
+                    style={{ display: 'none' }}
+                    disabled={!paymentStatus.configured}
+                  />
+                  <CreditCard size={24} className="method-icon" style={{ color: '#3b82f6' }} />
+                  <div className="method-details">
+                    <span className="method-name">Online Payment</span>
+                    <span className="method-desc">
+                      {paymentStatus.configured
+                        ? 'Continue to PayMongo for GCash and other enabled online methods.'
+                        : 'PayMongo is not configured yet on the backend.'}
+                    </span>
+                  </div>
+                </label>
+              )}
 
               <label className={`method-card ${formData.paymentMethod === 'cash' ? 'selected' : ''}`}>
                 <input
@@ -262,7 +371,11 @@ const Checkout = () => {
           </div>
 
           <button type="submit" className="btn-primary place-order-btn" disabled={isSubmitting}>
-            {isSubmitting ? 'Processing...' : 'Place Order'}
+            {isSubmitting
+              ? 'Processing...'
+              : formData.paymentMethod === 'online'
+                ? 'Continue to PayMongo'
+                : 'Place Order'}
           </button>
         </form>
 
