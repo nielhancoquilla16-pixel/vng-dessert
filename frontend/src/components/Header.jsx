@@ -3,6 +3,7 @@ import { Link, useLocation } from 'react-router-dom';
 import { Menu, ShoppingCart, X } from 'lucide-react';
 import { useCart } from '../context/CartContext';
 import { useAuth } from '../context/AuthContext';
+import { resolveAssetUrl } from '../lib/publicUrl';
 import './Header.css';
 
 const getInitials = (value = '') => (
@@ -51,7 +52,7 @@ const Header = () => {
         <div className="header-brand">
           <Link to="/" className="brand-link" aria-label="Go to homepage">
             <img
-              src="/logo.png"
+              src={resolveAssetUrl('logo.png')}
               alt="V&G Leche Flan logo"
               className="brand-logo"
             />

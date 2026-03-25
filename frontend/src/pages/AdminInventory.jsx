@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { CheckSquare, AlertTriangle, XCircle, Plus, X } from 'lucide-react';
 import { useProducts } from '../context/ProductContext';
+import { resolveAssetUrl } from '../lib/publicUrl';
 import './AdminInventory.css';
 
 const getProductStatus = (stock) => {
@@ -148,7 +149,7 @@ const AdminInventory = () => {
                 <tr key={item.id}>
                   <td style={{ paddingLeft: '2rem' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-                      <img src={item.image || '/logo.png'} alt="" style={{ width: '32px', height: '32px', borderRadius: '8px', objectFit: 'cover' }} />
+                      <img src={resolveAssetUrl(item.image, 'logo.png')} alt="" style={{ width: '32px', height: '32px', borderRadius: '8px', objectFit: 'cover' }} />
                       <span style={{ fontWeight: 700 }}>{item.name}</span>
                     </div>
                   </td>

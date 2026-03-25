@@ -2,9 +2,10 @@
 import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
 import { apiRequest, isBackendIssueError } from '../lib/api';
 import { useAuth } from './AuthContext';
+import { resolveAssetUrl } from '../lib/publicUrl';
 
 const ProductContext = createContext();
-const DEFAULT_IMAGE = '/logo.png';
+const DEFAULT_IMAGE = resolveAssetUrl('logo.png');
 
 const normalizeNumber = (value) => {
   const parsed = Number(value);
@@ -37,8 +38,8 @@ const mapProduct = (product) => {
     stockQuantity: stock,
     availability: product.availability || 'available',
     status: getProductStatus(stock),
-    imageUrl: product.imageUrl || product.image_url || DEFAULT_IMAGE,
-    image: product.imageUrl || product.image_url || DEFAULT_IMAGE,
+    imageUrl: resolveAssetUrl(product.imageUrl || product.image_url || product.image, 'logo.png'),
+    image: resolveAssetUrl(product.imageUrl || product.image_url || product.image, 'logo.png'),
     soldCount: normalizeNumber(product.soldCount),
     type: 'product',
     createdAt: product.createdAt || product.created_at || '',

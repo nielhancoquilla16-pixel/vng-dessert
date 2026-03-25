@@ -3,6 +3,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { apiRequest } from '../lib/api';
 import { useAuth } from './AuthContext';
 import { useProducts } from './ProductContext';
+import { resolveAssetUrl } from '../lib/publicUrl';
 
 const CartContext = createContext();
 const GUEST_CART_KEY = 'vng_guest_cart';
@@ -21,8 +22,8 @@ const normalizeCartItem = (item) => {
     category: product.category || 'Uncategorized',
     stock,
     stockQuantity: stock,
-    image: product.image || product.imageUrl || '/logo.png',
-    imageUrl: product.imageUrl || product.image || '/logo.png',
+    image: resolveAssetUrl(product.image || product.imageUrl, 'logo.png'),
+    imageUrl: resolveAssetUrl(product.imageUrl || product.image, 'logo.png'),
     availability: product.availability || 'available',
     quantity: Math.max(1, Number(item.quantity) || 1),
   };

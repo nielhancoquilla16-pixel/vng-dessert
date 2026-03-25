@@ -32,6 +32,9 @@ import { OrderProvider } from './context/OrderContext';
 import { AIProvider } from './context/AIContext';
 import { ContentProvider } from './context/ContentContext';
 import FloatingAI from './components/FloatingAI';
+import { normalizeBasePath } from './lib/publicUrl';
+
+const routerBasename = normalizeBasePath(import.meta.env.BASE_URL).replace(/\/$/, '') || '/';
 
 function App() {
   return (
@@ -45,7 +48,7 @@ function App() {
                 <>
                   <FloatingAI />
                   <ApiStatusBanner />
-                  <BrowserRouter>
+                  <BrowserRouter basename={routerBasename}>
                     <Routes>
                       {/* Visitor Routes */}
                       <Route path="/" element={<Layout />}>

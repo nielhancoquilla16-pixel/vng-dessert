@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 
 import { useAuth } from '../context/AuthContext';
+import { resolveAssetUrl } from '../lib/publicUrl';
 import './AdminLayout.css';
 
 const getInitials = (profile, userRole) => {
@@ -126,7 +127,7 @@ const AdminLayout = () => {
         </button>
 
         <div className="admin-mobile-summary">
-          <img src="/logo.png" alt="V&G Lecheflan" className="admin-mobile-logo" />
+          <img src={resolveAssetUrl('logo.png')} alt="V&G Lecheflan" className="admin-mobile-logo" />
           <div className="admin-mobile-summary-copy">
             <strong>{activeMenuItem?.name || panelLabel}</strong>
             <span>{mobileTimestamp}</span>

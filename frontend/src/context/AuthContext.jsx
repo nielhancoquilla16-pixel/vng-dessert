@@ -2,6 +2,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
 import { apiRequest, ApiError, isBackendIssueError } from '../lib/api';
 import { supabase, isSupabaseConfigured, clearSupabaseSessionStorage } from '../lib/supabase';
+import { appUrl } from '../lib/appUrl';
 
 const AuthContext = createContext();
 const PASSWORD_RECOVERY_STORAGE_KEY = 'vng-password-recovery-active';
@@ -386,7 +387,7 @@ export const AuthProvider = ({ children }) => {
         email: normalizedEmail,
         password,
         options: {
-          emailRedirectTo: `${window.location.origin}/login`,
+          emailRedirectTo: appUrl('login'),
           data: {
             username: normalizedUsername,
             full_name: fullName,
@@ -454,7 +455,7 @@ export const AuthProvider = ({ children }) => {
         type: 'signup',
         email: String(email || '').trim().toLowerCase(),
         options: {
-          emailRedirectTo: `${window.location.origin}/login`,
+          emailRedirectTo: appUrl('login'),
         },
       });
 
@@ -479,7 +480,7 @@ export const AuthProvider = ({ children }) => {
     try {
       const email = await resolveLoginEmail(identifier);
       const { error } = await supabase.auth.resetPasswordForEmail(email, {
-        redirectTo: `${window.location.origin}/login`,
+        redirectTo: appUrl('login'),
       });
 
       if (error) {

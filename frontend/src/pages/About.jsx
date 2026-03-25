@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { resolveAssetUrl } from '../lib/publicUrl';
 import './About.css';
 
 const flipCards = [
@@ -91,7 +92,7 @@ const About = () => {
         {showStoreImage && (
           <div className="about-image-panel">
             <img
-              src="/store-image.jpg"
+              src={resolveAssetUrl('store-image.jpg')}
               alt="V & G Leche Flan Store"
               className="store-image"
               onError={() => {

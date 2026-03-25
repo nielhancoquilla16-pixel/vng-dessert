@@ -5,6 +5,8 @@ This project is safest to deploy as:
 - Frontend: Vercel CLI
 - Backend: Railway CLI
 
+If you want a GitHub Pages frontend instead, see [DEPLOY_GITHUB_PAGES.md](./DEPLOY_GITHUB_PAGES.md).
+
 The current backend writes profile images to the local filesystem in `dessert-ai-system/server/uploads`, so it is not a good fit for Vercel serverless as-is.
 It will run on Railway, but those uploaded files are still not durable across redeploys because they are stored on the service filesystem.
 

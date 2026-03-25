@@ -6,6 +6,7 @@ import { useProducts } from '../context/ProductContext';
 import { useAI } from '../context/AIContext';
 import { useContent } from '../context/ContentContext';
 import { apiRequest } from '../lib/api';
+import { resolveAssetUrl } from '../lib/publicUrl';
 import { formatCurrency } from '../utils/orderAnalytics';
 import './Home.css';
 
@@ -40,8 +41,8 @@ const normalizeBestSeller = (product = {}, fallbackRank = 1) => ({
   description: product.description || 'Freshly prepared dessert made with care.',
   price: Number(product.price) || 0,
   category: product.category || 'Dessert',
-  imageUrl: product.imageUrl || product.image_url || product.image || '/logo.png',
-  image: product.imageUrl || product.image_url || product.image || '/logo.png',
+  imageUrl: resolveAssetUrl(product.imageUrl || product.image_url || product.image, 'logo.png'),
+  image: resolveAssetUrl(product.imageUrl || product.image_url || product.image, 'logo.png'),
   soldCount: Number(product.soldCount) || 0,
   orderCount: Number(product.orderCount) || 0,
   averageUnitsPerOrder: Number(product.averageUnitsPerOrder) || 0,
