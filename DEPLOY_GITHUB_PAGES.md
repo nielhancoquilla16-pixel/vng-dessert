@@ -14,9 +14,9 @@ This repo can use GitHub Pages for the **frontend only**.
 - It does not host `/api` routes
 - It does not replace Railway or your backend host
 
-## Required GitHub secrets
+## Recommended GitHub secrets
 
-Set these in the repository settings before enabling the workflow:
+Set these in the repository settings for the full app experience:
 
 ```env
 VITE_API_BASE_URL=https://your-backend-domain.up.railway.app
@@ -36,4 +36,4 @@ VITE_SUPABASE_ANON_KEY=your_supabase_anon_key
 - The backend should stay deployed on Railway or another server
 - If you change the repo name, the Pages base path updates automatically in the workflow
 - The frontend build is already configured to handle Pages-safe asset URLs and login redirects
-
+- If the secrets are missing, the Pages build can still complete, but API and Supabase features will not work until they are added

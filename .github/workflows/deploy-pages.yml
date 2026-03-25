@@ -34,11 +34,10 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
-      - name: Validate frontend environment
+      - name: Warn about missing frontend environment
         run: |
           if [ -z "$VITE_API_BASE_URL" ] || [ -z "$VITE_SUPABASE_URL" ] || [ -z "$VITE_SUPABASE_ANON_KEY" ]; then
-            echo "Missing required frontend secrets. Set VITE_API_BASE_URL, VITE_SUPABASE_URL, and VITE_SUPABASE_ANON_KEY in GitHub repository secrets."
-            exit 1
+            echo "::warning::Missing frontend secrets. The site can still deploy, but API and Supabase features will not work until VITE_API_BASE_URL, VITE_SUPABASE_URL, and VITE_SUPABASE_ANON_KEY are set in GitHub repository secrets."
           fi
 
       - name: Install frontend dependencies
