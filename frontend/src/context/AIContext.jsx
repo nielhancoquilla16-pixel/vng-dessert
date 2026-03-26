@@ -1,7 +1,6 @@
 /* eslint-disable react-refresh/only-export-components */
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import React, { createContext, useContext, useState, useCallback } from 'react';
 import { useProducts } from './ProductContext';
-import { useOrders } from './OrderContext';
 
 const AIContext = createContext();
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL
@@ -132,9 +131,6 @@ export const useAI = () => {
 
 export const AIProvider = ({ children }) => {
   const { products } = useProducts();
-  const { orders } = useOrders();
-  const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [salesInsights, setSalesInsights] = useState(null);
   const [recommendations] = useState([]);
 
   const buildMenuContext = useCallback(() => {
@@ -360,33 +356,6 @@ export const AIProvider = ({ children }) => {
     return data?.data?.content || data.reply || data.answer;
   }, []);
 
-  const analyzeSalesTrends = useCallback(() => {
-    if (!orders || orders.length === 0) return;
-
-    setIsAnalyzing(true);
-
-    setTimeout(() => {
-      const topProducts = [...products]
-        .sort((a, b) => (b.soldCount || 0) - (a.soldCount || 0))
-        .slice(0, 2);
-
-      const insights = {
-        summary: 'Your business is showing strong weekend growth.',
-        details: [
-          `Top-performing category: ${topProducts[0]?.category || 'Desserts'}`,
-          'Peak ordering time: 2:00 PM - 5:00 PM (Snack hours)',
-          'Customer retention is up by 15% due to new additions.',
-          `Recommendation: Promote '${topProducts[1]?.name || 'new items'}' on social media to boost mid-week sales.`,
-        ],
-        trend: 'upward',
-        confidence: 94,
-      };
-
-      setSalesInsights(insights);
-      setIsAnalyzing(false);
-    }, 1500);
-  }, [orders, products]);
-
   const getSmartRecommendations = useCallback((currentProductId) => {
     if (!products) return [];
 
@@ -442,19 +411,10 @@ export const AIProvider = ({ children }) => {
     }
   }, [buildMenuContext, createFallbackReply, requestAIReply]);
 
-  useEffect(() => {
-    if (orders && orders.length > 0) {
-      analyzeSalesTrends();
-    }
-  }, [orders, analyzeSalesTrends]);
-
   return (
     <AIContext.Provider
       value={{
-        isAnalyzing,
-        salesInsights,
         recommendations,
-        analyzeSalesTrends,
         getSmartRecommendations,
         generateAIInventoryReport,
         queryProductAI,
