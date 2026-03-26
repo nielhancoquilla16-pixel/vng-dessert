@@ -106,9 +106,17 @@ const normalizeOrder = (order) => {
   const notifications = normalizeNotifications(order.notifications || []);
   const issueReports = normalizeIssueReports(order.issueReports || order.order_issue_reports || []);
   const statusTimestamps = normalizeStatusTimestamps(order.statusTimestamps || order.status_timestamps || {});
+  const placedByRole = String(order.placedByRole || order.placed_by_role || order.profiles?.role || '').toLowerCase();
   const itemsText = typeof order.items === 'string'
     ? order.items
     : (order.itemsText || buildItemsText(lineItems));
+  const isWalkInOrder = Boolean(
+    order.isWalkInOrder ?? order.is_walk_in_order ?? (
+      ['admin', 'staff'].includes(placedByRole)
+      && deliveryMethod === 'pickup'
+      && String(order.paymentMethod || order.payment_method || 'cash').toLowerCase() !== 'online'
+    ),
+  );
 
   return {
     ...order,
@@ -130,6 +138,8 @@ const normalizeOrder = (order) => {
     lineItems,
     items: itemsText,
     itemsText,
+    placedByRole,
+    isWalkInOrder,
     subtext: order.subtext || (deliveryMethod === 'delivery'
       ? order.address
       : `Walk-in / ${paymentLabel}${paymentLabel === 'Cash' ? ' on Pickup' : ''}`),

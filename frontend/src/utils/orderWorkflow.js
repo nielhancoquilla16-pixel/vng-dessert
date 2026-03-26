@@ -77,6 +77,31 @@ export const isDeliveryOrder = (order = {}) => String(order.deliveryMethod || or
 
 export const isPickupOrder = (order = {}) => String(order.deliveryMethod || order.delivery_method || '').toLowerCase() === 'pickup';
 
+export const isWalkInOrder = (order = {}) => {
+  if (typeof order.isWalkInOrder === 'boolean') {
+    return order.isWalkInOrder;
+  }
+
+  if (typeof order.is_walk_in_order === 'boolean') {
+    return order.is_walk_in_order;
+  }
+
+  const placedByRole = String(
+    order.placedByRole
+    || order.placed_by_role
+    || order.customerRole
+    || order.customer_role
+    || order.profiles?.role
+    || '',
+  ).toLowerCase();
+  const deliveryMethod = String(order.deliveryMethod || order.delivery_method || '').toLowerCase();
+  const paymentMethod = String(order.paymentMethod || order.payment_method || '').toLowerCase();
+
+  return ['admin', 'staff'].includes(placedByRole)
+    && deliveryMethod === 'pickup'
+    && paymentMethod !== 'online';
+};
+
 export const hasLecheFlanItems = (items = []) => (
   items.some((item) => {
     const name = String(item?.name || item?.product_name || item?.productName || '').toLowerCase();
@@ -119,4 +144,3 @@ export const buildOrderWorkflowProgress = (status = '') => {
 };
 
 export const getStatusChipClass = (status = '') => `status-${normalizeOrderStatus(status)}`;
-

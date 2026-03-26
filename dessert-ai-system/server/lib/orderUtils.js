@@ -287,6 +287,10 @@ export const mapOrder = (row) => {
     row.contains_leche_flan
     || hasLecheFlanItems(mappedItems),
   );
+  const placedByRole = String(row.profiles?.role || '').toLowerCase();
+  const isWalkInOrder = ['admin', 'staff'].includes(placedByRole)
+    && String(row.delivery_method || 'pickup').toLowerCase() === 'pickup'
+    && String(row.payment_method || 'cash').toLowerCase() !== 'online';
   const latestIssueReport = issueReports[0] || null;
 
   return {
@@ -297,6 +301,8 @@ export const mapOrder = (row) => {
     customer: customerName,
     customerUsername: row.profiles?.username || '',
     customerEmail: row.profiles?.email || '',
+    placedByRole,
+    isWalkInOrder,
     phoneNumber: row.phone_number || '',
     address: row.address || '',
     deliveryMethod: row.delivery_method || 'pickup',

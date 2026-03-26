@@ -617,9 +617,14 @@ router.patch('/:id/items', requireAuth, requireRole('admin', 'staff'), async (re
     const currentOrder = await fetchOrderById(supabase, req.params.id);
     const currentStatus = normalizeOrderStatus(currentOrder.order_status);
     const currentReviewStatus = normalizeReviewStatus(currentOrder.review_status);
+    const placedByRole = String(currentOrder.profiles?.role || '').toLowerCase();
 
     if (!['pending', 'confirmed'].includes(currentStatus)) {
       return res.status(400).json({ error: 'Only pending or confirmed orders can be edited from the POS.' });
+    }
+
+    if (!['admin', 'staff'].includes(placedByRole) || String(currentOrder.delivery_method || '').toLowerCase() !== 'pickup') {
+      return res.status(403).json({ error: 'Only walk-in pickup orders can be edited.' });
     }
 
     if (currentReviewStatus === 'under_review') {

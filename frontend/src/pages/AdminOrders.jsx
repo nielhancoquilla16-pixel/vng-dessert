@@ -8,6 +8,10 @@ import {
   ChevronRight,
   Loader2,
   PackageCheck,
+  PencilLine,
+  Plus,
+  Minus,
+  Trash2,
   Search,
   ShieldAlert,
   Sparkles,
@@ -15,12 +19,14 @@ import {
   Undo2,
   XCircle,
 } from 'lucide-react';
+import { useProducts } from '../context/ProductContext';
 import { useOrders } from '../context/OrderContext';
 import {
   buildOrderWorkflowProgress,
   canStaffCancelOrder,
   getOrderStatusLabel,
   getReviewStatusLabel,
+  isWalkInOrder,
   normalizeReviewStatus,
 } from '../utils/orderWorkflow';
 import './AdminOrders.css';
@@ -99,7 +105,8 @@ const getNextWorkflowAction = (order) => {
 };
 
 const AdminOrders = () => {
-  const { orders, updateOrderStatus, cancelOrder } = useOrders();
+  const { orders, updateOrderStatus, updateOrderItems, cancelOrder } = useOrders();
+  const { products, validateStockAvailability } = useProducts();
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedFilter, setSelectedFilter] = useState('all');
   const [selectedOrderId, setSelectedOrderId] = useState('');
@@ -108,6 +115,10 @@ const AdminOrders = () => {
   const [loadingAction, setLoadingAction] = useState(null);
   const [cancelDrafts, setCancelDrafts] = useState({});
   const [openCancelOrderId, setOpenCancelOrderId] = useState('');
+  const [openEditOrderId, setOpenEditOrderId] = useState('');
+  const [editDraft, setEditDraft] = useState(null);
+  const [editSearchTerm, setEditSearchTerm] = useState('');
+  const [editError, setEditError] = useState('');
 
   useEffect(() => {
     if (!selectedOrderId && orders.length > 0) {
@@ -174,6 +185,237 @@ const AdminOrders = () => {
       { label: 'All Orders', value: orders.length, helper: 'Total records in the system' },
     ];
   }, [orders]);
+
+  useEffect(() => {
+    if (!selectedOrder) {
+      if (openEditOrderId) {
+        setOpenEditOrderId('');
+        setEditDraft(null);
+        setEditSearchTerm('');
+      }
+      return;
+    }
+
+    if (selectedOrder.id !== openEditOrderId) {
+      setOpenEditOrderId('');
+      setEditDraft(null);
+      setEditSearchTerm('');
+    }
+  }, [selectedOrder, openEditOrderId]);
+
+  const selectedOrderIsWalkIn = Boolean(selectedOrder?.isWalkInOrder ?? isWalkInOrder(selectedOrder));
+
+  const canEditSelectedOrder = Boolean(
+    selectedOrder
+    && selectedOrderIsWalkIn
+    && ['pending', 'confirmed'].includes(String(selectedOrder.status || '').toLowerCase())
+    && normalizeReviewStatus(selectedOrder.reviewStatus) !== 'under_review',
+  );
+
+  const loadingEdit = loadingAction?.type === 'edit' && loadingAction.orderId === selectedOrder?.id;
+  const isEditOpen = openEditOrderId === selectedOrder?.id;
+
+  const editableProducts = useMemo(() => {
+    const search = editSearchTerm.trim().toLowerCase();
+
+    return products
+      .filter((product) => (product.type === 'product' || !product.type))
+      .filter((product) => {
+        if (!search) {
+          return true;
+        }
+
+        return String(product.name || '').toLowerCase().includes(search)
+          || String(product.category || '').toLowerCase().includes(search);
+      })
+      .slice(0, 12);
+  }, [products, editSearchTerm]);
+
+  const buildEditDraft = (order) => ({
+    customerName: order?.customer || '',
+    phoneNumber: order?.phoneNumber || '',
+    address: order?.address || '',
+    deliveryMethod: order?.deliveryMethod || 'pickup',
+    paymentMethod: order?.paymentMethod || 'cash',
+    deliveryDistanceKm: Number.isFinite(Number(order?.deliveryDistanceKm))
+      ? Number(order?.deliveryDistanceKm)
+      : '',
+    lineItems: (order?.lineItems || []).map((item) => {
+      const quantity = Math.max(1, Number(item.quantity) || 1);
+      const price = Number(item.price) || 0;
+
+      return {
+        id: item.id || item.productId || item.name,
+        productId: item.productId || item.id,
+        name: item.name || item.product?.productName || 'Unknown Product',
+        category: item.category || item.product?.category || 'Uncategorized',
+        quantity,
+        price,
+        lineTotal: price * quantity,
+      };
+    }),
+  });
+
+  const formatStockShortageSummary = (shortages = []) => (
+    shortages
+      .map((item) => `${item.name} (${item.available} left, requested ${item.requested})`)
+      .join(', ')
+  );
+
+  const syncEditLineItems = (nextLineItems) => {
+    const normalizedItems = nextLineItems.map((item) => ({
+      ...item,
+      quantity: Math.max(1, Number(item.quantity) || 1),
+      price: Number(item.price) || 0,
+      lineTotal: (Number(item.price) || 0) * Math.max(1, Number(item.quantity) || 1),
+    }));
+    const stockCheck = validateStockAvailability(normalizedItems);
+
+    if (!stockCheck.isAvailable) {
+      setEditError(`Not enough stock for: ${formatStockShortageSummary(stockCheck.shortages)}.`);
+      return false;
+    }
+
+    setEditError('');
+    setEditDraft((current) => (current ? { ...current, lineItems: normalizedItems } : current));
+    return true;
+  };
+
+  const startEditOrder = (order) => {
+    setOpenCancelOrderId('');
+    setEditSearchTerm('');
+    setEditError('');
+    setPageError('');
+    setOpenEditOrderId(order.id);
+    setEditDraft(buildEditDraft(order));
+  };
+
+  const stopEditOrder = () => {
+    setOpenEditOrderId('');
+    setEditDraft(null);
+    setEditSearchTerm('');
+    setEditError('');
+  };
+
+  const addProductToEditDraft = (product) => {
+    if (!editDraft) {
+      return;
+    }
+
+    const existing = editDraft.lineItems.find((item) => String(item.productId) === String(product.id));
+    const nextLineItems = existing
+      ? editDraft.lineItems.map((item) => {
+          if (String(item.productId) !== String(product.id)) {
+            return item;
+          }
+
+          const nextQuantity = Number(item.quantity) + 1;
+          return {
+            ...item,
+            quantity: nextQuantity,
+            lineTotal: (Number(item.price) || 0) * nextQuantity,
+          };
+        })
+      : [
+          ...editDraft.lineItems,
+          {
+            id: product.id,
+            productId: product.id,
+            name: product.name,
+            category: product.category || 'Uncategorized',
+            quantity: 1,
+            price: Number(product.price) || 0,
+            lineTotal: Number(product.price) || 0,
+          },
+        ];
+
+    syncEditLineItems(nextLineItems);
+  };
+
+  const updateEditQuantity = (productId, delta) => {
+    if (!editDraft) {
+      return;
+    }
+
+    const nextLineItems = editDraft.lineItems
+      .map((item) => {
+        if (String(item.productId) !== String(productId)) {
+          return item;
+        }
+
+        const nextQuantity = Number(item.quantity) + delta;
+        if (nextQuantity <= 0) {
+          return null;
+        }
+
+        return {
+          ...item,
+          quantity: nextQuantity,
+          lineTotal: (Number(item.price) || 0) * nextQuantity,
+        };
+      })
+      .filter(Boolean);
+
+    syncEditLineItems(nextLineItems);
+  };
+
+  const removeEditItem = (productId) => {
+    if (!editDraft) {
+      return;
+    }
+
+    syncEditLineItems(editDraft.lineItems.filter((item) => String(item.productId) !== String(productId)));
+  };
+
+  const handleSaveEditOrder = async () => {
+    if (!selectedOrder || !editDraft) {
+      return;
+    }
+
+    const normalizedItems = editDraft.lineItems.map((item) => ({
+      ...item,
+      quantity: Math.max(1, Number(item.quantity) || 1),
+      price: Number(item.price) || 0,
+      lineTotal: (Number(item.price) || 0) * Math.max(1, Number(item.quantity) || 1),
+    }));
+
+    if (normalizedItems.length === 0) {
+      setEditError('Add at least one item before saving this order.');
+      return;
+    }
+
+    const stockCheck = validateStockAvailability(normalizedItems);
+    if (!stockCheck.isAvailable) {
+      setEditError(`Not enough stock for: ${formatStockShortageSummary(stockCheck.shortages)}.`);
+      return;
+    }
+
+    setLoadingAction({ type: 'edit', orderId: selectedOrder.id });
+    setPageError('');
+
+    try {
+      const updated = await updateOrderItems(selectedOrder.id, {
+        customer: editDraft.customerName,
+        phoneNumber: editDraft.phoneNumber || selectedOrder.phoneNumber || '',
+        address: editDraft.address || selectedOrder.address || '',
+        deliveryMethod: editDraft.deliveryMethod || selectedOrder.deliveryMethod || 'pickup',
+        paymentMethod: editDraft.paymentMethod || selectedOrder.paymentMethod || 'cash',
+        deliveryDistanceKm: editDraft.deliveryDistanceKm,
+        lineItems: normalizedItems,
+      });
+
+      setPageNotice(`Order ${selectedOrder.displayId || selectedOrder.orderCode || selectedOrder.id} was updated.`);
+      if (updated?.status === 'cancelled') {
+        setPageNotice(`Order ${selectedOrder.displayId || selectedOrder.orderCode || selectedOrder.id} was updated, but it was also cancelled because of a delivery restriction.`);
+      }
+      stopEditOrder();
+    } catch (error) {
+      setEditError(error.message || 'Unable to update this order right now.');
+      setPageError(error.message || 'Unable to update this order right now.');
+    } finally {
+      setLoadingAction(null);
+    }
+  };
 
   const updateStatus = async (order, nextStatus) => {
     setLoadingAction({ type: 'status', orderId: order.id, status: nextStatus });
@@ -291,6 +533,154 @@ const AdminOrders = () => {
           >
             {isLoading ? <Loader2 size={16} className="spin" /> : <Undo2 size={16} />}
             {isLoading ? 'Cancelling...' : 'Confirm Cancellation'}
+          </button>
+        </div>
+      </div>
+    );
+  };
+
+  const renderEditPanel = (order, isOpen) => {
+    if (!canEditSelectedOrder || !isOpen || !editDraft) {
+      return null;
+    }
+
+    const draftTotal = editDraft.lineItems.reduce((sum, item) => sum + (Number(item.price) || 0) * (Number(item.quantity) || 0), 0);
+    const draftItemCount = editDraft.lineItems.reduce((sum, item) => sum + (Number(item.quantity) || 0), 0);
+
+    return (
+      <div className="admin-order-edit-panel">
+        <div className="admin-order-edit-panel-header">
+          <div>
+            <p className="admin-orders-kicker">Edit order</p>
+            <h3>Walk-in pickup order</h3>
+          </div>
+          <button
+            type="button"
+            className="admin-order-action-btn admin-order-action-btn--ghost"
+            onClick={stopEditOrder}
+          >
+            Hide form
+          </button>
+        </div>
+
+        <p className="admin-order-edit-copy">
+          This order was created as a walk-in pickup order, so staff can update the item list and totals before fulfillment.
+        </p>
+
+        <div className="admin-order-edit-summary">
+          <div>
+            <span>Items</span>
+            <strong>{draftItemCount}</strong>
+          </div>
+          <div>
+            <span>Current total</span>
+            <strong>{formatCurrency(draftTotal)}</strong>
+          </div>
+        </div>
+
+        <div className="admin-order-edit-field">
+          <label htmlFor={`edit-customer-${order.id}`}>Customer name</label>
+          <input
+            id={`edit-customer-${order.id}`}
+            className="admin-order-edit-input"
+            type="text"
+            value={editDraft.customerName || ''}
+            onChange={(event) => setEditDraft((current) => (
+              current
+                ? { ...current, customerName: event.target.value }
+                : current
+            ))}
+            placeholder="Customer name"
+          />
+        </div>
+
+        <div className="admin-order-edit-section">
+          <div className="admin-order-detail-block-header">
+            <h3>Current items</h3>
+          </div>
+
+          {editDraft.lineItems.length === 0 ? (
+            <div className="admin-order-edit-empty">
+              No items yet. Add products below to rebuild the order.
+            </div>
+          ) : (
+            <div className="admin-order-edit-items">
+              {editDraft.lineItems.map((item) => (
+                <div key={`${item.productId}-${item.name}`} className="admin-order-edit-item">
+                  <div>
+                    <strong>{item.name}</strong>
+                    <p>{item.quantity} x {formatCurrency(item.price)}</p>
+                  </div>
+
+                  <div className="admin-order-edit-item-actions">
+                    <button type="button" onClick={() => updateEditQuantity(item.productId, -1)}><Minus size={14} /></button>
+                    <span>{item.quantity}</span>
+                    <button type="button" onClick={() => updateEditQuantity(item.productId, 1)}><Plus size={14} /></button>
+                    <button type="button" className="danger" onClick={() => removeEditItem(item.productId)}>
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="admin-order-edit-section">
+          <div className="admin-order-detail-block-header">
+            <h3>Add more items</h3>
+          </div>
+
+          <div className="admin-order-edit-search">
+            <Search size={16} />
+            <input
+              type="text"
+              placeholder="Search products to add"
+              value={editSearchTerm}
+              onChange={(event) => setEditSearchTerm(event.target.value)}
+            />
+          </div>
+
+          <div className="admin-order-edit-grid">
+            {editableProducts.length === 0 ? (
+              <div className="admin-order-edit-empty">
+                No products match your search.
+              </div>
+            ) : (
+              editableProducts.map((product) => (
+                <button
+                  key={product.id}
+                  type="button"
+                  className="admin-order-edit-product"
+                  onClick={() => addProductToEditDraft(product)}
+                >
+                  <span>{product.name}</span>
+                  <strong>{formatCurrency(product.price)}</strong>
+                </button>
+              ))
+            )}
+          </div>
+        </div>
+
+        {editError && <div className="admin-order-edit-error">{editError}</div>}
+
+        <div className="admin-order-edit-actions">
+          <button
+            type="button"
+            className="admin-order-action-btn admin-order-action-btn--primary"
+            onClick={() => void handleSaveEditOrder()}
+            disabled={loadingEdit}
+          >
+            {loadingEdit ? <Loader2 size={16} className="spin" /> : <PencilLine size={16} />}
+            {loadingEdit ? 'Saving...' : 'Save Changes'}
+          </button>
+          <button
+            type="button"
+            className="admin-order-action-btn admin-order-action-btn--ghost"
+            onClick={stopEditOrder}
+            disabled={loadingEdit}
+          >
+            Cancel Edit
           </button>
         </div>
       </div>
@@ -478,6 +868,10 @@ const AdminOrders = () => {
                   <strong>{String(selectedOrder.paymentMethod || 'cash').toLowerCase() === 'online' ? 'Online' : 'Cash'}</strong>
                 </div>
                 <div>
+                  <span>Source</span>
+                  <strong>{selectedOrderIsWalkIn ? 'Walk-in' : 'Online'}</strong>
+                </div>
+                <div>
                   <span>Distance</span>
                   <strong>{selectedOrder.deliveryDistanceKm != null ? `${Number(selectedOrder.deliveryDistanceKm).toFixed(1)} km` : 'N/A'}</strong>
                 </div>
@@ -489,22 +883,26 @@ const AdminOrders = () => {
 
               {renderStatusRibbon(selectedOrder)}
 
-              <div className="admin-order-detail-block">
-                <div className="admin-order-detail-block-header">
-                  <h3>Items</h3>
-                </div>
-                <div className="admin-order-items">
-                  {(selectedOrder.lineItems || []).map((item) => (
-                    <div key={`${selectedOrder.id}-${item.id || item.productId || item.name}`} className="admin-order-item-row">
-                      <div>
-                        <strong>{item.name}</strong>
-                        <p>{item.quantity} x {formatCurrency(item.price)}</p>
+              {isEditOpen ? (
+                renderEditPanel(selectedOrder, isEditOpen)
+              ) : (
+                <div className="admin-order-detail-block">
+                  <div className="admin-order-detail-block-header">
+                    <h3>Items</h3>
+                  </div>
+                  <div className="admin-order-items">
+                    {(selectedOrder.lineItems || []).map((item) => (
+                      <div key={`${selectedOrder.id}-${item.id || item.productId || item.name}`} className="admin-order-item-row">
+                        <div>
+                          <strong>{item.name}</strong>
+                          <p>{item.quantity} x {formatCurrency(item.price)}</p>
+                        </div>
+                        <span>{formatCurrency(item.lineTotal || ((Number(item.price) || 0) * (Number(item.quantity) || 0)))}</span>
                       </div>
-                      <span>{formatCurrency(item.lineTotal || ((Number(item.price) || 0) * (Number(item.quantity) || 0)))}</span>
-                    </div>
-                  ))}
+                    ))}
+                  </div>
                 </div>
-              </div>
+              )}
 
               {selectedOrder.reviewStatus === 'under_review' && selectedOrder.latestIssueReport && (
                 <div className="admin-order-detail-block admin-order-detail-block--review">
@@ -568,10 +966,22 @@ const AdminOrders = () => {
                     type="button"
                     className="admin-order-action-btn admin-order-action-btn--primary"
                     onClick={() => void updateStatus(selectedOrder, nextAction.nextStatus)}
-                    disabled={loadingStatus || loadingCancel}
+                    disabled={loadingStatus || loadingCancel || loadingEdit}
                   >
                     {loadingStatus ? <Loader2 size={16} className="spin" /> : <nextAction.icon size={16} />}
                     {loadingStatus ? 'Updating...' : nextAction.label}
+                  </button>
+                )}
+
+                {canEditSelectedOrder && !isEditOpen && (
+                  <button
+                    type="button"
+                    className={`admin-order-action-btn admin-order-action-btn--secondary ${isEditOpen ? 'is-active' : ''}`}
+                    onClick={() => startEditOrder(selectedOrder)}
+                    disabled={loadingStatus || loadingCancel || loadingEdit}
+                  >
+                    <PencilLine size={16} />
+                    Edit Order
                   </button>
                 )}
 
@@ -580,13 +990,25 @@ const AdminOrders = () => {
                     type="button"
                     className={`admin-order-action-btn admin-order-action-btn--danger ${isCancelOpen ? 'is-active' : ''}`}
                     onClick={() => setOpenCancelOrderId((current) => (current === selectedOrder.id ? '' : selectedOrder.id))}
-                    disabled={loadingStatus || loadingCancel}
+                    disabled={loadingStatus || loadingCancel || loadingEdit}
                   >
                     {loadingCancel ? <Loader2 size={16} className="spin" /> : <Undo2 size={16} />}
                     {isCancelOpen ? 'Hide Cancel Form' : 'Cancel Order'}
                   </button>
                 )}
               </div>
+
+              {!canEditSelectedOrder && selectedOrderIsWalkIn && (
+                <p className="admin-order-action-note">
+                  Editing is only available while a walk-in order is still pending or confirmed.
+                </p>
+              )}
+
+              {!selectedOrderIsWalkIn && canStaffCancelOrder(selectedOrder) && (
+                <p className="admin-order-action-note">
+                  This is an online order. Staff can cancel it, but it cannot be edited.
+                </p>
+              )}
 
               {renderCancelPanel(selectedOrder, isCancelOpen)}
             </>
