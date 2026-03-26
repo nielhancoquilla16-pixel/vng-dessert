@@ -1095,7 +1095,7 @@ router.patch('/reports/:reportId', requireAuth, requireRole('admin', 'staff'), a
   }
 });
 
-router.patch('/:id/status', requireAuth, requireRole('admin', 'staff'), async (req, res, next) => {
+router.patch('/:id/status', requireAuth, async (req, res, next) => {
   try {
     const nextStatus = normalizeOrderStatus(req.body?.order_status || '');
     const reason = String(req.body?.reason || req.body?.cancellationReason || '').trim();
@@ -1113,6 +1113,38 @@ router.patch('/:id/status', requireAuth, requireRole('admin', 'staff'), async (r
     }
 
     const supabase = getSupabaseAdmin();
+    const currentOrder = await fetchOrderById(supabase, req.params.id);
+    const currentStatus = normalizeOrderStatus(currentOrder.order_status);
+    const currentReviewStatus = normalizeReviewStatus(currentOrder.review_status);
+    const role = String(req.profile?.role || '').toLowerCase();
+    const isPrivileged = ['admin', 'staff'].includes(role);
+    const belongsToCustomer = currentOrder.user_id === req.authUser.id;
+
+    if (nextStatus === 'cancelled') {
+      if (!isPrivileged) {
+        if (!belongsToCustomer) {
+          return res.status(404).json({ error: 'Order not found.' });
+        }
+
+        if (currentStatus !== 'pending') {
+          return res.status(400).json({ error: 'Customers can only cancel orders while they are pending.' });
+        }
+
+        if (currentReviewStatus === 'under_review') {
+          return res.status(409).json({ error: 'This order is under review and cannot be cancelled right now.' });
+        }
+      } else if (['delivered', 'completed', 'refunded', 'cancelled'].includes(currentStatus)) {
+        return res.status(400).json({ error: 'This order can no longer be cancelled.' });
+      }
+
+      const updatedOrder = await applyOrderStatusChange(supabase, req.params.id, 'cancelled', { reason });
+      return res.json(mapOrder(updatedOrder));
+    }
+
+    if (!isPrivileged) {
+      return res.status(403).json({ error: 'Only admin and staff can update order status.' });
+    }
+
     const updatedOrder = await applyOrderStatusChange(supabase, req.params.id, nextStatus, { reason });
     res.json(mapOrder(updatedOrder));
   } catch (error) {
