@@ -16,7 +16,6 @@ import {
   RotateCcw,
   ShieldAlert,
   ShieldCheck,
-  Sparkles,
   Upload,
   XCircle,
 } from 'lucide-react';
@@ -812,24 +811,6 @@ const Orders = () => {
 
   return (
     <div className="orders-workflow-page">
-      <section className="orders-hero-panel">
-        <div className="orders-hero-copy">
-          <p className="orders-eyebrow">Customer Workflow</p>
-          <h1>Track, confirm, and report with proof.</h1>
-          <p>
-            Follow every order from pending to completed, confirm receipt with image proof, and submit issue reports with photographic evidence when something goes wrong.
-          </p>
-        </div>
-
-        <div className="orders-hero-chip">
-          <Sparkles size={18} />
-          <div>
-            <strong>{activeOrders.length} active</strong>
-            <span>{historyOrders.length} history</span>
-          </div>
-        </div>
-      </section>
-
       {(pageNotice || pageError) && (
         <section className="orders-alert-stack" aria-live="polite">
           {pageNotice && (

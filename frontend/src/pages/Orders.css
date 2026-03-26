@@ -666,39 +666,6 @@
   padding: 1.25rem;
 }
 
-.orders-hero-panel {
-  position: relative;
-  overflow: hidden;
-  display: flex;
-  justify-content: space-between;
-  gap: 1rem;
-  align-items: flex-end;
-  padding: 2rem;
-  border-radius: 2rem;
-  border: 1px solid rgba(249, 115, 22, 0.12);
-  background:
-    radial-gradient(circle at top right, rgba(253, 186, 116, 0.25), transparent 36%),
-    linear-gradient(135deg, #fff7ed 0%, #ffffff 60%, #f8fafc 100%);
-  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.08);
-}
-
-.orders-hero-panel::after {
-  content: '';
-  position: absolute;
-  inset: auto -8rem -8rem auto;
-  width: 18rem;
-  height: 18rem;
-  border-radius: 999px;
-  background: radial-gradient(circle, rgba(249, 115, 22, 0.22), transparent 70%);
-  pointer-events: none;
-}
-
-.orders-hero-copy {
-  max-width: 760px;
-  position: relative;
-  z-index: 1;
-}
-
 .orders-eyebrow {
   display: inline-flex;
   align-items: center;
@@ -709,49 +676,6 @@
   font-size: 0.75rem;
   font-weight: 800;
   color: #ea580c;
-}
-
-.orders-hero-copy h1 {
-  margin: 0;
-  font-size: clamp(2.2rem, 4vw, 3.6rem);
-  line-height: 1.02;
-  color: #0f172a;
-}
-
-.orders-hero-copy p {
-  margin: 0.85rem 0 0;
-  max-width: 56rem;
-  color: #475569;
-  line-height: 1.7;
-  font-size: 1.03rem;
-}
-
-.orders-hero-chip {
-  position: relative;
-  z-index: 1;
-  display: inline-flex;
-  align-items: center;
-  gap: 0.85rem;
-  padding: 1rem 1.15rem;
-  border-radius: 1.25rem;
-  background: rgba(255, 255, 255, 0.92);
-  border: 1px solid #fed7aa;
-  box-shadow: 0 16px 30px rgba(15, 23, 42, 0.06);
-  color: #c2410c;
-}
-
-.orders-hero-chip strong {
-  display: block;
-  font-size: 1.3rem;
-  color: #0f172a;
-}
-
-.orders-hero-chip span {
-  display: block;
-  font-size: 0.75rem;
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
-  color: #fb923c;
 }
 
 .orders-alert-stack {
@@ -1534,7 +1458,6 @@
 }
 
 @media (max-width: 1024px) {
-  .orders-hero-panel,
   .customer-order-header {
     align-items: flex-start;
   }
@@ -1548,12 +1471,6 @@
 @media (max-width: 768px) {
   .orders-workflow-page {
     padding: 1rem;
-  }
-
-  .orders-hero-panel {
-    padding: 1.5rem;
-    flex-direction: column;
-    align-items: stretch;
   }
 
   .orders-summary-grid,
