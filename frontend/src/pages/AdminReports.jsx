@@ -5,6 +5,7 @@ import {
   ShieldAlert,
   RotateCcw,
   ShoppingBag,
+  Zap,
   XCircle,
 } from 'lucide-react';
 import {
