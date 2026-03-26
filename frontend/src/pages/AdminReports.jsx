@@ -1,4 +1,15 @@
-import { DollarSign, ShoppingBag, TrendingUp, Trophy, Sparkles, Brain, Zap } from 'lucide-react';
+import React, { useState } from 'react';
+import {
+  BadgeCheck,
+  Brain,
+  DollarSign,
+  ShieldAlert,
+  RotateCcw,
+  Sparkles,
+  ShoppingBag,
+  Zap,
+  XCircle,
+} from 'lucide-react';
 import {
   ResponsiveContainer,
   LineChart,
@@ -20,24 +31,32 @@ import {
   formatCurrency,
   getOrderTotalAmount,
   getStartOfSundayWeek,
+  getOrderRevenueEvents,
 } from '../utils/orderAnalytics';
+import { normalizeReviewStatus } from '../utils/orderWorkflow';
 import './AdminReports.css';
 
 const AdminReports = () => {
-  const { orders } = useOrders();
+  const { orders, reviewOrderIssue } = useOrders();
   const { products } = useProducts();
   const { salesInsights, isAnalyzing } = useAI();
+  const [pageNotice, setPageNotice] = useState('');
+  const [pageError, setPageError] = useState('');
+  const [loadingReportId, setLoadingReportId] = useState('');
+  const [reviewDrafts, setReviewDrafts] = useState({});
 
   const storeProducts = products.filter((product) => !product.type || product.type === 'product');
   const productsByName = new Map(
     storeProducts.map((product) => [product.name.toLowerCase(), product])
   );
 
-  const activeOrders = orders.filter((order) => order.status !== 'cancelled');
-  const totalRevenue = activeOrders.reduce((sum, order) => sum + getOrderTotalAmount(order), 0);
-  const deliveredCount = orders.filter((order) => order.status === 'delivered').length;
-  const activeCount = activeOrders.length;
-  const avgOrderValue = activeCount > 0 ? totalRevenue / activeCount : 0;
+  const totalRevenue = orders.reduce((sum, order) => (
+    sum + getOrderRevenueEvents(order).reduce((eventTotal, event) => eventTotal + event.amount, 0)
+  ), 0);
+  const completedCount = orders.filter((order) => order.status === 'completed').length;
+  const refundedCount = orders.filter((order) => order.status === 'refunded').length;
+  const underReviewCount = orders.filter((order) => normalizeReviewStatus(order.reviewStatus) === 'under_review').length;
+  const activeCount = orders.filter((order) => !['completed', 'cancelled', 'refunded'].includes(order.status)).length;
 
   const weeklySalesData = buildWeeklySalesData(orders);
   const currentWeekRevenue = weeklySalesData.reduce((sum, day) => sum + day.sales, 0);
@@ -65,6 +84,59 @@ const AdminReports = () => {
     percent: Math.round((product.sales / topSalesCount) * 100),
   }));
   const topSeller = topProductsList.length > 0 ? topProductsList[0].name : (activeCount > 0 ? 'No item data' : 'None');
+
+  const issueReports = orders
+    .flatMap((order) => (order.issueReports || []).map((report) => ({
+      ...report,
+      orderId: order.displayId || order.orderCode || order.id,
+      orderCustomer: order.customer || 'Customer',
+      orderStatus: order.status,
+      orderTotal: order.total,
+    })))
+    .sort((left, right) => new Date(right.detectionDate || right.createdAt || 0).getTime() - new Date(left.detectionDate || left.createdAt || 0).getTime());
+
+  const pendingReports = issueReports.filter((report) => normalizeReviewStatus(report.reviewStatus) === 'under_review');
+
+  const setDraft = (reportId, patch) => {
+    setReviewDrafts((current) => ({
+      ...current,
+      [reportId]: {
+        ...(current[reportId] || { decision: 'approve', reason: '' }),
+        ...patch,
+      },
+    }));
+  };
+
+  const handleReviewDecision = async (reportId, decision) => {
+    const draft = reviewDrafts[reportId] || { decision: 'approve', reason: '' };
+    const reason = String(draft.reason || '').trim();
+
+    if (String(decision).toLowerCase().startsWith('reject') && !reason) {
+      setReviewDrafts((current) => ({
+        ...current,
+        [reportId]: {
+          ...(current[reportId] || { decision: 'reject', reason: '' }),
+          error: 'A rejection reason is required.',
+        },
+      }));
+      return;
+    }
+
+    setLoadingReportId(reportId);
+    setPageError('');
+
+    try {
+      await reviewOrderIssue(reportId, decision, reason);
+      setPageNotice(decision.toLowerCase().startsWith('approve')
+        ? 'Refund approved and order marked as refunded.'
+        : 'Issue report rejected and the customer was notified.');
+      setReviewDrafts((current) => ({ ...current, [reportId]: undefined }));
+    } catch (error) {
+      setPageError(error.message || 'Unable to process that report right now.');
+    } finally {
+      setLoadingReportId('');
+    }
+  };
 
   const salesTooltip = ({ active, payload, label }) => {
     if (!active || !payload || payload.length === 0) {
@@ -97,6 +169,23 @@ const AdminReports = () => {
           <p style={{ color: '#64748b' }}>Sales overview and performance metrics</p>
         </div>
       </div>
+
+      {(pageNotice || pageError) && (
+        <div className="admin-report-alert-stack" aria-live="polite">
+          {pageNotice && (
+            <div className="admin-report-alert admin-report-alert--success">
+              <BadgeCheck size={18} />
+              <span>{pageNotice}</span>
+            </div>
+          )}
+          {pageError && (
+            <div className="admin-report-alert admin-report-alert--error">
+              <XCircle size={18} />
+              <span>{pageError}</span>
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="ai-insights-container">
         <div className="ai-header">
@@ -142,16 +231,16 @@ const AdminReports = () => {
           <div className="report-value">{formatCurrency(totalRevenue)}</div>
         </div>
         <div className="report-card">
-          <div className="report-label"><ShoppingBag size={14} style={{ marginRight: '0.4rem', verticalAlign: 'middle' }} /> Delivered</div>
-          <div className="report-value">{deliveredCount}</div>
+          <div className="report-label"><ShoppingBag size={14} style={{ marginRight: '0.4rem', verticalAlign: 'middle' }} /> Completed</div>
+          <div className="report-value">{completedCount}</div>
         </div>
         <div className="report-card">
-          <div className="report-label"><TrendingUp size={14} style={{ marginRight: '0.4rem', verticalAlign: 'middle' }} /> Avg Order</div>
-          <div className="report-value">{formatCurrency(avgOrderValue)}</div>
+          <div className="report-label"><ShieldAlert size={14} style={{ marginRight: '0.4rem', verticalAlign: 'middle' }} /> Under Review</div>
+          <div className="report-value">{underReviewCount}</div>
         </div>
         <div className="report-card">
-          <div className="report-label"><Trophy size={14} style={{ marginRight: '0.4rem', verticalAlign: 'middle' }} /> Top Seller</div>
-          <div className="report-value" style={{ fontSize: activeCount > 0 ? '1.1rem' : '1.25rem' }}>{topSeller}</div>
+          <div className="report-label"><RotateCcw size={14} style={{ marginRight: '0.4rem', verticalAlign: 'middle' }} /> Refunded</div>
+          <div className="report-value">{refundedCount}</div>
         </div>
       </div>
 
@@ -282,6 +371,98 @@ const AdminReports = () => {
             ))
           )}
         </div>
+      </div>
+
+      <div className="chart-container">
+        <div className="report-section-header">
+          <div>
+            <h3 className="chart-title">Issue Reports Queue</h3>
+            <p className="chart-subtitle">Approve or reject damaged-order and discrepancy reports after reviewing the image proof and description.</p>
+          </div>
+          <div className="report-highlight-chip">
+            {pendingReports.length} under review
+          </div>
+        </div>
+
+        {pendingReports.length === 0 ? (
+          <div className="chart-empty-state">
+            No active issue reports right now. New customer reports will appear here with evidence and review controls.
+          </div>
+        ) : (
+          <div className="issue-report-list">
+            {pendingReports.map((report) => {
+              const draft = reviewDrafts[report.id] || { decision: 'approve', reason: '' };
+              const loading = loadingReportId === report.id;
+
+              return (
+                <article key={report.id} className="issue-report-card">
+                  <div className="issue-report-header">
+                    <div>
+                      <p className="issue-report-kicker">Order {report.orderId}</p>
+                      <h4>{report.customerName || report.orderCustomer || 'Customer'}</h4>
+                      <p className="issue-report-meta">
+                        {report.issueType.replace(/_/g, ' ')} - {report.orderStatus} - {formatCurrency(getOrderTotalAmount({
+                          total: report.orderTotal,
+                        }))}
+                      </p>
+                    </div>
+                    <span className="issue-report-badge">Under Review</span>
+                  </div>
+
+                  <div className="issue-report-grid">
+                    <div className="issue-report-copy">
+                      <span>Description</span>
+                      <p>{report.description}</p>
+                    </div>
+                    <div className="issue-report-copy">
+                      <span>Date of Detection</span>
+                      <p>{new Date(report.detectionDate || report.createdAt || Date.now()).toLocaleString()}</p>
+                    </div>
+                  </div>
+
+                  {report.evidenceImageUrl && (
+                    <div className="issue-report-image-wrap">
+                      <img src={report.evidenceImageUrl} alt="Customer issue proof" className="issue-report-image" />
+                    </div>
+                  )}
+
+                  <div className="issue-report-form">
+                    <label>
+                      Review Reason
+                      <textarea
+                        className="issue-report-textarea"
+                        value={draft.reason || ''}
+                        onChange={(event) => setDraft(report.id, { reason: event.target.value, error: '' })}
+                        placeholder="Add a refund approval note or a rejection reason."
+                      />
+                    </label>
+                    {draft.error && <div className="issue-report-error">{draft.error}</div>}
+                    <div className="issue-report-actions">
+                      <button
+                        type="button"
+                        className="issue-report-action issue-report-action--approve"
+                        onClick={() => void handleReviewDecision(report.id, 'approve')}
+                        disabled={loading}
+                      >
+                        {loading ? <Zap size={16} className="spin" /> : <BadgeCheck size={16} />}
+                        Approve Refund
+                      </button>
+                      <button
+                        type="button"
+                        className="issue-report-action issue-report-action--reject"
+                        onClick={() => void handleReviewDecision(report.id, 'reject')}
+                        disabled={loading}
+                      >
+                        {loading ? <Zap size={16} className="spin" /> : <XCircle size={16} />}
+                        Reject Request
+                      </button>
+                    </div>
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        )}
       </div>
     </div>
   );

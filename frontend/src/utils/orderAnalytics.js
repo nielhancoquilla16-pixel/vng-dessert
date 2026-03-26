@@ -1,3 +1,5 @@
+import { normalizeOrderStatus } from './orderWorkflow';
+
 const WEEKLY_DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
 export const parseCurrencyAmount = (value) => {
@@ -14,7 +16,16 @@ export const formatCurrency = (amount) => `PHP ${Number(amount || 0).toLocaleStr
 })}`;
 
 export const getOrderTimestamp = (order) => {
-  const source = order?.createdAt || order?.date;
+  const status = normalizeOrderStatus(order?.status || order?.orderStatus);
+  const timestamps = order?.statusTimestamps || order?.status_timestamps || {};
+  const source = (
+    status === 'completed'
+      ? timestamps.completed || order?.completedAt || order?.completed_at || order?.createdAt || order?.date
+      : status === 'refunded'
+        ? timestamps.refunded || order?.refundedAt || order?.refunded_at || order?.updatedAt || order?.updated_at || order?.createdAt || order?.date
+        : order?.createdAt || order?.date
+  );
+
   const parsed = source ? new Date(source).getTime() : NaN;
   return Number.isFinite(parsed) ? parsed : 0;
 };
@@ -22,6 +33,50 @@ export const getOrderTimestamp = (order) => {
 export const getOrderTotalAmount = (order) => (
   Number(order?.totalAmount) || parseCurrencyAmount(order?.total)
 );
+
+const getOrderStatusTimestamps = (order = {}) => (
+  order?.statusTimestamps || order?.status_timestamps || {}
+);
+
+export const getOrderRevenueEvents = (order = {}) => {
+  const status = normalizeOrderStatus(order?.status || order?.orderStatus);
+  const total = getOrderTotalAmount(order);
+  const timestamps = getOrderStatusTimestamps(order);
+  const completedTimestamp = timestamps.completed || order?.completedAt || order?.completed_at || order?.createdAt || order?.date;
+  const refundedTimestamp = timestamps.refunded || order?.refundedAt || order?.refunded_at || order?.updatedAt || order?.updated_at || completedTimestamp;
+
+  if (!total) {
+    return [];
+  }
+
+  if (status === 'completed') {
+    return [{
+      kind: 'completed',
+      timestamp: completedTimestamp,
+      amount: total,
+      order,
+    }];
+  }
+
+  if (status === 'refunded') {
+    return [
+      {
+        kind: 'completed',
+        timestamp: completedTimestamp,
+        amount: total,
+        order,
+      },
+      {
+        kind: 'refunded',
+        timestamp: refundedTimestamp,
+        amount: -total,
+        order,
+      },
+    ];
+  }
+
+  return [];
+};
 
 export const getStartOfSundayWeek = (value = new Date()) => {
   const date = new Date(value);
@@ -113,19 +168,22 @@ export const buildWeeklySalesData = (orders, options = {}) => {
     orders: 0,
   }));
 
-  (orders || [])
-    .filter((order) => order.status !== 'cancelled')
-    .forEach((order) => {
-      const orderTimestamp = getOrderTimestamp(order);
+  (orders || []).forEach((order) => {
+    getOrderRevenueEvents(order).forEach((event) => {
+      const orderTimestamp = new Date(event.timestamp || '').getTime();
 
-      if (orderTimestamp < resetTimestamp || orderTimestamp >= nextWeekStartTimestamp) {
+      if (!Number.isFinite(orderTimestamp) || orderTimestamp < resetTimestamp || orderTimestamp >= nextWeekStartTimestamp) {
         return;
       }
 
       const dayIndex = new Date(orderTimestamp).getDay();
-      data[dayIndex].sales += getOrderTotalAmount(order);
-      data[dayIndex].orders += 1;
+      data[dayIndex].sales += event.amount;
+
+      if (event.kind === 'completed' && event.amount > 0) {
+        data[dayIndex].orders += 1;
+      }
     });
+  });
 
   return data;
 };
@@ -133,29 +191,37 @@ export const buildWeeklySalesData = (orders, options = {}) => {
 export const buildWeeklyHistory = (orders, options = {}) => {
   const groups = new Map();
 
-  (orders || [])
-    .filter((order) => order.status !== 'cancelled')
-    .forEach((order) => {
-      const orderTimestamp = getOrderTimestamp(order);
-      if (!orderTimestamp) {
+  (orders || []).forEach((order) => {
+    getOrderRevenueEvents(order).forEach((event) => {
+      const orderTimestamp = new Date(event.timestamp || '').getTime();
+      if (!Number.isFinite(orderTimestamp)) {
         return;
       }
 
       const weekStart = getStartOfSundayWeek(orderTimestamp);
       const key = weekStart.toISOString();
-      const amount = getOrderTotalAmount(order);
       const existing = groups.get(key) || {
         key,
         weekStart,
         weekEnd: new Date(weekStart.getFullYear(), weekStart.getMonth(), weekStart.getDate() + 6),
         revenue: 0,
         orders: 0,
+        refunds: 0,
       };
 
-      existing.revenue += amount;
-      existing.orders += 1;
+      existing.revenue += event.amount;
+
+      if (event.kind === 'completed' && event.amount > 0) {
+        existing.orders += 1;
+      }
+
+      if (event.kind === 'refunded') {
+        existing.refunds += 1;
+      }
+
       groups.set(key, existing);
     });
+  });
 
   let history = Array.from(groups.values())
     .sort((a, b) => a.weekStart.getTime() - b.weekStart.getTime())
@@ -175,19 +241,25 @@ export const buildWeeklyHistory = (orders, options = {}) => {
 export const buildTopProducts = (orders, productsByName = new Map()) => {
   const productSalesMap = new Map();
 
-  (orders || [])
-    .filter((order) => order.status !== 'cancelled')
-    .forEach((order) => {
-      getOrderLineItems(order, productsByName).forEach((item) => {
-        if (!item.name) {
-          return;
-        }
+  (orders || []).forEach((order) => {
+    const status = normalizeOrderStatus(order?.status || order?.orderStatus);
+    const multiplier = status === 'refunded' ? -1 : (status === 'completed' ? 1 : 0);
 
-        productSalesMap.set(item.name, (productSalesMap.get(item.name) || 0) + (Number(item.quantity) || 0));
-      });
+    if (multiplier === 0) {
+      return;
+    }
+
+    getOrderLineItems(order, productsByName).forEach((item) => {
+      if (!item.name) {
+        return;
+      }
+
+      productSalesMap.set(item.name, (productSalesMap.get(item.name) || 0) + ((Number(item.quantity) || 0) * multiplier));
     });
+  });
 
   return Array.from(productSalesMap.entries())
+    .filter(([, sales]) => sales !== 0)
     .map(([name, sales]) => ({ name, sales }))
     .sort((a, b) => b.sales - a.sales);
 };

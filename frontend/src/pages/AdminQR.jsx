@@ -11,21 +11,10 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { apiRequest } from '../lib/api';
+import { getOrderStatusLabel, getReviewStatusLabel } from '../utils/orderWorkflow';
 import './AdminQR.css';
 
-const STATUS_LABELS = {
-  pending: 'Pending',
-  confirmed: 'Confirmed',
-  preparing: 'Preparing',
-  ready: 'Ready for Pickup',
-  processing: 'Processing',
-  completed: 'Completed',
-  received: 'Received',
-  delivered: 'Delivered',
-  cancelled: 'Cancelled',
-};
-
-const getStatusLabel = (status = '') => STATUS_LABELS[String(status || '').toLowerCase()] || String(status || 'pending');
+const getStatusLabel = (status = '') => getOrderStatusLabel(status, 'admin');
 
 const IDLE_SCAN_MESSAGE = 'Tap Start Scan to open the camera and verify pickup orders.';
 
@@ -383,6 +372,10 @@ const AdminQR = () => {
                 <div>
                   <span>Status</span>
                   <strong className={`status-badge status-${activeOrder.status}`}>{getStatusLabel(activeOrder.status)}</strong>
+                </div>
+                <div>
+                  <span>Review</span>
+                  <strong>{getReviewStatusLabel(activeOrder.reviewStatus)}</strong>
                 </div>
               </div>
 

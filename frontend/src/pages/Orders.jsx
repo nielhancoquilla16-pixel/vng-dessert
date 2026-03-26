@@ -1,419 +1,845 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Bell, CheckCircle2, Package, QrCode, Upload, X } from 'lucide-react';
+import React, { useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
+import {
+  AlertTriangle,
+  BadgeCheck,
+  BellRing,
+  Camera,
+  CheckCircle2,
+  CircleAlert,
+  Clock3,
+  History,
+  Loader2,
+  PackageCheck,
+  ReceiptText,
+  Send,
+  ShieldAlert,
+  ShieldCheck,
+  Sparkles,
+  Upload,
+  XCircle,
+} from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useOrders } from '../context/OrderContext';
+import {
+  buildOrderWorkflowProgress,
+  canCustomerCancelOrder,
+  canCustomerConfirmReceipt,
+  canCustomerReportIssue,
+  getOrderStatusLabel,
+  getReviewStatusLabel,
+  isHistoryOrderStatus,
+  normalizeReviewStatus,
+} from '../utils/orderWorkflow';
 import './Orders.css';
 
-const MAX_RECEIPT_IMAGE_BYTES = 5 * 1024 * 1024;
-const ORDER_STATUS_LABELS = {
-  pending: 'Pending',
-  confirmed: 'Confirmed',
-  preparing: 'Preparing',
-  ready: 'Ready for Pickup',
-  processing: 'Processing',
-  completed: 'Completed',
-  received: 'Received',
-  delivered: 'Delivered',
-  cancelled: 'Cancelled',
+const ORDER_PRIORITY = {
+  pending: 0,
+  confirmed: 1,
+  preparing: 2,
+  ready: 3,
+  'out-for-delivery': 4,
+  delivered: 5,
 };
 
-const formatDateLabel = (value = '') => {
-  if (!value) {
-    return 'Recently';
-  }
+const formatCurrency = (value) => `PHP ${Number(value || 0).toFixed(2)}`;
 
-  try {
-    return new Date(value).toLocaleString(undefined, {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-      hour: 'numeric',
-      minute: '2-digit',
-    });
-  } catch {
-    return value;
-  }
+const formatDateTime = (value) => {
+  if (!value) return 'Not available';
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return 'Not available';
+  return parsed.toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
 };
 
-const getQrImageUrl = (value = '') => (
-  `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(value)}`
-);
-
-const readImageFileAsDataUrl = (file) => new Promise((resolve, reject) => {
+const readFileAsDataUrl = (file) => new Promise((resolve, reject) => {
   const reader = new FileReader();
+
   reader.onload = () => resolve(String(reader.result || ''));
   reader.onerror = () => reject(new Error('Unable to read the selected image.'));
   reader.readAsDataURL(file);
 });
 
-const validateReceiptImageFile = (file) => {
-  if (!file) {
-    return;
-  }
+const getNotificationAudience = (notification) => String(notification?.audience || 'customer').toLowerCase();
 
-  if (!['image/png', 'image/jpeg'].includes(file.type)) {
-    throw new Error('Only PNG and JPG/JPEG files are supported.');
-  }
-
-  if (file.size > MAX_RECEIPT_IMAGE_BYTES) {
-    throw new Error('Receipt images must be 5MB or smaller.');
-  }
-};
-
-const getStatusLabel = (status = '') => ORDER_STATUS_LABELS[String(status || '').toLowerCase()] || String(status || 'pending');
-
-const isPickupCashOrder = (order = {}) => (
-  String(order.deliveryMethod || '').toLowerCase() === 'pickup'
-  && String(order.paymentMethod || '').toLowerCase() === 'cash'
-);
-
-const defaultDraft = () => ({
-  previewUrl: '',
-  fileName: '',
-  error: '',
-  isSubmitting: false,
-});
+const getNotificationType = (notification) => String(notification?.type || 'info').toLowerCase();
 
 const Orders = () => {
   const { loggedInCustomer } = useAuth();
-  const { orders, refreshOrders, markOrderAsReceived, isOrdersLoading } = useOrders();
+  const { orders, isOrdersLoading, confirmOrderReceipt, submitOrderIssue, cancelOrder } = useOrders();
+  const [pageNotice, setPageNotice] = useState('');
+  const [pageError, setPageError] = useState('');
+  const [loadingAction, setLoadingAction] = useState(null);
   const [receiptDrafts, setReceiptDrafts] = useState({});
-  const fileInputRefs = useRef({});
+  const [issueDrafts, setIssueDrafts] = useState({});
 
-  useEffect(() => {
-    if (!loggedInCustomer) {
-      return undefined;
-    }
+  const activeOrders = useMemo(() => (
+    [...orders]
+      .filter((order) => !isHistoryOrderStatus(order.status))
+      .sort((left, right) => {
+        const leftPriority = ORDER_PRIORITY[left.status] ?? 99;
+        const rightPriority = ORDER_PRIORITY[right.status] ?? 99;
 
-    let isActive = true;
-
-    const syncOrders = async () => {
-      try {
-        await refreshOrders();
-      } catch {
-        if (!isActive) {
-          return;
+        if ((left.reviewStatus === 'under_review') !== (right.reviewStatus === 'under_review')) {
+          return left.reviewStatus === 'under_review' ? -1 : 1;
         }
-      }
-    };
 
-    syncOrders();
+        if (leftPriority !== rightPriority) {
+          return leftPriority - rightPriority;
+        }
 
-    const intervalId = window.setInterval(syncOrders, 15000);
-    const handleFocus = () => {
-      syncOrders();
-    };
+        return new Date(right.createdAt || right.date || 0).getTime() - new Date(left.createdAt || left.date || 0).getTime();
+      })
+  ), [orders]);
 
-    window.addEventListener('focus', handleFocus);
+  const historyOrders = useMemo(() => (
+    [...orders]
+      .filter((order) => isHistoryOrderStatus(order.status))
+      .sort((left, right) => new Date(right.updatedAt || right.completedAt || right.cancelledAt || right.refundedAt || right.createdAt || 0).getTime()
+        - new Date(left.updatedAt || left.completedAt || left.cancelledAt || left.refundedAt || left.createdAt || 0).getTime())
+  ), [orders]);
 
-    return () => {
-      isActive = false;
-      window.clearInterval(intervalId);
-      window.removeEventListener('focus', handleFocus);
-    };
-  }, [loggedInCustomer, refreshOrders]);
+  const notifications = useMemo(() => {
+    const feed = orders.flatMap((order) => (
+      (order.notifications || [])
+        .filter((notification) => {
+          const audience = getNotificationAudience(notification);
+          return audience === 'customer' || audience === 'all';
+        })
+        .map((notification) => ({
+          ...notification,
+          orderId: order.displayId || order.orderCode || order.id,
+          orderStatus: order.status,
+        }))
+    ));
 
-  const accountUsername = loggedInCustomer?.username?.toLowerCase?.() || '';
-  const accountFullName = (loggedInCustomer?.fullName || '').trim().toLowerCase();
+    return feed
+      .sort((left, right) => new Date(right.createdAt || 0).getTime() - new Date(left.createdAt || 0).getTime())
+      .slice(0, 6);
+  }, [orders]);
 
-  const myOrders = useMemo(() => (
-    orders.filter((order) => {
-      const savedUsername = (order.customerUsername || '').toLowerCase();
-      const fallbackName = (order.customer || '').toLowerCase();
+  const summaryCards = useMemo(() => ([
+    {
+      label: 'Active Orders',
+      value: activeOrders.length,
+      helper: 'Pending through delivered',
+      icon: PackageCheck,
+    },
+    {
+      label: 'History',
+      value: historyOrders.length,
+      helper: 'Completed, cancelled, refunded',
+      icon: History,
+    },
+    {
+      label: 'Under Review',
+      value: orders.filter((order) => normalizeReviewStatus(order.reviewStatus) === 'under_review').length,
+      helper: 'Waiting on staff review',
+      icon: ShieldAlert,
+    },
+  ]), [activeOrders.length, historyOrders.length, orders]);
 
-      return savedUsername === accountUsername
-        || fallbackName === accountUsername
-        || (accountFullName && fallbackName === accountFullName);
-    })
-  ), [accountFullName, accountUsername, orders]);
-
-  const readyNotifications = myOrders.filter((order) => (
-    order.readyNotifiedAt
-    && !order.receiptReceivedAt
-    && ['ready', 'completed'].includes(order.status)
-    && isPickupCashOrder(order)
-  ));
-
-  const handleReceiptFileSelection = async (orderId, file) => {
-    try {
-      validateReceiptImageFile(file);
-      const previewUrl = await readImageFileAsDataUrl(file);
-
-      setReceiptDrafts((current) => ({
-        ...current,
-        [orderId]: {
-          ...defaultDraft(),
-          previewUrl,
-          fileName: file.name,
-        },
-      }));
-    } catch (error) {
-      setReceiptDrafts((current) => ({
-        ...current,
-        [orderId]: {
-          ...(current[orderId] || defaultDraft()),
-          error: error.message || 'Unable to use that image file.',
-          isSubmitting: false,
-        },
-      }));
-    }
-  };
-
-  const clearReceiptDraft = (orderId) => {
+  const setReceiptDraft = (orderId, patch) => {
     setReceiptDrafts((current) => ({
       ...current,
-      [orderId]: defaultDraft(),
-    }));
-
-    if (fileInputRefs.current[orderId]) {
-      fileInputRefs.current[orderId].value = '';
-    }
-  };
-
-  const handleMarkAsReceived = async (order) => {
-    const draft = receiptDrafts[order.id] || defaultDraft();
-
-    setReceiptDrafts((current) => ({
-      ...current,
-      [order.id]: {
-        ...draft,
-        isSubmitting: true,
-        error: '',
+      [orderId]: {
+        ...(current[orderId] || {
+          receiptImageDataUrl: '',
+          receiptImageName: '',
+          error: '',
+        }),
+        ...patch,
       },
     }));
+  };
+
+  const setIssueDraft = (orderId, patch) => {
+    const customerName = loggedInCustomer?.fullName || loggedInCustomer?.username || '';
+
+    setIssueDrafts((current) => ({
+      ...current,
+      [orderId]: {
+        ...(current[orderId] || {
+          customerName,
+          description: '',
+          issueType: 'damage',
+          evidenceImageDataUrl: '',
+          evidenceImageName: '',
+          error: '',
+          success: '',
+        }),
+        ...patch,
+      },
+    }));
+  };
+
+  const handleReceiptFileChange = async (orderId, event) => {
+    const file = event.target.files?.[0];
+
+    if (!file) {
+      setReceiptDraft(orderId, {
+        receiptImageDataUrl: '',
+        receiptImageName: '',
+        error: '',
+      });
+      return;
+    }
 
     try {
-      await markOrderAsReceived(order.id, draft.previewUrl || '');
-      clearReceiptDraft(order.id);
-      await refreshOrders();
+      const imageDataUrl = await readFileAsDataUrl(file);
+      setReceiptDraft(orderId, {
+        receiptImageDataUrl: imageDataUrl,
+        receiptImageName: file.name,
+        error: '',
+      });
     } catch (error) {
-      setReceiptDrafts((current) => ({
-        ...current,
-        [order.id]: {
-          ...(current[order.id] || defaultDraft()),
-          error: error.message || 'Unable to mark the order as received right now.',
-          isSubmitting: false,
-        },
-      }));
+      setReceiptDraft(orderId, {
+        receiptImageDataUrl: '',
+        receiptImageName: '',
+        error: error.message || 'Unable to load that image.',
+      });
     }
   };
 
-  if (!loggedInCustomer) {
+  const handleIssueFileChange = async (orderId, event) => {
+    const file = event.target.files?.[0];
+
+    if (!file) {
+      setIssueDraft(orderId, {
+        evidenceImageDataUrl: '',
+        evidenceImageName: '',
+        error: '',
+      });
+      return;
+    }
+
+    try {
+      const imageDataUrl = await readFileAsDataUrl(file);
+      setIssueDraft(orderId, {
+        evidenceImageDataUrl: imageDataUrl,
+        evidenceImageName: file.name,
+        error: '',
+      });
+    } catch (error) {
+      setIssueDraft(orderId, {
+        evidenceImageDataUrl: '',
+        evidenceImageName: '',
+        error: error.message || 'Unable to load that image.',
+      });
+    }
+  };
+
+  const handleConfirmReceipt = async (order) => {
+    const draft = receiptDrafts[order.id] || {};
+
+    if (!draft.receiptImageDataUrl) {
+      setReceiptDraft(order.id, { error: 'Receipt proof image is required.' });
+      return;
+    }
+
+    setLoadingAction({ type: 'receipt', orderId: order.id });
+    setPageError('');
+
+    try {
+      await confirmOrderReceipt(order.id, draft.receiptImageDataUrl);
+      setReceiptDrafts((current) => ({ ...current, [order.id]: undefined }));
+      setPageNotice(`Order ${order.displayId || order.orderCode || order.id} is now completed.`);
+    } catch (error) {
+      setReceiptDraft(order.id, {
+        error: error.message || 'Unable to confirm this order right now.',
+      });
+      setPageError(error.message || 'Unable to confirm this order right now.');
+    } finally {
+      setLoadingAction(null);
+    }
+  };
+
+  const handleSubmitIssue = async (order) => {
+    const draft = issueDrafts[order.id] || {};
+    const customerName = String(draft.customerName || '').trim();
+    const description = String(draft.description || '').trim();
+    const evidenceImageDataUrl = String(draft.evidenceImageDataUrl || '').trim();
+    const issueType = String(draft.issueType || 'damage').trim() || 'damage';
+
+    if (!customerName) {
+      setIssueDraft(order.id, { error: 'Customer name is required.' });
+      return;
+    }
+
+    if (!description) {
+      setIssueDraft(order.id, { error: 'Description of the issue is required.' });
+      return;
+    }
+
+    if (!evidenceImageDataUrl) {
+      setIssueDraft(order.id, { error: 'Photographic evidence is required.' });
+      return;
+    }
+
+    setLoadingAction({ type: 'issue', orderId: order.id });
+    setPageError('');
+
+    try {
+      await submitOrderIssue(order.id, {
+        customerName,
+        description,
+        issueType,
+        evidenceImageDataUrl,
+      });
+
+      setIssueDraft(order.id, {
+        description: '',
+        evidenceImageDataUrl: '',
+        evidenceImageName: '',
+        error: '',
+        success: 'Your issue report has been sent to the admin team for review.',
+      });
+      setPageNotice(`Issue report submitted for order ${order.displayId || order.orderCode || order.id}.`);
+    } catch (error) {
+      setIssueDraft(order.id, {
+        error: error.message || 'Unable to send this issue report right now.',
+      });
+      setPageError(error.message || 'Unable to send this issue report right now.');
+    } finally {
+      setLoadingAction(null);
+    }
+  };
+
+  const handleCancelOrder = async (order) => {
+    const cancellationReason = window.prompt('Optional cancellation reason', '') || '';
+
+    setLoadingAction({ type: 'cancel', orderId: order.id });
+    setPageError('');
+
+    try {
+      await cancelOrder(order.id, cancellationReason);
+      setPageNotice(`Order ${order.displayId || order.orderCode || order.id} has been cancelled.`);
+    } catch (error) {
+      setPageError(error.message || 'Unable to cancel this order right now.');
+    } finally {
+      setLoadingAction(null);
+    }
+  };
+
+  const renderWorkflowRail = (order) => {
+    const steps = buildOrderWorkflowProgress(order.status);
+
     return (
-      <div className="orders-page-shell">
-        <div className="orders-empty-card">
-          <h2>My Orders</h2>
-          <p>Please log in to view your orders and track their status.</p>
-        </div>
+      <div className="workflow-rail" aria-label={`Order workflow for ${order.displayId || order.id}`}>
+        {steps.map((step, index) => (
+          <div key={step.status} className="workflow-step">
+            <div className={`workflow-dot ${step.isComplete ? 'is-complete' : ''} ${step.isCurrent ? 'is-current' : ''}`} />
+            <div className="workflow-step-copy">
+              <span className="workflow-step-label">{step.label}</span>
+              <span className="workflow-step-index">{index + 1}</span>
+            </div>
+          </div>
+        ))}
       </div>
     );
-  }
+  };
+
+  const renderReceiptPanel = (order) => {
+    if (!canCustomerConfirmReceipt(order)) {
+      return null;
+    }
+
+    const draft = receiptDrafts[order.id] || {};
+    const isLoading = loadingAction?.type === 'receipt' && loadingAction.orderId === order.id;
+
+    return (
+      <div className="order-action-panel order-action-panel--proof">
+        <div className="order-action-panel-header">
+          <div>
+            <p className="order-panel-kicker">Confirm Receipt</p>
+            <h3>Upload receipt proof</h3>
+          </div>
+          <BadgeCheck size={20} />
+        </div>
+
+        <p className="order-panel-copy">
+          This button only appears after the order is marked Delivered. A photo is required before the order can move to Completed.
+        </p>
+
+        <label className="order-upload-card">
+          <input
+            type="file"
+            accept="image/*"
+            capture="environment"
+            onChange={(event) => void handleReceiptFileChange(order.id, event)}
+            className="order-hidden-input"
+          />
+          <Upload size={18} />
+          <div>
+            <strong>{draft.receiptImageName || 'Choose an image file'}</strong>
+            <span>Image proof is required to mark the order completed.</span>
+          </div>
+        </label>
+
+        {draft.receiptImageDataUrl && (
+          <img
+            src={draft.receiptImageDataUrl}
+            alt="Receipt proof preview"
+            className="order-image-preview"
+          />
+        )}
+
+        {draft.error && <div className="order-inline-error">{draft.error}</div>}
+
+        <button
+          type="button"
+          className="order-button order-button--primary"
+          onClick={() => handleConfirmReceipt(order)}
+          disabled={isLoading}
+        >
+          {isLoading ? <Loader2 size={16} className="spin" /> : <CheckCircle2 size={16} />}
+          {isLoading ? 'Submitting...' : 'Confirm Received'}
+        </button>
+      </div>
+    );
+  };
+
+  const renderIssuePanel = (order) => {
+    if (!canCustomerReportIssue(order)) {
+      return null;
+    }
+
+    const draft = issueDrafts[order.id] || {
+      customerName: loggedInCustomer?.fullName || loggedInCustomer?.username || order.customer || '',
+      description: '',
+      issueType: 'damage',
+      evidenceImageDataUrl: '',
+      evidenceImageName: '',
+      error: '',
+      success: '',
+    };
+    const isLoading = loadingAction?.type === 'issue' && loadingAction.orderId === order.id;
+    const detectionDate = new Date().toLocaleString(undefined, {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+    });
+
+    return (
+      <div className="order-action-panel order-action-panel--issue">
+        <div className="order-action-panel-header">
+          <div>
+            <p className="order-panel-kicker">Report Issue</p>
+            <h3>Damage or discrepancy report</h3>
+          </div>
+          <ShieldAlert size={20} />
+        </div>
+
+        <p className="order-panel-copy">
+          If the delivered order is damaged, missing items, or otherwise mismatched, submit a report with image proof so the admin team can review it.
+        </p>
+
+        <div className="order-form-grid">
+          <div className="order-form-field">
+            <label>Customer Name</label>
+            <input
+              type="text"
+              className="order-input"
+              value={draft.customerName || ''}
+              onChange={(event) => setIssueDraft(order.id, { customerName: event.target.value })}
+              placeholder="Full name"
+            />
+          </div>
+
+          <div className="order-form-field">
+            <label>Order ID</label>
+            <input
+              type="text"
+              className="order-input"
+              value={order.displayId || order.orderCode || order.id}
+              readOnly
+            />
+          </div>
+        </div>
+
+        <div className="order-form-field">
+          <label>Issue Type</label>
+          <select
+            className="order-input"
+            value={draft.issueType || 'damage'}
+            onChange={(event) => setIssueDraft(order.id, { issueType: event.target.value })}
+          >
+            <option value="damage">Damaged item</option>
+            <option value="missing_items">Missing items</option>
+            <option value="wrong_order">Wrong order</option>
+            <option value="quality_issue">Quality issue</option>
+            <option value="other">Other</option>
+          </select>
+        </div>
+
+        <div className="order-form-field">
+          <label>Description</label>
+          <textarea
+            className="order-textarea"
+            value={draft.description || ''}
+            onChange={(event) => setIssueDraft(order.id, { description: event.target.value })}
+            placeholder="Describe what went wrong with the order."
+          />
+        </div>
+
+        <div className="order-form-meta">
+          <div className="order-form-meta-item">
+            <span>Date of Detection</span>
+            <strong>{detectionDate}</strong>
+          </div>
+          <div className="order-form-meta-item">
+            <span>Proof Required</span>
+            <strong>Yes</strong>
+          </div>
+        </div>
+
+        <label className="order-upload-card">
+          <input
+            type="file"
+            accept="image/*"
+            capture="environment"
+            onChange={(event) => void handleIssueFileChange(order.id, event)}
+            className="order-hidden-input"
+          />
+          <Camera size={18} />
+          <div>
+            <strong>{draft.evidenceImageName || 'Upload photographic evidence'}</strong>
+            <span>No image means no report submission.</span>
+          </div>
+        </label>
+
+        {draft.evidenceImageDataUrl && (
+          <img
+            src={draft.evidenceImageDataUrl}
+            alt="Issue evidence preview"
+            className="order-image-preview"
+          />
+        )}
+
+        {draft.error && <div className="order-inline-error">{draft.error}</div>}
+        {draft.success && <div className="order-inline-success">{draft.success}</div>}
+
+        <button
+          type="button"
+          className="order-button order-button--primary"
+          onClick={() => handleSubmitIssue(order)}
+          disabled={isLoading}
+        >
+          {isLoading ? <Loader2 size={16} className="spin" /> : <Send size={16} />}
+          {isLoading ? 'Sending...' : 'Submit Issue Report'}
+        </button>
+      </div>
+    );
+  };
+
+  const renderOrderCard = (order, variant = 'active') => {
+    const statusLabel = getOrderStatusLabel(order.status);
+    const reviewStatusLabel = getReviewStatusLabel(order.reviewStatus);
+    const workflowSteps = buildOrderWorkflowProgress(order.status);
+    const orderNotifications = (order.notifications || [])
+      .filter((notification) => {
+        const audience = getNotificationAudience(notification);
+        return audience === 'customer' || audience === 'all';
+      })
+      .slice(0, 3);
+    const latestReport = order.latestIssueReport;
+    const isUnderReview = normalizeReviewStatus(order.reviewStatus) === 'under_review';
+    const isHistoryCard = variant === 'history';
+    const isCancelled = order.status === 'cancelled';
+    const isRefunded = order.status === 'refunded';
+    const loadingCancel = loadingAction?.type === 'cancel' && loadingAction.orderId === order.id;
+
+    return (
+      <article key={order.id} className={`customer-order-card ${isHistoryCard ? 'customer-order-card--history' : ''} ${isUnderReview ? 'customer-order-card--review' : ''}`}>
+        <div className="customer-order-header">
+          <div className="customer-order-title-block">
+            <p className="order-panel-kicker">{variant === 'history' ? 'History' : 'Active Order'}</p>
+            <h2>{order.displayId || order.orderCode || order.id}</h2>
+            <p className="customer-order-meta">
+              {formatDateTime(order.createdAt || order.updatedAt || order.date)} - {order.deliveryMethod === 'delivery' ? 'Delivery' : 'Pick-up'}
+            </p>
+          </div>
+
+          <div className="customer-order-badges">
+            <span className={`customer-order-badge customer-order-badge--${order.status}`}>{statusLabel}</span>
+            {isUnderReview && <span className="customer-order-badge customer-order-badge--review">{reviewStatusLabel}</span>}
+            {isRefunded && <span className="customer-order-badge customer-order-badge--refunded">Returned/Refunded</span>}
+          </div>
+        </div>
+
+        <div className="customer-order-summary">
+          <div>
+            <span>Customer</span>
+            <strong>{order.customer || 'Customer'}</strong>
+          </div>
+          <div>
+            <span>Total</span>
+            <strong>{order.total || formatCurrency(order.totalAmount)}</strong>
+          </div>
+          <div>
+            <span>Payment</span>
+            <strong>{String(order.paymentMethod || 'cash').toLowerCase() === 'online' ? 'Online' : 'Cash'}</strong>
+          </div>
+          <div>
+            <span>Delivery</span>
+            <strong>{order.deliveryMethod === 'delivery' ? 'Courier delivery' : 'Pick-up'}</strong>
+          </div>
+        </div>
+
+        <div className="customer-order-items">
+          <div className="customer-order-section-title">
+            <ReceiptText size={16} />
+            <span>Items</span>
+          </div>
+
+          {(order.lineItems || []).map((item) => (
+            <div key={`${order.id}-${item.id || item.productId || item.name}`} className="customer-order-item">
+              <div>
+                <strong>{item.name}</strong>
+                <p>{item.quantity} x {formatCurrency(item.price)}</p>
+              </div>
+              <span>{formatCurrency(item.lineTotal || ((Number(item.price) || 0) * (Number(item.quantity) || 0)))}</span>
+            </div>
+          ))}
+        </div>
+
+        <div className="customer-order-notes">
+          <div className="customer-order-note">
+            <Clock3 size={16} />
+            <div>
+              <strong>Status update</strong>
+              <p>
+                {isCancelled && order.cancellationReason
+                  ? order.cancellationReason
+                  : isRefunded && order.reviewReason
+                    ? order.reviewReason
+                    : order.status === 'delivered'
+                      ? 'Delivered orders can be confirmed with photo proof or reported if something is wrong.'
+                      : order.status === 'ready'
+                        ? 'The order is ready and inventory has already been reduced.'
+                        : `Current state: ${statusLabel}.`}
+              </p>
+            </div>
+          </div>
+
+          {order.containsLecheFlan && order.deliveryDistanceKm != null && (
+            <div className="customer-order-note customer-order-note--warning">
+              <ShieldAlert size={16} />
+              <div>
+                <strong>Leche flan restriction</strong>
+                <p>Delivery distance: {Number(order.deliveryDistanceKm).toFixed(1)} km.</p>
+              </div>
+            </div>
+          )}
+
+          {isUnderReview && latestReport && (
+            <div className="customer-order-note customer-order-note--review">
+              <ShieldCheck size={16} />
+              <div>
+                <strong>Under review</strong>
+                <p>
+                  {latestReport.description}
+                </p>
+              </div>
+            </div>
+          )}
+
+          {order.status === 'delivered' && !isUnderReview && (
+            <div className="customer-order-note customer-order-note--delivery">
+              <AlertTriangle size={16} />
+              <div>
+                <strong>Delivery discrepancy check</strong>
+                <p>If the order matches, confirm receipt with photo proof. If something is wrong, submit a report right away.</p>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {variant === 'active' && renderWorkflowRail(order)}
+
+        {orderNotifications.length > 0 && (
+          <div className="customer-order-feed">
+            <div className="customer-order-section-title">
+              <BellRing size={16} />
+              <span>Order notifications</span>
+            </div>
+            {orderNotifications.map((notification, index) => (
+              <div key={`${order.id}-${index}`} className="customer-order-feed-item">
+                <div className={`customer-order-feed-icon customer-order-feed-icon--${getNotificationType(notification)}`}>
+                  {getNotificationType(notification) === 'refund_approved' || getNotificationType(notification) === 'receipt_confirmed'
+                    ? <CheckCircle2 size={14} />
+                    : <BellRing size={14} />}
+                </div>
+                <div>
+                  <strong>{notification.message}</strong>
+                  <p>{formatDateTime(notification.createdAt)}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {variant === 'active' && (
+          <div className="customer-order-actions">
+            {canCustomerCancelOrder(order) && (
+              <button
+                type="button"
+                className="order-button order-button--danger"
+                onClick={() => void handleCancelOrder(order)}
+                disabled={loadingCancel}
+              >
+                {loadingCancel ? <Loader2 size={16} className="spin" /> : <XCircle size={16} />}
+                {loadingCancel ? 'Cancelling...' : 'Cancel Order'}
+              </button>
+            )}
+          </div>
+        )}
+
+        {variant === 'active' && renderReceiptPanel(order)}
+        {variant === 'active' && renderIssuePanel(order)}
+      </article>
+    );
+  };
 
   return (
-    <div className="orders-page-shell">
-      <section className="orders-page-hero">
-        <div>
-          <p className="orders-eyebrow">Track and confirm</p>
-          <h1>My Orders</h1>
-          <p className="orders-hero-copy">
-            Check your pickup QR code, see when your order is ready, and confirm receipt once you’ve picked it up.
+    <div className="orders-workflow-page">
+      <section className="orders-hero-panel">
+        <div className="orders-hero-copy">
+          <p className="orders-eyebrow">Customer Workflow</p>
+          <h1>Track, confirm, and report with proof.</h1>
+          <p>
+            Follow every order from pending to completed, confirm receipt with image proof, and submit issue reports with photographic evidence when something goes wrong.
           </p>
         </div>
-        <div className="orders-summary-chip">
-          <span>Total Orders</span>
-          <strong>{myOrders.length}</strong>
+
+        <div className="orders-hero-chip">
+          <Sparkles size={18} />
+          <div>
+            <strong>{activeOrders.length} active</strong>
+            <span>{historyOrders.length} history</span>
+          </div>
         </div>
       </section>
 
-      {readyNotifications.length > 0 && (
-        <section className="orders-notifications">
-          {readyNotifications.map((order) => (
-            <div key={`notify-${order.id}`} className="orders-notification-card">
-              <Bell size={18} />
-              <div>
-                <strong>{order.displayId || order.orderCode || order.id}</strong>
-                <p>{order.readyNotificationMessage || 'Your order is ready for pickup. Please proceed to the cashier and present your QR code.'}</p>
-              </div>
+      {(pageNotice || pageError) && (
+        <section className="orders-alert-stack" aria-live="polite">
+          {pageNotice && (
+            <div className="orders-alert-card orders-alert-card--success">
+              <CheckCircle2 size={18} />
+              <div>{pageNotice}</div>
             </div>
-          ))}
+          )}
+          {pageError && (
+            <div className="orders-alert-card orders-alert-card--error">
+              <CircleAlert size={18} />
+              <div>{pageError}</div>
+            </div>
+          )}
         </section>
       )}
 
-      <section className="orders-list-shell">
-        {isOrdersLoading && myOrders.length === 0 ? (
-          <div className="orders-empty-state">
-            <Package size={44} />
-            <p>Loading your orders...</p>
+      <section className="orders-summary-grid">
+        {summaryCards.map((card) => (
+          <article key={card.label} className="orders-summary-card">
+            <div className="orders-summary-icon">
+              <card.icon size={20} />
+            </div>
+            <div>
+              <p>{card.label}</p>
+              <strong>{card.value}</strong>
+              <span>{card.helper}</span>
+            </div>
+          </article>
+        ))}
+      </section>
+
+      <section className="orders-notification-panel">
+        <div className="orders-section-header">
+          <div>
+            <p className="orders-eyebrow">Latest Alerts</p>
+            <h2>Notifications</h2>
           </div>
-        ) : myOrders.length === 0 ? (
+          <span className="orders-section-chip">{notifications.length} updates</span>
+        </div>
+
+        {notifications.length === 0 ? (
           <div className="orders-empty-state">
-            <Package size={44} />
-            <p>You haven’t placed any orders yet.</p>
+            <BellRing size={28} />
+            <p>No order notifications yet.</p>
+            <span>Status updates, delivery alerts, and report decisions will appear here.</span>
           </div>
         ) : (
-          <div className="orders-stack">
-            {myOrders.map((order) => {
-              const draft = receiptDrafts[order.id] || defaultDraft();
-              const canShowQr = Boolean(order.qrActive);
-              const canConfirmReceipt = order.status === 'completed' && !order.receiptReceivedAt;
-              const orderStatusLabel = getStatusLabel(order.status);
+          <div className="orders-notification-grid">
+            {notifications.map((notification, index) => (
+              <article key={`${notification.orderId}-${index}`} className="orders-notification-card">
+                <div className="orders-notification-icon">
+                  <BellRing size={18} />
+                </div>
+                <div>
+                  <p className="orders-notification-title">
+                    {notification.orderId} - {notification.type.replace(/_/g, ' ')}
+                  </p>
+                  <h3>{notification.message}</h3>
+                  <span>{formatDateTime(notification.createdAt)}</span>
+                </div>
+              </article>
+            ))}
+          </div>
+        )}
+      </section>
 
-              return (
-                <article key={order.id} className="order-card">
-                  <div className="order-card-header">
-                    <div>
-                      <p className="order-card-kicker">Order ID</p>
-                      <h2>{order.displayId || order.orderCode || order.id}</h2>
-                      <p className="order-card-meta">{formatDateLabel(order.createdAt)}</p>
-                    </div>
+      <section className="orders-section">
+        <div className="orders-section-header">
+          <div>
+            <p className="orders-eyebrow">Active Orders</p>
+            <h2>Workflow in progress</h2>
+          </div>
+          <span className="orders-section-chip">{activeOrders.length} open</span>
+        </div>
 
-                    <div className="order-card-total-block">
-                      <span>{order.total}</span>
-                      <strong className={`order-status-pill status-${order.status}`}>{orderStatusLabel}</strong>
-                    </div>
-                  </div>
+        {isOrdersLoading ? (
+          <div className="orders-empty-state">
+            <Loader2 size={28} className="spin" />
+            <p>Loading orders...</p>
+          </div>
+        ) : activeOrders.length === 0 ? (
+          <div className="orders-empty-state">
+            <ShieldCheck size={28} />
+            <p>No active orders right now.</p>
+            <span>Once you place a new order, it will appear here from Pending through Delivered.</span>
+            <Link to="/products" className="order-button order-button--primary">Browse Products</Link>
+          </div>
+        ) : (
+          <div className="orders-card-stack">
+            {activeOrders.map((order) => renderOrderCard(order, 'active'))}
+          </div>
+        )}
+      </section>
 
-                  <div className="order-items-block">
-                    <h3>Items</h3>
-                    <ul>
-                      {(order.lineItems || []).map((item) => (
-                        <li key={`${order.id}-${item.id || item.productId || item.name}`}>
-                          <div>
-                            <strong>{item.name}</strong>
-                            <span>{item.quantity} x PHP {Number(item.price || 0).toFixed(2)}</span>
-                          </div>
-                          <strong>PHP {Number(item.lineTotal || (item.quantity * item.price) || 0).toFixed(2)}</strong>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
+      <section className="orders-section">
+        <div className="orders-section-header">
+          <div>
+            <p className="orders-eyebrow">History</p>
+            <h2>Completed, cancelled, and refunded orders</h2>
+          </div>
+          <span className="orders-section-chip">{historyOrders.length} archived</span>
+        </div>
 
-                  <div className="order-details-grid">
-                    <div className="order-detail-card">
-                      <span>Fulfillment</span>
-                      <strong>{order.subtext || 'Pickup'}</strong>
-                    </div>
-                    <div className="order-detail-card">
-                      <span>Status</span>
-                      <strong>{orderStatusLabel}</strong>
-                    </div>
-                    <div className="order-detail-card">
-                      <span>Payment</span>
-                      <strong>{order.paymentMethod === 'cash' ? 'Cash on Pickup' : order.paymentMethod}</strong>
-                    </div>
-                  </div>
-
-                  {order.readyNotifiedAt && (
-                    <div className="ready-notification-banner">
-                      <Bell size={18} />
-                      <div>
-                        <strong>Ready for pickup</strong>
-                        <p>{order.readyNotificationMessage || 'Your order is ready for pickup. Please proceed to the cashier and present your QR code.'}</p>
-                      </div>
-                    </div>
-                  )}
-
-                  {canShowQr && (
-                    <div className="order-qr-panel">
-                      <div className="order-qr-header">
-                        <div>
-                          <p className="order-card-kicker">Pickup QR</p>
-                          <h3>Show this code to the cashier</h3>
-                        </div>
-                        <QrCode size={20} />
-                      </div>
-
-                      <div className="order-qr-body">
-                        <img
-                          src={getQrImageUrl(order.orderCode || order.displayId || order.id)}
-                          alt={`QR code for order ${order.displayId || order.orderCode || order.id}`}
-                          className="order-qr-image"
-                        />
-                        <div>
-                          <p className="order-qr-code-label">Order ID</p>
-                          <strong>{order.displayId || order.orderCode || order.id}</strong>
-                          <p className="order-qr-note">
-                            This QR stays active until the cashier confirms the order.
-                          </p>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-
-                  {canConfirmReceipt && (
-                    <div className="receipt-panel">
-                      <div className="receipt-panel-header">
-                        <div>
-                          <p className="order-card-kicker">Confirm receipt</p>
-                          <h3>Mark as Received</h3>
-                        </div>
-                        <CheckCircle2 size={20} />
-                      </div>
-
-                      <p className="receipt-help">
-                        You can submit without an image, or attach a JPG/PNG proof first. Preview appears before submission.
-                      </p>
-
-                      <input
-                        ref={(node) => {
-                          fileInputRefs.current[order.id] = node;
-                        }}
-                        type="file"
-                        accept="image/png,image/jpeg"
-                        className="receipt-file-input"
-                        onChange={(event) => {
-                          const file = event.target.files?.[0];
-                          if (file) {
-                            handleReceiptFileSelection(order.id, file);
-                          }
-                        }}
-                      />
-
-                      {draft.previewUrl && (
-                        <div className="receipt-preview">
-                          <img src={draft.previewUrl} alt="Receipt preview" />
-                          <div className="receipt-preview-meta">
-                            <strong>{draft.fileName || 'Selected receipt image'}</strong>
-                            <button type="button" className="receipt-clear-button" onClick={() => clearReceiptDraft(order.id)}>
-                              <X size={16} /> Remove image
-                            </button>
-                          </div>
-                        </div>
-                      )}
-
-                      {draft.error && <div className="receipt-error">{draft.error}</div>}
-
-                      <button
-                        type="button"
-                        className="receipt-submit-button"
-                        onClick={() => handleMarkAsReceived(order)}
-                        disabled={draft.isSubmitting}
-                      >
-                        <Upload size={16} />
-                        {draft.isSubmitting ? 'Submitting...' : 'Mark as Received'}
-                      </button>
-                    </div>
-                  )}
-
-                  {order.receiptReceivedAt && (
-                    <div className="received-proof-panel">
-                      <div className="received-proof-header">
-                        <CheckCircle2 size={18} />
-                        <strong>Received</strong>
-                      </div>
-                      <p>Confirmed on {formatDateLabel(order.receiptReceivedAt)}</p>
-                      {order.receiptImageUrl && (
-                        <img
-                          src={order.receiptImageUrl}
-                          alt="Receipt proof"
-                          className="receipt-proof-image"
-                        />
-                      )}
-                    </div>
-                  )}
-                </article>
-              );
-            })}
+        {historyOrders.length === 0 ? (
+          <div className="orders-empty-state">
+            <History size={28} />
+            <p>History will appear here once orders are completed, cancelled, or refunded.</p>
+          </div>
+        ) : (
+          <div className="orders-card-stack">
+            {historyOrders.map((order) => renderOrderCard(order, 'history'))}
           </div>
         )}
       </section>

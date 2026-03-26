@@ -90,7 +90,7 @@ app.get("/api/health/database", async (req, res, next) => {
 
     if (adminConfigured) {
       const adminClient = getSupabaseAdmin();
-      for (const table of ["profiles", "inventory", "orders", "order_items", "carts", "cart_items", "payment_checkouts"]) {
+      for (const table of ["profiles", "inventory", "orders", "order_items", "order_issue_reports", "carts", "cart_items", "payment_checkouts"]) {
         checks.push(await probeTable(adminClient, table));
       }
     }

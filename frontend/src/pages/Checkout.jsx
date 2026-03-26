@@ -6,6 +6,7 @@ import { useOrders } from '../context/OrderContext';
 import { useProducts } from '../context/ProductContext';
 import { apiRequest } from '../lib/api';
 import { CreditCard, Banknote, MapPin, Store, Truck } from 'lucide-react';
+import { hasLecheFlanItems } from '../utils/orderWorkflow';
 import './Checkout.css';
 
 const DELIVERY_FEE = 50;
@@ -23,6 +24,7 @@ const Checkout = () => {
     address: '',
     deliveryMethod: 'delivery',
     paymentMethod: 'online',
+    deliveryDistanceKm: '',
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState('');
@@ -83,9 +85,24 @@ const Checkout = () => {
     }
   }, [formData.deliveryMethod, formData.paymentMethod]);
 
+  useEffect(() => {
+    if (formData.deliveryMethod === 'pickup' && formData.deliveryDistanceKm) {
+      setFormData((current) => ({
+        ...current,
+        deliveryDistanceKm: '',
+      }));
+    }
+  }, [formData.deliveryMethod, formData.deliveryDistanceKm]);
+
   const subtotal = cartItems.reduce((total, item) => total + (item.price * item.quantity), 0);
   const deliveryFee = formData.deliveryMethod === 'delivery' ? DELIVERY_FEE : 0;
   const total = subtotal + deliveryFee;
+  const containsLecheFlan = hasLecheFlanItems(cartItems);
+  const deliveryDistance = Number(formData.deliveryDistanceKm);
+  const isLecheFlanRestricted = formData.deliveryMethod === 'delivery'
+    && containsLecheFlan
+    && Number.isFinite(deliveryDistance)
+    && deliveryDistance > 3;
 
   const handleChange = (e) => {
     setFormData((current) => ({
@@ -102,6 +119,14 @@ const Checkout = () => {
     try {
       if (!loggedInCustomer) {
         throw new Error('Please log in first before checking out.');
+      }
+
+      if (formData.deliveryMethod === 'delivery' && containsLecheFlan && (!Number.isFinite(deliveryDistance) || deliveryDistance <= 0)) {
+        throw new Error('Please enter the delivery distance so we can verify the leche flan restriction.');
+      }
+
+      if (isLecheFlanRestricted) {
+        throw new Error('Leche flan delivery is limited to 3 km only.');
       }
 
       const submittedFullName = formData.fullName.trim();
@@ -148,6 +173,7 @@ const Checkout = () => {
             address: formData.address.trim(),
             deliveryMethod: formData.deliveryMethod,
             paymentMethod: 'online',
+            deliveryDistanceKm: formData.deliveryMethod === 'delivery' ? deliveryDistance : null,
             lineItems,
           }),
         }, {
@@ -175,6 +201,9 @@ const Checkout = () => {
         total: `PHP ${total.toFixed(2)}`,
         paymentMethod: formData.paymentMethod,
         deliveryMethod: formData.deliveryMethod,
+        deliveryDistanceKm: formData.deliveryMethod === 'delivery' && Number.isFinite(deliveryDistance)
+          ? deliveryDistance
+          : null,
       });
 
       await refreshProducts();
@@ -323,6 +352,32 @@ const Checkout = () => {
                   ></textarea>
                 </div>
               </div>
+
+              <div className="form-group">
+                <label>Delivery Distance (km)</label>
+                <input
+                  type="number"
+                  name="deliveryDistanceKm"
+                  className="text-input"
+                  value={formData.deliveryDistanceKm}
+                  onChange={handleChange}
+                  min="0"
+                  step="0.1"
+                  required={containsLecheFlan}
+                  placeholder="e.g. 2.5"
+                />
+                <p className="checkout-helper-copy">
+                  Enter the estimated distance from the store to your delivery address. Leche flan delivery is limited to 3 km only.
+                </p>
+              </div>
+
+              {containsLecheFlan && (
+                <div className={`checkout-warning ${isLecheFlanRestricted ? 'is-blocked' : ''}`}>
+                  {isLecheFlanRestricted
+                    ? 'Leche flan delivery is limited to 3 km only.'
+                    : 'Your cart contains leche flan. Delivery distance must be 3 km or less.'}
+                </div>
+              )}
             </div>
           )}
 
@@ -405,6 +460,14 @@ const Checkout = () => {
               <span>Delivery Fee</span>
               <span>PHP {deliveryFee.toFixed(2)}</span>
             </div>
+            {formData.deliveryMethod === 'delivery' && containsLecheFlan && (
+              <div className="summary-row">
+                <span>Leche Flan Check</span>
+                <span className={isLecheFlanRestricted ? 'summary-flag-danger' : 'summary-flag-ok'}>
+                  {isLecheFlanRestricted ? 'Blocked over 3 km' : 'Within limit'}
+                </span>
+              </div>
+            )}
 
             <div className="summary-divider"></div>
 

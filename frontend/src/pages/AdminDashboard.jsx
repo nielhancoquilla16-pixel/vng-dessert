@@ -22,12 +22,12 @@ import {
 } from 'recharts';
 import { useOrders } from '../context/OrderContext';
 import { useProducts } from '../context/ProductContext';
+import { buildWeeklySalesData, getOrderRevenueEvents } from '../utils/orderAnalytics';
 import './AdminDashboard.css';
 
 const CATEGORY_RESET_STORAGE_KEY = 'vng_dashboard_category_reset_at';
 const WEEKLY_RESET_STORAGE_KEY = 'vng_dashboard_weekly_reset_at';
 const CATEGORY_COLORS = ['#f97316', '#fbbf24', '#fb923c', '#fed7aa', '#fdba74', '#fb7185', '#38bdf8'];
-const WEEKLY_DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const DEFAULT_CATEGORY_SALES = [
   { name: 'Leche Flan', color: '#f97316' },
   { name: 'Choco', color: '#514016' },
@@ -73,7 +73,15 @@ const formatCurrency = (amount) => `PHP ${amount.toLocaleString(undefined, {
 })}`;
 
 const getOrderTimestamp = (order) => {
-  const source = order.createdAt || order.date;
+  const status = String(order?.status || order?.orderStatus || '').toLowerCase();
+  const timestamps = order?.statusTimestamps || order?.status_timestamps || {};
+  const source = (
+    status === 'completed'
+      ? timestamps.completed || order?.completedAt || order?.completed_at || order?.createdAt || order?.date
+      : status === 'refunded'
+        ? timestamps.refunded || order?.refundedAt || order?.refunded_at || order?.updatedAt || order?.updated_at || order?.createdAt || order?.date
+        : order?.createdAt || order?.date
+  );
   const parsed = source ? new Date(source).getTime() : NaN;
   return Number.isFinite(parsed) ? parsed : 0;
 };
@@ -210,52 +218,30 @@ const AdminDashboard = () => {
     storeProducts.map((product) => [product.name.toLowerCase(), product])
   );
 
-  const activeOrders = orders.filter((order) => order.status !== 'cancelled');
   const currentWeekStart = getStartOfSundayWeek(currentDateMarker);
-  const nextWeekStart = new Date(currentWeekStart);
-  nextWeekStart.setDate(nextWeekStart.getDate() + 7);
 
   const currentWeekStartTimestamp = currentWeekStart.getTime();
-  const nextWeekStartTimestamp = nextWeekStart.getTime();
   const parsedStoredWeeklyResetTimestamp = weeklyResetAt ? new Date(weeklyResetAt).getTime() : NaN;
   const effectiveWeeklyResetAt = Number.isFinite(parsedStoredWeeklyResetTimestamp)
     && parsedStoredWeeklyResetTimestamp >= currentWeekStartTimestamp
     ? weeklyResetAt
     : '';
-  const parsedWeeklyResetTimestamp = effectiveWeeklyResetAt ? new Date(effectiveWeeklyResetAt).getTime() : NaN;
-  const weeklyResetTimestamp = Number.isFinite(parsedWeeklyResetTimestamp)
-    ? Math.max(parsedWeeklyResetTimestamp, currentWeekStartTimestamp)
-    : currentWeekStartTimestamp;
 
-  const weeklySalesData = WEEKLY_DAY_LABELS.map((day) => ({
-    day,
-    sales: 0,
-    orders: 0,
-  }));
-
-  activeOrders.forEach((order) => {
-    const orderTimestamp = getOrderTimestamp(order);
-
-    if (orderTimestamp < weeklyResetTimestamp || orderTimestamp >= nextWeekStartTimestamp) {
-      return;
-    }
-
-    const dayIndex = new Date(orderTimestamp).getDay();
-    const amount = Number(order.totalAmount) || parseCurrencyAmount(order.total);
-
-    weeklySalesData[dayIndex].sales += amount;
-    weeklySalesData[dayIndex].orders += 1;
+  const weeklySalesData = buildWeeklySalesData(orders, {
+    referenceDate: new Date(currentDateMarker),
+    weekStart: currentWeekStart,
+    resetAt: effectiveWeeklyResetAt || currentWeekStart.toISOString(),
   });
 
   const resetTimestamp = categoryResetAt ? new Date(categoryResetAt).getTime() : 0;
-  const trackedCategoryOrders = activeOrders.filter((order) => getOrderTimestamp(order) >= resetTimestamp);
+  const trackedCategoryOrders = orders.filter((order) => getOrderTimestamp(order) >= resetTimestamp);
 
-  const totalRevenue = activeOrders.reduce((sum, order) => {
-    return sum + (Number(order.totalAmount) || parseCurrencyAmount(order.total));
-  }, 0);
-  const totalOrders = activeOrders.length;
+  const totalRevenue = orders.reduce((sum, order) => (
+    sum + getOrderRevenueEvents(order).reduce((eventTotal, event) => eventTotal + event.amount, 0)
+  ), 0);
+  const totalOrders = orders.length;
   const productCount = storeProducts.length;
-  const uniqueCustomers = new Set(activeOrders.map((order) => order.customer)).size;
+  const uniqueCustomers = new Set(orders.map((order) => order.customer)).size;
 
   const stats = [
     { title: 'Total Revenue', value: formatCurrency(totalRevenue), trend: 'Live', up: true, icon: TrendingUp },
@@ -270,10 +256,17 @@ const AdminDashboard = () => {
   const categoryTotals = new Map();
 
   trackedCategoryOrders.forEach((order) => {
+    const orderStatus = String(order.status || '').toLowerCase();
+    const orderMultiplier = orderStatus === 'refunded' ? -1 : (orderStatus === 'completed' ? 1 : 0);
+
+    if (orderMultiplier === 0) {
+      return;
+    }
+
     getOrderLineItems(order, productsByName).forEach((item) => {
       const categoryName = item.category || item.name || 'Uncategorized';
       const lineTotal = Number(item.lineTotal) || ((Number(item.price) || 0) * (Number(item.quantity) || 0));
-      categoryTotals.set(categoryName, (categoryTotals.get(categoryName) || 0) + lineTotal);
+      categoryTotals.set(categoryName, (categoryTotals.get(categoryName) || 0) + (lineTotal * orderMultiplier));
     });
   });
 
@@ -318,7 +311,7 @@ const AdminDashboard = () => {
     closeResetDialog();
   };
 
-  const recentOrders = activeOrders.slice(0, 5).map((order) => ({
+  const recentOrders = orders.slice(0, 5).map((order) => ({
     id: order.id,
     displayId: order.displayId || order.id,
     customer: order.customer,

@@ -53,6 +53,7 @@ const requiredSchema = {
   orders: [
     'id',
     'user_id',
+    'order_code',
     'customer_name',
     'phone_number',
     'address',
@@ -60,7 +61,64 @@ const requiredSchema = {
     'payment_method',
     'total_price',
     'order_status',
+    'review_status',
+    'review_reason',
+    'review_status_updated_at',
+    'cancellation_reason',
+    'delivery_distance_km',
+    'contains_leche_flan',
+    'inventory_deducted_at',
+    'qr_claimed_at',
+    'ready_notified_at',
+    'ready_notification_message',
+    'receipt_image_url',
+    'receipt_received_at',
+    'notifications',
+    'status_timestamps',
+    'updated_at',
     'created_at',
+  ],
+  payment_checkouts: [
+    'id',
+    'user_id',
+    'provider',
+    'status',
+    'payment_method',
+    'reference_number',
+    'checkout_session_id',
+    'checkout_url',
+    'amount',
+    'currency',
+    'customer_name',
+    'customer_email',
+    'phone_number',
+    'address',
+    'delivery_method',
+    'delivery_distance_km',
+    'line_items',
+    'payment_intent_id',
+    'payment_id',
+    'failure_reason',
+    'order_id',
+    'paid_at',
+    'created_at',
+    'updated_at',
+  ],
+  order_issue_reports: [
+    'id',
+    'order_id',
+    'user_id',
+    'customer_name',
+    'issue_type',
+    'description',
+    'evidence_image_url',
+    'detection_date',
+    'review_status',
+    'review_reason',
+    'reviewed_by',
+    'reviewed_at',
+    'created_at',
+    'updated_at',
   ],
   order_items: [
     'id',
@@ -84,6 +142,29 @@ const requiredSchema = {
 
 const requiredTables = Object.keys(requiredSchema);
 
+const describeSchemaError = (error) => {
+  if (!error) {
+    return 'Unknown schema error';
+  }
+
+  if (typeof error.message === 'string' && error.message.trim()) {
+    return error.message;
+  }
+
+  if (error.message && typeof error.message === 'object') {
+    return JSON.stringify(error.message);
+  }
+
+  return JSON.stringify(error);
+};
+
+const isMissingColumnError = (error) => {
+  const message = describeSchemaError(error);
+  const code = String(error?.code || error?.details?.code || error?.details?.error_code || '');
+
+  return /does not exist|could not find the/i.test(message) || ['42703', 'PGRST204', 'PGRST205'].includes(code);
+};
+
 async function checkSchema() {
   console.log(`Checking schema for project: ${url}`);
   let hasIssues = false;
@@ -95,7 +176,7 @@ async function checkSchema() {
       .select('id', { head: true, count: 'exact' });
 
     if (tableCheck.error) {
-      const message = tableCheck.error.message || String(tableCheck.error);
+      const message = describeSchemaError(tableCheck.error);
       if (/does not exist/i.test(message)) {
         hasIssues = true;
         console.log(`\nMissing table: ${table}`);
@@ -114,8 +195,8 @@ async function checkSchema() {
         .select(column, { head: true, count: 'exact' });
 
       if (columnCheck.error) {
-        const message = columnCheck.error.message || String(columnCheck.error);
-        if (/does not exist/i.test(message)) {
+        const message = describeSchemaError(columnCheck.error);
+        if (isMissingColumnError(columnCheck.error) || !message || message === '{"message":""}') {
           missingColumns.push(column);
         } else {
           hasIssues = true;

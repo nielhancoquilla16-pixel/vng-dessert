@@ -8,6 +8,8 @@ import {
   enrichItemsFromProducts,
   fetchProductsByIds,
   getShortagesForItems,
+  getLecheFlanRestrictionMessage,
+  hasLecheFlanItems,
   hydrateOrderById,
   mapOrder,
   normalizeRequestedItems,
@@ -146,6 +148,9 @@ const mapCheckoutResponse = (checkout, order = null, extras = {}) => ({
   currency: checkout.currency || 'PHP',
   paymentMethod: checkout.payment_method || 'online',
   deliveryMethod: checkout.delivery_method || 'pickup',
+  deliveryDistanceKm: Number.isFinite(Number(checkout.delivery_distance_km))
+    ? Number(checkout.delivery_distance_km)
+    : null,
   failureReason: checkout.failure_reason || '',
   paidAt: checkout.paid_at || null,
   orderId: checkout.order_id || '',
@@ -221,6 +226,27 @@ const finalizePaidCheckout = async (supabase, checkout) => {
     available_stock_quantity: Number(productsById.get(item.product_id)?.stock_quantity) || 0,
   }));
 
+  const deliveryDistanceKm = Number(checkout.delivery_distance_km);
+  const containsLecheFlan = hasLecheFlanItems(finalizedItems);
+  const restrictionMessage = String(checkout.delivery_method || '').toLowerCase() === 'delivery'
+    ? getLecheFlanRestrictionMessage(deliveryDistanceKm)
+    : '';
+
+  if (containsLecheFlan && restrictionMessage) {
+    const updatedCheckout = await updateCheckoutRecord(supabase, checkout.id, {
+      status: 'cancelled',
+      failure_reason: restrictionMessage,
+      paid_at: checkout.paid_at || new Date().toISOString(),
+    });
+
+    return {
+      checkout: updatedCheckout,
+      order: null,
+      shortages: [],
+      restrictionMessage,
+    };
+  }
+
   const order = await createFulfilledOrder(supabase, {
     userId: checkout.user_id,
     customerName: checkout.customer_name,
@@ -229,6 +255,7 @@ const finalizePaidCheckout = async (supabase, checkout) => {
     deliveryMethod: checkout.delivery_method,
     paymentMethod: checkout.payment_method,
     totalPrice: Number(checkout.amount) || 0,
+    deliveryDistanceKm: Number.isFinite(deliveryDistanceKm) ? deliveryDistanceKm : null,
     items: finalizedItems,
   });
 
@@ -312,6 +339,7 @@ router.post('/checkout-sessions', requireAuth, async (req, res, next) => {
       address = '',
       deliveryMethod = 'pickup',
       paymentMethod = 'online',
+      deliveryDistanceKm,
     } = req.body || {};
 
     const normalizedItems = normalizeRequestedItems(lineItems);
@@ -333,6 +361,16 @@ router.post('/checkout-sessions', requireAuth, async (req, res, next) => {
     }
 
     const finalizedItems = enrichItemsFromProducts(normalizedItems, productsById);
+    const distanceKm = Number(deliveryDistanceKm);
+    const containsLecheFlan = hasLecheFlanItems(finalizedItems);
+    const restrictionMessage = String(deliveryMethod || '').toLowerCase() === 'delivery'
+      ? getLecheFlanRestrictionMessage(distanceKm)
+      : '';
+
+    if (containsLecheFlan && restrictionMessage) {
+      return res.status(409).json({ error: restrictionMessage });
+    }
+
     const productSubtotal = finalizedItems.reduce((sum, item) => sum + ((Number(item.price) || 0) * item.quantity), 0);
     const deliveryCharge = deliveryMethod === 'delivery' ? DELIVERY_FEE : 0;
     const totalAmount = productSubtotal + deliveryCharge;
@@ -386,6 +424,7 @@ router.post('/checkout-sessions', requireAuth, async (req, res, next) => {
         phone_number: phoneNumber || req.profile?.phone_number || '',
         address: address || req.profile?.address || '',
         delivery_method: deliveryMethod,
+        delivery_distance_km: Number.isFinite(distanceKm) ? distanceKm : null,
         line_items: finalizedItems.map((item) => ({
           product_id: item.product_id,
           quantity: item.quantity,

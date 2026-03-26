@@ -2,6 +2,11 @@
 import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
 import { apiRequest, isBackendIssueError } from '../lib/api';
 import { useAuth } from './AuthContext';
+import {
+  isHistoryOrderStatus,
+  normalizeOrderStatus,
+  normalizeReviewStatus,
+} from '../utils/orderWorkflow';
 
 const OrderContext = createContext();
 
@@ -21,6 +26,55 @@ const normalizeLineItems = (items = []) => (
     price: Number(item.price) || 0,
     lineTotal: Number(item.lineTotal) || (Number(item.price) || 0) * (Number(item.quantity) || 0),
   }))
+);
+
+const normalizeNotifications = (notifications = []) => (
+  Array.isArray(notifications)
+    ? notifications.map((notification) => ({
+        audience: String(notification?.audience || 'customer').toLowerCase(),
+        type: String(notification?.type || 'info').toLowerCase(),
+        message: String(notification?.message || '').trim(),
+        createdAt: notification?.createdAt || notification?.created_at || new Date().toISOString(),
+      }))
+    : []
+);
+
+const normalizeIssueReports = (reports = []) => (
+  Array.isArray(reports)
+    ? reports.map((report) => ({
+        id: report.id,
+        orderId: report.orderId || report.order_id || '',
+        userId: report.userId || report.user_id || '',
+        customerName: report.customerName || report.customer_name || '',
+        issueType: report.issueType || report.issue_type || 'damage',
+        description: report.description || '',
+        evidenceImageUrl: report.evidenceImageUrl || report.evidence_image_url || '',
+        detectionDate: report.detectionDate || report.detection_date || report.created_at || report.createdAt || '',
+        reviewStatus: normalizeReviewStatus(report.reviewStatus || report.review_status || 'under_review'),
+        status: normalizeReviewStatus(report.reviewStatus || report.review_status || 'under_review'),
+        reviewReason: report.reviewReason || report.review_reason || '',
+        reviewedBy: report.reviewedBy || report.reviewed_by || '',
+        reviewedAt: report.reviewedAt || report.reviewed_at || null,
+        createdAt: report.createdAt || report.created_at || '',
+        updatedAt: report.updatedAt || report.updated_at || '',
+      }))
+    : []
+);
+
+const normalizeStatusTimestamps = (timestamps = {}) => (
+  timestamps && typeof timestamps === 'object'
+    ? {
+        pending: timestamps.pending || null,
+        confirmed: timestamps.confirmed || null,
+        preparing: timestamps.preparing || null,
+        ready: timestamps.ready || null,
+        out_for_delivery: timestamps.out_for_delivery || timestamps.outForDelivery || null,
+        delivered: timestamps.delivered || null,
+        completed: timestamps.completed || null,
+        cancelled: timestamps.cancelled || null,
+        refunded: timestamps.refunded || null,
+      }
+    : {}
 );
 
 const buildItemsText = (lineItems = []) => (
@@ -45,7 +99,13 @@ const normalizeOrder = (order) => {
   const lineItems = normalizeLineItems(order.lineItems || order.items || []);
   const totalAmount = Number(order.totalAmount ?? order.totalPrice) || parseCurrencyAmount(order.total);
   const createdAt = order.createdAt || order.created_at || new Date().toISOString();
-  const paymentLabel = getPaymentLabel(order.paymentMethod);
+  const paymentLabel = getPaymentLabel(order.paymentMethod || order.payment_method);
+  const deliveryMethod = String(order.deliveryMethod || order.delivery_method || 'pickup').toLowerCase();
+  const status = normalizeOrderStatus(order.status || order.orderStatus || order.order_status || 'pending');
+  const reviewStatus = normalizeReviewStatus(order.reviewStatus || order.review_status || 'none');
+  const notifications = normalizeNotifications(order.notifications || []);
+  const issueReports = normalizeIssueReports(order.issueReports || order.order_issue_reports || []);
+  const statusTimestamps = normalizeStatusTimestamps(order.statusTimestamps || order.status_timestamps || {});
   const itemsText = typeof order.items === 'string'
     ? order.items
     : (order.itemsText || buildItemsText(lineItems));
@@ -56,29 +116,54 @@ const normalizeOrder = (order) => {
     displayId: order.displayId || order.display_id || order.id,
     orderCode: order.orderCode || order.order_code || order.displayId || order.display_id || order.id,
     createdAt,
+    updatedAt: order.updatedAt || order.updated_at || createdAt,
     date: order.date || createdAt.split('T')[0],
-    status: (order.status || order.orderStatus || 'pending').toLowerCase(),
-    orderStatus: (order.orderStatus || order.status || 'pending').toLowerCase(),
+    status,
+    orderStatus: status,
+    reviewStatus,
+    reviewReason: order.reviewReason || order.review_reason || '',
+    reviewStatusUpdatedAt: order.reviewStatusUpdatedAt || order.review_status_updated_at || null,
+    cancellationReason: order.cancellationReason || order.cancellation_reason || '',
     totalAmount,
     totalPrice: totalAmount,
     total: typeof order.total === 'string' ? order.total : `PHP ${totalAmount.toFixed(2)}`,
     lineItems,
     items: itemsText,
     itemsText,
-    subtext: order.subtext || (order.deliveryMethod === 'delivery'
+    subtext: order.subtext || (deliveryMethod === 'delivery'
       ? order.address
       : `Walk-in / ${paymentLabel}${paymentLabel === 'Cash' ? ' on Pickup' : ''}`),
+    deliveryMethod,
+    paymentMethod: order.paymentMethod || order.payment_method || 'cash',
+    deliveryDistanceKm: Number.isFinite(Number(order.deliveryDistanceKm || order.delivery_distance_km))
+      ? Number(order.deliveryDistanceKm || order.delivery_distance_km)
+      : null,
+    containsLecheFlan: Boolean(order.containsLecheFlan ?? order.contains_leche_flan),
     qrClaimedAt: order.qrClaimedAt || order.qr_claimed_at || null,
     readyNotifiedAt: order.readyNotifiedAt || order.ready_notified_at || null,
     readyNotificationMessage: order.readyNotificationMessage || order.ready_notification_message || '',
     receiptImageUrl: order.receiptImageUrl || order.receipt_image_url || '',
     receiptReceivedAt: order.receiptReceivedAt || order.receipt_received_at || null,
+    inventoryDeductedAt: order.inventoryDeductedAt || order.inventory_deducted_at || null,
+    notifications,
+    issueReports,
+    latestIssueReport: issueReports[0] || null,
+    statusTimestamps,
+    confirmedAt: statusTimestamps.confirmed || null,
+    preparingAt: statusTimestamps.preparing || null,
+    readyAt: statusTimestamps.ready || null,
+    outForDeliveryAt: statusTimestamps.out_for_delivery || null,
+    deliveredAt: statusTimestamps.delivered || null,
+    completedAt: statusTimestamps.completed || null,
+    cancelledAt: statusTimestamps.cancelled || null,
+    refundedAt: statusTimestamps.refunded || null,
+    isHistory: isHistoryOrderStatus(status),
     qrActive: Boolean(order.qrActive ?? order.qr_active ?? (
-      String(order.deliveryMethod || '').toLowerCase() === 'pickup'
-      && String(order.paymentMethod || '').toLowerCase() === 'cash'
+      deliveryMethod === 'pickup'
+      && String(order.paymentMethod || order.payment_method || 'cash').toLowerCase() === 'cash'
       && !order.qrClaimedAt
       && !order.qr_claimed_at
-      && !['completed', 'received', 'cancelled'].includes((order.status || order.orderStatus || 'pending').toLowerCase())
+      && !['delivered', 'completed', 'cancelled', 'refunded'].includes(status)
     )),
   };
 };
@@ -157,8 +242,11 @@ export const OrderProvider = ({ children }) => {
       address: orderData.address || '',
       delivery_method: orderData.deliveryMethod || 'pickup',
       payment_method: orderData.paymentMethod || 'cash',
+      delivery_distance_km: Number.isFinite(Number(orderData.deliveryDistanceKm))
+        ? Number(orderData.deliveryDistanceKm)
+        : null,
       total_price: Number(orderData.totalAmount) || parseCurrencyAmount(orderData.total),
-      order_status: (orderData.status || 'pending').toLowerCase(),
+      order_status: normalizeOrderStatus(orderData.status || 'pending'),
       items: (orderData.lineItems || []).map((item) => ({
         product_id: item.productId || item.product_id || item.id,
         quantity: Number(item.quantity) || 0,
@@ -179,24 +267,44 @@ export const OrderProvider = ({ children }) => {
     return normalizedOrder;
   }, [session]);
 
-  const updateOrderStatus = useCallback(async (orderId, newStatus) => {
+  const syncOrderFromResponse = (response) => normalizeOrder(response?.order || response);
+
+  const updateOrderStatus = useCallback(async (orderId, newStatus, options = {}) => {
     const updatedOrder = await apiRequest(`/api/orders/${orderId}/status`, {
       method: 'PATCH',
-      body: JSON.stringify({ order_status: newStatus.toLowerCase() }),
+      body: JSON.stringify({
+        order_status: normalizeOrderStatus(newStatus),
+        ...(options.reason ? { reason: options.reason } : {}),
+      }),
     }, {
       auth: true,
       accessToken: session?.access_token,
     });
 
-    const normalizedOrder = normalizeOrder(updatedOrder);
+    const normalizedOrder = syncOrderFromResponse(updatedOrder);
     setOrders((prev) => prev.map((order) => (
       order.id === normalizedOrder.id ? normalizedOrder : order
     )));
     return normalizedOrder;
   }, [session]);
 
-  const markOrderAsReceived = useCallback(async (orderId, receiptImageDataUrl = '') => {
-    const receivedOrder = await apiRequest(`/api/orders/${orderId}/receive`, {
+  const markOrderAsDelivered = useCallback(async (orderId) => {
+    const deliveredOrder = await apiRequest(`/api/orders/${orderId}/deliver`, {
+      method: 'POST',
+    }, {
+      auth: true,
+      accessToken: session?.access_token,
+    });
+
+    const normalizedOrder = syncOrderFromResponse(deliveredOrder);
+    setOrders((prev) => prev.map((order) => (
+      order.id === normalizedOrder.id ? normalizedOrder : order
+    )));
+    return normalizedOrder;
+  }, [session]);
+
+  const confirmOrderReceipt = useCallback(async (orderId, receiptImageDataUrl = '') => {
+    const confirmedOrder = await apiRequest(`/api/orders/${orderId}/confirm-receipt`, {
       method: 'POST',
       body: JSON.stringify({
         receiptImageDataUrl,
@@ -206,7 +314,67 @@ export const OrderProvider = ({ children }) => {
       accessToken: session?.access_token,
     });
 
-    const normalizedOrder = normalizeOrder(receivedOrder);
+    const normalizedOrder = syncOrderFromResponse(confirmedOrder);
+    setOrders((prev) => prev.map((order) => (
+      order.id === normalizedOrder.id ? normalizedOrder : order
+    )));
+    return normalizedOrder;
+  }, [session]);
+
+  const markOrderAsReceived = confirmOrderReceipt;
+
+  const submitOrderIssue = useCallback(async (orderId, issueData = {}) => {
+    const reportedOrder = await apiRequest(`/api/orders/${orderId}/report-issue`, {
+      method: 'POST',
+      body: JSON.stringify({
+        customer_name: issueData.customerName || issueData.customer_name || '',
+        description: issueData.description || '',
+        issue_type: issueData.issueType || issueData.issue_type || 'damage',
+        evidence_image_data_url: issueData.evidenceImageDataUrl || issueData.evidence_image_data_url || '',
+      }),
+    }, {
+      auth: true,
+      accessToken: session?.access_token,
+    });
+
+    const normalizedOrder = syncOrderFromResponse(reportedOrder);
+    setOrders((prev) => prev.map((order) => (
+      order.id === normalizedOrder.id ? normalizedOrder : order
+    )));
+    return normalizedOrder;
+  }, [session]);
+
+  const reviewOrderIssue = useCallback(async (reportId, decision, reason = '') => {
+    const reviewResult = await apiRequest(`/api/orders/reports/${reportId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({
+        decision,
+        reason,
+      }),
+    }, {
+      auth: true,
+      accessToken: session?.access_token,
+    });
+
+    const normalizedOrder = syncOrderFromResponse(reviewResult);
+    setOrders((prev) => prev.map((order) => (
+      order.id === normalizedOrder.id ? normalizedOrder : order
+    )));
+    return normalizedOrder;
+  }, [session]);
+
+  const cancelOrder = useCallback(async (orderId, reason = '') => {
+    const cancelledOrder = await apiRequest(`/api/orders/${orderId}/cancel`, {
+      method: 'POST',
+      body: JSON.stringify({
+        reason,
+      }),
+    }, {
+      auth: true,
+      accessToken: session?.access_token,
+    });
+
+    const normalizedOrder = syncOrderFromResponse(cancelledOrder);
     setOrders((prev) => prev.map((order) => (
       order.id === normalizedOrder.id ? normalizedOrder : order
     )));
@@ -220,7 +388,12 @@ export const OrderProvider = ({ children }) => {
         isOrdersLoading,
         addOrder,
         updateOrderStatus,
+        markOrderAsDelivered,
+        confirmOrderReceipt,
         markOrderAsReceived,
+        submitOrderIssue,
+        reviewOrderIssue,
+        cancelOrder,
         refreshOrders,
       }}
     >

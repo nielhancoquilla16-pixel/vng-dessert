@@ -1,8 +1,155 @@
 import { randomUUID } from 'node:crypto';
 
-export const VALID_ORDER_STATUSES = ['pending', 'confirmed', 'preparing', 'ready', 'processing', 'completed', 'received', 'delivered', 'cancelled'];
+const ORDER_STATUS_SEQUENCE = ['pending', 'confirmed', 'preparing', 'ready', 'out-for-delivery', 'delivered', 'completed', 'cancelled', 'refunded'];
+const ORDER_STATUS_ALIASES = new Map([
+  ['processing', 'preparing'],
+  ['received', 'completed'],
+  ['out_for_delivery', 'out-for-delivery'],
+  ['out for delivery', 'out-for-delivery'],
+  ['returned/refunded', 'refunded'],
+  ['returned', 'refunded'],
+]);
+
+export const VALID_ORDER_STATUSES = ORDER_STATUS_SEQUENCE;
 export const DELIVERY_FEE = 50;
 export const DEFAULT_READY_NOTIFICATION_MESSAGE = 'Your order is ready for pickup. Please proceed to the cashier and present your QR code.';
+
+const STATUS_TIMESTAMP_KEYS = {
+  pending: 'pending',
+  confirmed: 'confirmed',
+  preparing: 'preparing',
+  ready: 'ready',
+  'out-for-delivery': 'out_for_delivery',
+  delivered: 'delivered',
+  completed: 'completed',
+  cancelled: 'cancelled',
+  refunded: 'refunded',
+};
+
+export const normalizeOrderStatus = (value = '') => {
+  const normalized = String(value || '').trim().toLowerCase();
+  return ORDER_STATUS_ALIASES.get(normalized) || normalized;
+};
+
+export const normalizeReviewStatus = (value = '') => {
+  const normalized = String(value || '').trim().toLowerCase();
+
+  if (normalized === 'under review') {
+    return 'under_review';
+  }
+
+  if (['none', 'under_review', 'approved', 'rejected'].includes(normalized)) {
+    return normalized;
+  }
+
+  return 'none';
+};
+
+export const normalizeStatusTimestamps = (value = {}) => {
+  if (!value || typeof value !== 'object') {
+    return {};
+  }
+
+  return Object.entries(value).reduce((accumulator, [key, timestamp]) => {
+    const normalizedKey = normalizeOrderStatus(key);
+    const mappedKey = STATUS_TIMESTAMP_KEYS[normalizedKey] || key;
+
+    if (timestamp) {
+      accumulator[mappedKey] = timestamp;
+    }
+
+    return accumulator;
+  }, {});
+};
+
+export const normalizeNotifications = (value = []) => (
+  Array.isArray(value)
+    ? value.map((entry) => ({
+        audience: String(entry?.audience || 'customer').toLowerCase(),
+        type: String(entry?.type || 'info').toLowerCase(),
+        message: String(entry?.message || entry?.title || '').trim(),
+        createdAt: entry?.createdAt || entry?.created_at || new Date().toISOString(),
+      }))
+    : []
+);
+
+export const hasLecheFlanItems = (items = []) => (
+  items.some((item) => {
+    const name = String(item?.name || item?.product_name || item?.productName || '').toLowerCase();
+    const category = String(item?.category || '').toLowerCase();
+    const description = String(item?.description || '').toLowerCase();
+
+    return /leche\s*flan/.test(name) || /leche\s*flan/.test(category) || /leche\s*flan/.test(description);
+  })
+);
+
+export const getLecheFlanRestrictionMessage = (distanceKm) => (
+  Number(distanceKm) > 3
+    ? 'Leche flan delivery is limited to 3 km only.'
+    : ''
+);
+
+export const normalizeIssueReport = (report = {}) => ({
+  id: report.id,
+  orderId: report.order_id || report.orderId || '',
+  userId: report.user_id || report.userId || '',
+  customerName: report.customer_name || report.customerName || '',
+  issueType: report.issue_type || report.issueType || 'damage',
+  description: report.description || '',
+  evidenceImageUrl: report.evidence_image_url || report.evidenceImageUrl || '',
+  detectionDate: report.detection_date || report.detectionDate || report.created_at || report.createdAt || '',
+  reviewStatus: normalizeReviewStatus(report.review_status || report.reviewStatus || 'under_review'),
+  status: normalizeReviewStatus(report.review_status || report.reviewStatus || 'under_review'),
+  reviewReason: report.review_reason || report.reviewReason || '',
+  reviewedBy: report.reviewed_by || report.reviewedBy || '',
+  reviewedAt: report.reviewed_at || report.reviewedAt || null,
+  createdAt: report.created_at || report.createdAt || '',
+  updatedAt: report.updated_at || report.updatedAt || '',
+});
+
+const buildInitialNotifications = ({
+  orderStatus,
+  orderCode,
+  cancellationReason = '',
+  customerName = 'Customer',
+}) => {
+  const now = new Date().toISOString();
+  const normalizedStatus = normalizeOrderStatus(orderStatus);
+
+  if (normalizedStatus === 'cancelled') {
+    const message = cancellationReason || 'Your order was cancelled before it could continue in the workflow.';
+
+    return [
+      {
+        audience: 'customer',
+        type: 'order_cancelled',
+        message,
+        createdAt: now,
+      },
+      {
+        audience: 'admin_staff',
+        type: 'order_cancelled',
+        message: `Order ${orderCode} was cancelled. ${message}`,
+        createdAt: now,
+      },
+    ];
+  }
+
+  return [
+    {
+      audience: 'customer',
+      type: 'order_pending',
+      message: `${customerName}, your order ${orderCode} is pending confirmation.`,
+      createdAt: now,
+    },
+    {
+      audience: 'admin_staff',
+      type: 'new_order',
+      message: `Order ${orderCode} is pending confirmation.`,
+      createdAt: now,
+    },
+  ];
+};
 
 export const generateOrderCode = () => `VNG-${randomUUID().replace(/-/g, '').slice(0, 10).toUpperCase()}`;
 
@@ -17,11 +164,21 @@ export const orderSelect = `
   payment_method,
   total_price,
   order_status,
+  review_status,
+  review_reason,
+  review_status_updated_at,
+  cancellation_reason,
+  delivery_distance_km,
+  contains_leche_flan,
+  inventory_deducted_at,
   qr_claimed_at,
   ready_notified_at,
   ready_notification_message,
   receipt_image_url,
   receipt_received_at,
+  notifications,
+  status_timestamps,
+  updated_at,
   created_at,
   profiles (
     id,
@@ -41,6 +198,21 @@ export const orderSelect = `
       category,
       image_url
     )
+  ),
+  order_issue_reports (
+    id,
+    user_id,
+    customer_name,
+    issue_type,
+    description,
+    evidence_image_url,
+    detection_date,
+    review_status,
+    review_reason,
+    reviewed_by,
+    reviewed_at,
+    created_at,
+    updated_at
   )
 `;
 
@@ -93,13 +265,29 @@ export const mapOrder = (row) => {
     || 'Customer';
 
   const paymentLabel = getPaymentLabel(row.payment_method);
-  const normalizedStatus = String(row.order_status || 'pending').toLowerCase();
+  const normalizedStatus = normalizeOrderStatus(row.order_status || 'pending');
+  const normalizedReviewStatus = normalizeReviewStatus(row.review_status || 'none');
   const orderCode = row.order_code || toDisplayId(row.id);
   const subtext = row.delivery_method === 'delivery'
     ? (row.address || 'Delivery')
     : `Walk-in / ${paymentLabel}${paymentLabel === 'Cash' ? ' on Pickup' : ''}`;
   const createdAt = row.created_at || new Date().toISOString();
   const totalPrice = Number(row.total_price) || 0;
+  const statusTimestamps = normalizeStatusTimestamps(row.status_timestamps || {});
+  const notifications = normalizeNotifications(row.notifications || []);
+  const issueReports = (row.order_issue_reports || [])
+    .map(normalizeIssueReport)
+    .sort((left, right) => {
+      const leftTime = new Date(left.createdAt || left.detectionDate || 0).getTime();
+      const rightTime = new Date(right.createdAt || right.detectionDate || 0).getTime();
+      return rightTime - leftTime;
+    });
+  const deliveryDistanceKm = Number(row.delivery_distance_km);
+  const containsLecheFlan = Boolean(
+    row.contains_leche_flan
+    || hasLecheFlanItems(mappedItems),
+  );
+  const latestIssueReport = issueReports[0] || null;
 
   return {
     id: row.id,
@@ -113,13 +301,21 @@ export const mapOrder = (row) => {
     address: row.address || '',
     deliveryMethod: row.delivery_method || 'pickup',
     paymentMethod: row.payment_method || 'cash',
+    deliveryDistanceKm: Number.isFinite(deliveryDistanceKm) ? deliveryDistanceKm : null,
+    containsLecheFlan,
     subtext,
     totalPrice,
     totalAmount: totalPrice,
     total: formatCurrency(totalPrice),
-    orderStatus: row.order_status,
+    orderStatus: normalizedStatus,
     status: normalizedStatus,
+    reviewStatus: normalizedReviewStatus,
+    reviewReason: row.review_reason || '',
+    reviewStatusUpdatedAt: row.review_status_updated_at || null,
+    cancellationReason: row.cancellation_reason || '',
+    inventoryDeductedAt: row.inventory_deducted_at || null,
     createdAt,
+    updatedAt: row.updated_at || createdAt,
     date: createdAt.split('T')[0],
     lineItems: mappedItems,
     items: buildItemsText(mappedItems),
@@ -129,10 +325,22 @@ export const mapOrder = (row) => {
     readyNotificationMessage: row.ready_notification_message || '',
     receiptImageUrl: row.receipt_image_url || '',
     receiptReceivedAt: row.receipt_received_at || null,
+    notifications,
+    statusTimestamps,
+    confirmedAt: statusTimestamps.confirmed || null,
+    preparingAt: statusTimestamps.preparing || null,
+    readyAt: statusTimestamps.ready || null,
+    outForDeliveryAt: statusTimestamps.out_for_delivery || null,
+    deliveredAt: statusTimestamps.delivered || null,
+    completedAt: statusTimestamps.completed || null,
+    cancelledAt: statusTimestamps.cancelled || null,
+    refundedAt: statusTimestamps.refunded || null,
+    issueReports,
+    latestIssueReport,
     qrActive: row.delivery_method === 'pickup'
       && String(row.payment_method || 'cash').toLowerCase() === 'cash'
       && !row.qr_claimed_at
-      && !['completed', 'received', 'cancelled'].includes(normalizedStatus),
+      && !['completed', 'cancelled', 'refunded', 'delivered'].includes(normalizedStatus),
   };
 };
 
@@ -256,9 +464,27 @@ export const createFulfilledOrder = async (
     paymentMethod = 'cash',
     totalPrice = 0,
     orderStatus = 'pending',
+    deliveryDistanceKm = null,
     items = [],
   },
 ) => {
+  const normalizedStatus = normalizeOrderStatus(orderStatus);
+  const normalizedDistance = Number(deliveryDistanceKm);
+  const now = new Date().toISOString();
+  const containsLecheFlan = hasLecheFlanItems(items);
+  const cancellationReason = normalizedStatus === 'cancelled'
+    ? getLecheFlanRestrictionMessage(normalizedDistance) || 'The order was cancelled before fulfillment.'
+    : null;
+  const statusTimestamps = {
+    [STATUS_TIMESTAMP_KEYS[normalizedStatus] || normalizedStatus]: now,
+  };
+  const notifications = buildInitialNotifications({
+    orderStatus: normalizedStatus,
+    orderCode,
+    cancellationReason: cancellationReason || '',
+    customerName: customerName || profile?.full_name || profile?.username || 'Customer',
+  });
+
   const { data: createdOrder, error: orderError } = await supabase
     .from('orders')
     .insert({
@@ -270,7 +496,16 @@ export const createFulfilledOrder = async (
       delivery_method: deliveryMethod,
       payment_method: paymentMethod,
       total_price: Number(totalPrice) || 0,
-      order_status: String(orderStatus).toLowerCase(),
+      order_status: normalizedStatus,
+      review_status: 'none',
+      review_reason: null,
+      review_status_updated_at: null,
+      cancellation_reason: cancellationReason || null,
+      delivery_distance_km: Number.isFinite(normalizedDistance) ? normalizedDistance : null,
+      contains_leche_flan: containsLecheFlan,
+      inventory_deducted_at: null,
+      notifications,
+      status_timestamps: statusTimestamps,
     })
     .select('*')
     .single();
@@ -294,26 +529,8 @@ export const createFulfilledOrder = async (
     throw itemsError;
   }
 
-  for (const item of items) {
-    const availableStock = Number(item.available_stock_quantity);
-    const nextStock = Math.max(
-      0,
-      (Number.isFinite(availableStock) ? availableStock : Number(item.stock_quantity) || 0) - item.quantity,
-    );
-
-    const { error: updateProductError } = await supabase
-      .from('products')
-      .update({
-        stock_quantity: nextStock,
-        availability: getAvailabilityForStock(nextStock),
-      })
-      .eq('id', item.product_id);
-
-    if (updateProductError) {
-      throw updateProductError;
-    }
+  if (normalizedStatus !== 'cancelled') {
+    await clearUserCart(supabase, userId);
   }
-
-  await clearUserCart(supabase, userId);
   return mapOrder(await hydrateOrderById(supabase, createdOrder.id));
 };
