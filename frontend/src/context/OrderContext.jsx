@@ -364,22 +364,36 @@ export const OrderProvider = ({ children }) => {
   }, [session]);
 
   const cancelOrder = useCallback(async (orderId, reason = '') => {
-    const cancelledOrder = await apiRequest(`/api/orders/${orderId}/cancel`, {
-      method: 'POST',
-      body: JSON.stringify({
-        reason,
-      }),
-    }, {
-      auth: true,
-      accessToken: session?.access_token,
-    });
+    const normalizedRole = String(userRole || '').toLowerCase();
+    const isPrivileged = ['admin', 'staff'].includes(normalizedRole);
+
+    const cancelledOrder = isPrivileged
+      ? await apiRequest(`/api/orders/${orderId}/status`, {
+          method: 'PATCH',
+          body: JSON.stringify({
+            order_status: 'cancelled',
+            ...(reason ? { reason } : {}),
+          }),
+        }, {
+          auth: true,
+          accessToken: session?.access_token,
+        })
+      : await apiRequest(`/api/orders/${orderId}/cancel`, {
+          method: 'POST',
+          body: JSON.stringify({
+            reason,
+          }),
+        }, {
+          auth: true,
+          accessToken: session?.access_token,
+        });
 
     const normalizedOrder = syncOrderFromResponse(cancelledOrder);
     setOrders((prev) => prev.map((order) => (
       order.id === normalizedOrder.id ? normalizedOrder : order
     )));
     return normalizedOrder;
-  }, [session]);
+  }, [session, userRole]);
 
   return (
     <OrderContext.Provider
