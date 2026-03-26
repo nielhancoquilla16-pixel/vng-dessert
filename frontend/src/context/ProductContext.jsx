@@ -1,6 +1,7 @@
 /* eslint-disable react-refresh/only-export-components */
 import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
 import { apiRequest, isBackendIssueError } from '../lib/api';
+import { subscribeToDatabaseChanges } from '../lib/realtime';
 import { useAuth } from './AuthContext';
 import { resolveAssetUrl } from '../lib/publicUrl';
 
@@ -168,6 +169,34 @@ export const ProductProvider = ({ children }) => {
       isActive = false;
     };
   }, [isAuthLoading, refreshInventory]);
+
+  useEffect(() => {
+    if (isAuthLoading) {
+      return undefined;
+    }
+
+    return subscribeToDatabaseChanges({
+      channelName: 'products-sync',
+      tables: ['products'],
+      onChange: refreshProducts,
+    });
+  }, [isAuthLoading, refreshProducts]);
+
+  useEffect(() => {
+    if (
+      isAuthLoading
+      || !session?.access_token
+      || !['admin', 'staff'].includes(userRole)
+    ) {
+      return undefined;
+    }
+
+    return subscribeToDatabaseChanges({
+      channelName: `inventory-sync-${userRole}`,
+      tables: ['inventory'],
+      onChange: refreshInventory,
+    });
+  }, [isAuthLoading, refreshInventory, session?.access_token, userRole]);
 
   const addProduct = useCallback(async (product) => {
     const createdProduct = await apiRequest('/api/products', {

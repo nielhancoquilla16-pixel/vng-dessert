@@ -1,6 +1,7 @@
 /* eslint-disable react-refresh/only-export-components */
 import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
 import { apiRequest, isBackendIssueError } from '../lib/api';
+import { subscribeToDatabaseChanges } from '../lib/realtime';
 import { useAuth } from './AuthContext';
 import {
   isHistoryOrderStatus,
@@ -244,6 +245,18 @@ export const OrderProvider = ({ children }) => {
       isActive = false;
     };
   }, [isAuthLoading, refreshOrders]);
+
+  useEffect(() => {
+    if (isAuthLoading || !session?.access_token) {
+      return undefined;
+    }
+
+    return subscribeToDatabaseChanges({
+      channelName: `orders-sync-${userRole || 'guest'}`,
+      tables: ['orders', 'order_items', 'order_issue_reports', 'payment_checkouts'],
+      onChange: refreshOrders,
+    });
+  }, [isAuthLoading, refreshOrders, session?.access_token, userRole]);
 
   const addOrder = useCallback(async (orderData) => {
     const payload = {
