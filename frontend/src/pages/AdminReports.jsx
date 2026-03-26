@@ -92,6 +92,7 @@ const AdminReports = () => {
     .sort((left, right) => new Date(right.detectionDate || right.createdAt || 0).getTime() - new Date(left.detectionDate || left.createdAt || 0).getTime());
 
   const pendingReports = issueReports.filter((report) => normalizeReviewStatus(report.reviewStatus) === 'under_review');
+  const formatIssueType = (value) => String(value || 'damage').replace(/_/g, ' ');
 
   const setDraft = (reportId, patch) => {
     setReviewDrafts((current) => ({
@@ -358,11 +359,11 @@ const AdminReports = () => {
                     <div>
                       <p className="issue-report-kicker">Order {report.orderId}</p>
                       <h4>{report.customerName || report.orderCustomer || 'Customer'}</h4>
-                      <p className="issue-report-meta">
-                        {report.issueType.replace(/_/g, ' ')} - {report.orderStatus} - {formatCurrency(getOrderTotalAmount({
+                    <p className="issue-report-meta">
+                        {formatIssueType(report.issueType)} - {report.orderStatus} - {formatCurrency(getOrderTotalAmount({
                           total: report.orderTotal,
                         }))}
-                      </p>
+                    </p>
                     </div>
                     <span className="issue-report-badge">Under Review</span>
                   </div>

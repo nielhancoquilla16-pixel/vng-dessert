@@ -7,6 +7,7 @@ const AdminContent = () => {
   const { siteVideos, updateVideo, defaultVideos } = useContent();
   const [editingId, setEditingId] = useState(null);
   const [formData, setFormData] = useState({});
+  const safeSiteVideos = Array.isArray(siteVideos) ? siteVideos.filter(Boolean) : [];
 
   const handleEdit = (video) => {
     setEditingId(video.id);
@@ -40,20 +41,20 @@ const AdminContent = () => {
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(400px, 1fr))', gap: '2rem' }}>
-        {siteVideos.map(video => (
-          <div key={video.id} style={{ 
-            background: 'white', 
-            borderRadius: '1rem', 
-            padding: '1.5rem', 
+        {safeSiteVideos.map((video) => (
+          <div key={video?.id} style={{
+            background: 'white',
+            borderRadius: '1rem',
+            padding: '1.5rem',
             boxShadow: '0 4px 6px -1px rgba(0,0,0,0.1)',
             border: '1px solid #e2e8f0'
           }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1rem' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                 <PlayCircle size={24} color="#f97316" />
-                <h3 style={{ margin: 0 }}>Section {video.id}</h3>
+                <h3 style={{ margin: 0 }}>Section {video?.id}</h3>
               </div>
-              {editingId !== video.id ? (
+              {editingId !== video?.id ? (
                 <button 
                   onClick={() => handleEdit(video)}
                   style={{ background: '#f8fafc', border: '1px solid #cbd5e1', padding: '0.5rem', borderRadius: '0.5rem', cursor: 'pointer' }}
@@ -73,12 +74,12 @@ const AdminContent = () => {
               marginBottom: '1.5rem'
             }}>
               <MediaEmbed
-                url={editingId === video.id ? formData.src : video.src}
-                title={`Section ${video.id} preview`}
+                url={editingId === video?.id ? formData.src : video?.src}
+                title={`Section ${video?.id} preview`}
               />
             </div>
 
-            {editingId === video.id ? (
+            {editingId === video?.id ? (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
                 <div>
                   <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, color: '#475569', marginBottom: '0.25rem' }}>Video URL (YouTube, Facebook, MP4)</label>
@@ -94,7 +95,7 @@ const AdminContent = () => {
                   <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, color: '#475569', marginBottom: '0.25rem' }}>Title</label>
                   <input 
                     name="title" 
-                    value={formData.title} 
+                    value={formData.title || ''}
                     onChange={handleChange}
                     style={{ width: '100%', padding: '0.75rem', borderRadius: '0.5rem', border: '1px solid #cbd5e1' }}
                   />
@@ -103,7 +104,7 @@ const AdminContent = () => {
                   <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, color: '#475569', marginBottom: '0.25rem' }}>Description Text</label>
                   <textarea 
                     name="text" 
-                    value={formData.text} 
+                    value={formData.text || ''}
                     onChange={handleChange}
                     style={{ width: '100%', padding: '0.75rem', borderRadius: '0.5rem', border: '1px solid #cbd5e1', minHeight: '100px', resize: 'vertical' }}
                   />
@@ -111,7 +112,7 @@ const AdminContent = () => {
                 
                 <div style={{ display: 'flex', gap: '1rem', marginTop: '0.5rem' }}>
                   <button 
-                    onClick={() => handleSave(video.id)}
+                    onClick={() => handleSave(video?.id)}
                     style={{ flex: 1, background: '#10b981', color: 'white', border: 'none', padding: '0.75rem', borderRadius: '0.5rem', fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', cursor: 'pointer' }}
                   >
                     <Save size={18} /> Save Changes
@@ -126,11 +127,11 @@ const AdminContent = () => {
               </div>
             ) : (
               <div>
-                <h4 style={{ fontSize: '1.25rem', marginBottom: '0.5rem', color: '#1e293b' }}>{video.title}</h4>
-                <p style={{ color: '#64748b', fontSize: '0.95rem', lineHeight: 1.5, marginBottom: '1.5rem' }}>{video.text}</p>
+                <h4 style={{ fontSize: '1.25rem', marginBottom: '0.5rem', color: '#1e293b' }}>{video?.title || `Section ${video?.id}`}</h4>
+                <p style={{ color: '#64748b', fontSize: '0.95rem', lineHeight: 1.5, marginBottom: '1.5rem' }}>{video?.text || 'No description provided yet.'}</p>
                 
                 <button 
-                  onClick={() => handleReset(video.id)}
+                  onClick={() => handleReset(video?.id)}
                   style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'none', border: 'none', color: '#f97316', fontSize: '0.85rem', cursor: 'pointer', padding: 0 }}
                 >
                   <RefreshCw size={14} /> Restore Default Video

@@ -15,19 +15,43 @@ export const useContent = () => {
 
 // Initial default videos
 const defaultVideos = [
-  { 
-    id: 1, 
-    src: adverVideo, 
-    title: "Advertise Video", 
-    text: "You want to know more about our leche flan? Watch this video to see how we make our delicious desserts and why customers love us!" 
+  {
+    id: 1,
+    src: adverVideo,
+    title: 'Advertise Video',
+    text: 'You want to know more about our leche flan? Watch this video to see how we make our delicious desserts and why customers love us!',
   },
-  { 
-    id: 2, 
-    src: promoVideo, 
-    title: "Promotional Video", 
-    text: "Check out our latest promo! Watch this video to see how our desserts can make your celebrations even sweeter." 
-  }
+  {
+    id: 2,
+    src: promoVideo,
+    title: 'Promotional Video',
+    text: 'Check out our latest promo! Watch this video to see how our desserts can make your celebrations even sweeter.',
+  },
 ];
+
+const normalizeVideo = (video, fallbackId) => {
+  if (!video || typeof video !== 'object') {
+    return null;
+  }
+
+  const id = Number.isFinite(Number(video.id)) ? Number(video.id) : fallbackId;
+
+  return {
+    id,
+    src: String(video.src || '').trim(),
+    title: String(video.title || `Section ${id}`).trim(),
+    text: String(video.text || '').trim(),
+  };
+};
+
+const sanitizeVideoList = (videos = defaultVideos) => {
+  const list = Array.isArray(videos) ? videos : defaultVideos;
+  const normalized = list
+    .map((video, index) => normalizeVideo(video, index + 1))
+    .filter(Boolean);
+
+  return normalized.length > 0 ? normalized : defaultVideos;
+};
 
 const readStoredVideos = () => {
   if (typeof window === 'undefined' || !window.localStorage) {
@@ -41,7 +65,7 @@ const readStoredVideos = () => {
     }
 
     const parsed = JSON.parse(saved);
-    return Array.isArray(parsed) ? parsed : defaultVideos;
+    return sanitizeVideoList(parsed);
   } catch {
     try {
       localStorage.removeItem('vng_site_videos');
@@ -68,9 +92,13 @@ export const ContentProvider = ({ children }) => {
   }, [siteVideos]);
 
   const updateVideo = (id, newVideoData) => {
-    setSiteVideos(prev => 
-      prev.map(video => video.id === id ? { ...video, ...newVideoData } : video)
-    );
+    setSiteVideos((prev) => (
+      sanitizeVideoList(prev).map((video) => (
+        video.id === id
+          ? normalizeVideo({ ...video, ...newVideoData }, id) || video
+          : video
+      ))
+    ));
   };
 
   return (

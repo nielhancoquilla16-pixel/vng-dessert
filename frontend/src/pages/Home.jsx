@@ -92,6 +92,7 @@ const Home = () => {
   const { products, isProductsLoading } = useProducts();
   const { getSmartRecommendations } = useAI();
   const { siteVideos } = useContent();
+  const safeSiteVideos = Array.isArray(siteVideos) ? siteVideos.filter(Boolean) : [];
 
   useEffect(() => {
     if (location.state?.welcomeMessage) {
@@ -389,19 +390,20 @@ const Home = () => {
         </div>
 
         <div className="video-grid">
-          {(siteVideos || []).map((video) => {
-            const isReel = video.src && (video.src.includes('/share/r/') || video.src.includes('/reel/'));
+          {safeSiteVideos.map((video) => {
+            const videoSrc = String(video?.src || '');
+            const isReel = videoSrc && (videoSrc.includes('/share/r/') || videoSrc.includes('/reel/'));
             return (
-              <div key={video.id} className="video-card">
+              <div key={video?.id || videoSrc} className="video-card">
                 <div
                   className="video-player-container"
                   style={isReel ? { aspectRatio: '9/16', maxHeight: '550px', maxWidth: '310px', margin: '0 auto' } : {}}
                 >
-                  <VideoEmbed url={video.src} />
+                  <VideoEmbed url={videoSrc} />
                 </div>
                 <div className="video-info">
-                  <h3>{video.title}</h3>
-                  <p>{video.text}</p>
+                  <h3>{video?.title || 'Promotional Video'}</h3>
+                  <p>{video?.text || 'Watch this section to learn more about V&G desserts.'}</p>
                 </div>
               </div>
             );

@@ -104,6 +104,8 @@ const getNextWorkflowAction = (order) => {
   return null;
 };
 
+const formatIssueType = (value) => String(value || 'damage').replace(/_/g, ' ');
+
 const AdminOrders = () => {
   const { orders, updateOrderStatus, updateOrderItems, cancelOrder } = useOrders();
   const { products, validateStockAvailability } = useProducts();
@@ -951,7 +953,7 @@ const AdminOrders = () => {
                   <div className="admin-order-reports">
                     {selectedOrderReports.map((report) => (
                       <div key={report.id} className="admin-order-report-card">
-                        <strong>{report.issueType.replace(/_/g, ' ')}</strong>
+                        <strong>{formatIssueType(report.issueType)}</strong>
                         <p>{report.description}</p>
                         <span>{getReviewStatusLabel(report.reviewStatus)}</span>
                       </div>

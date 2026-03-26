@@ -69,6 +69,8 @@ const getNotificationAudience = (notification) => String(notification?.audience 
 
 const getNotificationType = (notification) => String(notification?.type || 'info').toLowerCase();
 
+const formatIssueType = (value) => String(value || 'damage').replace(/_/g, ' ');
+
 const Orders = () => {
   const { loggedInCustomer } = useAuth();
   const { orders, isOrdersLoading, confirmOrderReceipt, submitOrderIssue, cancelOrder } = useOrders();
@@ -867,7 +869,7 @@ const Orders = () => {
                 </div>
                 <div>
                   <p className="orders-notification-title">
-                    {notification.orderId} - {notification.type.replace(/_/g, ' ')}
+                    {notification.orderId} - {formatIssueType(notification.type)}
                   </p>
                   <h3>{notification.message}</h3>
                   <span>{formatDateTime(notification.createdAt)}</span>
