@@ -1265,6 +1265,11 @@
   border-color: #fdba74;
 }
 
+.order-action-panel--cancel {
+  background: linear-gradient(180deg, #fef2f2 0%, #ffffff 100%);
+  border-color: #fecaca;
+}
+
 .order-action-panel-header {
   display: flex;
   justify-content: space-between;
@@ -1445,6 +1450,11 @@
 
 .order-button--danger:hover {
   background: #fef2f2;
+}
+
+.order-button--danger.is-active {
+  background: #fee2e2;
+  border-color: #fca5a5;
 }
 
 .order-button--ghost {

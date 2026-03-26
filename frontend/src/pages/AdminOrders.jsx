@@ -106,6 +106,8 @@ const AdminOrders = () => {
   const [pageNotice, setPageNotice] = useState('');
   const [pageError, setPageError] = useState('');
   const [loadingAction, setLoadingAction] = useState(null);
+  const [cancelDrafts, setCancelDrafts] = useState({});
+  const [openCancelOrderId, setOpenCancelOrderId] = useState('');
 
   useEffect(() => {
     if (!selectedOrderId && orders.length > 0) {
@@ -187,16 +189,38 @@ const AdminOrders = () => {
     }
   };
 
+  const setCancelDraft = (orderId, patch) => {
+    setCancelDrafts((current) => ({
+      ...current,
+      [orderId]: {
+        ...(current[orderId] || {
+          reason: '',
+          error: '',
+        }),
+        ...patch,
+      },
+    }));
+  };
+
   const handleCancel = async (order) => {
-    const reason = window.prompt('Cancellation reason', '') || '';
+    const draft = cancelDrafts[order.id] || {};
+    const reason = String(draft.reason || '').trim();
 
     setLoadingAction({ type: 'cancel', orderId: order.id });
     setPageError('');
 
     try {
       await cancelOrder(order.id, reason);
+      setCancelDraft(order.id, {
+        reason: '',
+        error: '',
+      });
+      setOpenCancelOrderId('');
       setPageNotice(`Order ${order.displayId || order.orderCode || order.id} was cancelled.`);
     } catch (error) {
+      setCancelDraft(order.id, {
+        error: error.message || 'Unable to cancel this order right now.',
+      });
       setPageError(error.message || 'Unable to cancel this order right now.');
     } finally {
       setLoadingAction(null);
@@ -214,6 +238,65 @@ const AdminOrders = () => {
     </div>
   );
 
+  const renderCancelPanel = (order, isOpen) => {
+    if (!canStaffCancelOrder(order) || !isOpen) {
+      return null;
+    }
+
+    const draft = cancelDrafts[order.id] || {
+      reason: '',
+      error: '',
+    };
+    const isLoading = loadingAction?.type === 'cancel' && loadingAction.orderId === order.id;
+
+    return (
+      <div className="admin-order-cancel-panel">
+        <div className="admin-order-cancel-panel-header">
+          <div>
+            <p className="admin-orders-kicker">Cancel order</p>
+            <h3>Cancellation reason</h3>
+          </div>
+          <button
+            type="button"
+            className="admin-order-action-btn admin-order-action-btn--ghost"
+            onClick={() => setOpenCancelOrderId('')}
+          >
+            Hide form
+          </button>
+        </div>
+
+        <p className="admin-order-cancel-copy">
+          Staff and admin can cancel the order before delivery. The reason is optional, but it helps document the action.
+        </p>
+
+        <div className="admin-order-cancel-field">
+          <label htmlFor={`cancel-reason-${order.id}`}>Reason (optional)</label>
+          <textarea
+            id={`cancel-reason-${order.id}`}
+            className="admin-order-cancel-input"
+            value={draft.reason || ''}
+            onChange={(event) => setCancelDraft(order.id, { reason: event.target.value, error: '' })}
+            placeholder="Add a short reason for the cancellation."
+          />
+        </div>
+
+        {draft.error && <div className="admin-order-cancel-error">{draft.error}</div>}
+
+        <div className="admin-order-cancel-actions">
+          <button
+            type="button"
+            className="admin-order-action-btn admin-order-action-btn--danger"
+            onClick={() => void handleCancel(order)}
+            disabled={isLoading}
+          >
+            {isLoading ? <Loader2 size={16} className="spin" /> : <Undo2 size={16} />}
+            {isLoading ? 'Cancelling...' : 'Confirm Cancellation'}
+          </button>
+        </div>
+      </div>
+    );
+  };
+
   const selectedOrderNotifications = (selectedOrder?.notifications || [])
     .filter((notification) => {
       const audience = String(notification?.audience || '').toLowerCase();
@@ -223,6 +306,7 @@ const AdminOrders = () => {
 
   const selectedOrderReports = (selectedOrder?.issueReports || []).slice(0, 3);
   const nextAction = selectedOrder ? getNextWorkflowAction(selectedOrder) : null;
+  const isCancelOpen = openCancelOrderId === selectedOrder?.id;
   const loadingStatus = loadingAction?.type === 'status' && loadingAction.orderId === selectedOrder?.id;
   const loadingCancel = loadingAction?.type === 'cancel' && loadingAction.orderId === selectedOrder?.id;
 
@@ -494,15 +578,17 @@ const AdminOrders = () => {
                 {canStaffCancelOrder(selectedOrder) && (
                   <button
                     type="button"
-                    className="admin-order-action-btn admin-order-action-btn--danger"
-                    onClick={() => void handleCancel(selectedOrder)}
+                    className={`admin-order-action-btn admin-order-action-btn--danger ${isCancelOpen ? 'is-active' : ''}`}
+                    onClick={() => setOpenCancelOrderId((current) => (current === selectedOrder.id ? '' : selectedOrder.id))}
                     disabled={loadingStatus || loadingCancel}
                   >
                     {loadingCancel ? <Loader2 size={16} className="spin" /> : <Undo2 size={16} />}
-                    {loadingCancel ? 'Cancelling...' : 'Cancel Order'}
+                    {isCancelOpen ? 'Hide Cancel Form' : 'Cancel Order'}
                   </button>
                 )}
               </div>
+
+              {renderCancelPanel(selectedOrder, isCancelOpen)}
             </>
           )}
         </aside>

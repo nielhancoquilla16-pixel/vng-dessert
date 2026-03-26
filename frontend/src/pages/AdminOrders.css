@@ -778,6 +778,97 @@
   background: #fef2f2;
 }
 
+.admin-order-action-btn--ghost {
+  background: #fff;
+  border-color: #e2e8f0;
+  color: #0f172a;
+}
+
+.admin-order-action-btn--ghost:hover {
+  background: #f8fafc;
+}
+
+.admin-order-action-btn--danger.is-active {
+  background: #fee2e2;
+  border-color: #fca5a5;
+}
+
+.admin-order-cancel-panel {
+  display: grid;
+  gap: 0.85rem;
+  padding: 1rem;
+  border-radius: 1.15rem;
+  border: 1px solid #fecaca;
+  background: linear-gradient(180deg, #fef2f2 0%, #ffffff 100%);
+}
+
+.admin-order-cancel-panel-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: flex-start;
+}
+
+.admin-order-cancel-panel-header h3 {
+  margin: 0;
+  color: #0f172a;
+  font-size: 1.1rem;
+}
+
+.admin-order-cancel-copy {
+  margin: 0;
+  color: #64748b;
+  line-height: 1.55;
+}
+
+.admin-order-cancel-field {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.admin-order-cancel-field label {
+  font-size: 0.82rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #64748b;
+}
+
+.admin-order-cancel-input {
+  width: 100%;
+  min-height: 120px;
+  padding: 0.95rem 1rem;
+  border-radius: 1rem;
+  border: 1px solid #e2e8f0;
+  background: #fff;
+  color: #0f172a;
+  font-size: 0.98rem;
+  resize: vertical;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.admin-order-cancel-input:focus {
+  outline: none;
+  border-color: #f97316;
+  box-shadow: 0 0 0 4px rgba(249, 115, 22, 0.12);
+}
+
+.admin-order-cancel-error {
+  padding: 0.85rem 0.95rem;
+  border-radius: 0.95rem;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  color: #b91c1c;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.admin-order-cancel-actions {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
 .admin-orders-empty {
   min-height: 260px;
   display: grid;
@@ -835,12 +926,17 @@
   }
 
   .admin-orders-filters,
-  .admin-order-actions {
+  .admin-order-actions,
+  .admin-order-cancel-actions {
     flex-direction: column;
   }
 
   .admin-order-action-btn {
     width: 100%;
     justify-content: center;
+  }
+
+  .admin-order-cancel-panel-header {
+    flex-direction: column;
   }
 }

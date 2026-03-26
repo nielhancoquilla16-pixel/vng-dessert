@@ -79,6 +79,8 @@ const Orders = () => {
   const [receiptDrafts, setReceiptDrafts] = useState({});
   const [issueDrafts, setIssueDrafts] = useState({});
   const [openIssueOrderId, setOpenIssueOrderId] = useState('');
+  const [cancelDrafts, setCancelDrafts] = useState({});
+  const [openCancelOrderId, setOpenCancelOrderId] = useState('');
 
   const activeOrders = useMemo(() => (
     [...orders]
@@ -174,6 +176,19 @@ const Orders = () => {
           evidenceImageName: '',
           error: '',
           success: '',
+        }),
+        ...patch,
+      },
+    }));
+  };
+
+  const setCancelDraft = (orderId, patch) => {
+    setCancelDrafts((current) => ({
+      ...current,
+      [orderId]: {
+        ...(current[orderId] || {
+          reason: '',
+          error: '',
         }),
         ...patch,
       },
@@ -314,15 +329,24 @@ const Orders = () => {
   };
 
   const handleCancelOrder = async (order) => {
-    const cancellationReason = window.prompt('Optional cancellation reason', '') || '';
+    const draft = cancelDrafts[order.id] || {};
+    const cancellationReason = String(draft.reason || '').trim();
 
     setLoadingAction({ type: 'cancel', orderId: order.id });
     setPageError('');
 
     try {
       await cancelOrder(order.id, cancellationReason);
+      setCancelDraft(order.id, {
+        reason: '',
+        error: '',
+      });
+      setOpenCancelOrderId('');
       setPageNotice(`Order ${order.displayId || order.orderCode || order.id} has been cancelled.`);
     } catch (error) {
+      setCancelDraft(order.id, {
+        error: error.message || 'Unable to cancel this order right now.',
+      });
       setPageError(error.message || 'Unable to cancel this order right now.');
     } finally {
       setLoadingAction(null);
@@ -548,6 +572,62 @@ const Orders = () => {
     );
   };
 
+  const renderCancelPanel = (order, isOpen) => {
+    if (!canCustomerCancelOrder(order) || !isOpen) {
+      return null;
+    }
+
+    const draft = cancelDrafts[order.id] || {
+      reason: '',
+      error: '',
+    };
+    const isLoading = loadingAction?.type === 'cancel' && loadingAction.orderId === order.id;
+
+    return (
+      <div className="order-action-panel order-action-panel--cancel">
+        <div className="order-action-panel-header">
+          <div>
+            <p className="order-panel-kicker">Cancel Order</p>
+            <h3>Cancellation reason</h3>
+          </div>
+          <button
+            type="button"
+            className="order-button order-button--ghost order-button--compact"
+            onClick={() => setOpenCancelOrderId('')}
+          >
+            Hide form
+          </button>
+        </div>
+
+        <p className="order-panel-copy">
+          Cancel this order while it is still pending. A reason is optional, but it helps the team understand the request.
+        </p>
+
+        <div className="order-form-field">
+          <label>Reason (optional)</label>
+          <textarea
+            className="order-textarea"
+            value={draft.reason || ''}
+            onChange={(event) => setCancelDraft(order.id, { reason: event.target.value, error: '' })}
+            placeholder="Add a short reason for the cancellation."
+          />
+        </div>
+
+        {draft.error && <div className="order-inline-error">{draft.error}</div>}
+
+        <button
+          type="button"
+          className="order-button order-button--danger"
+          onClick={() => void handleCancelOrder(order)}
+          disabled={isLoading}
+        >
+          {isLoading ? <Loader2 size={16} className="spin" /> : <XCircle size={16} />}
+          {isLoading ? 'Cancelling...' : 'Confirm Cancellation'}
+        </button>
+      </div>
+    );
+  };
+
   const renderOrderCard = (order, variant = 'active') => {
     const statusLabel = getOrderStatusLabel(order.status);
     const reviewStatusLabel = getReviewStatusLabel(order.reviewStatus);
@@ -564,6 +644,7 @@ const Orders = () => {
     const isCancelled = order.status === 'cancelled';
     const isRefunded = order.status === 'refunded';
     const isIssueOpen = openIssueOrderId === order.id;
+    const isCancelOpen = openCancelOrderId === order.id;
     const loadingCancel = loadingAction?.type === 'cancel' && loadingAction.orderId === order.id;
 
     return (
@@ -701,12 +782,12 @@ const Orders = () => {
             {canCustomerCancelOrder(order) && (
               <button
                 type="button"
-                className="order-button order-button--danger"
-                onClick={() => void handleCancelOrder(order)}
+                className={`order-button order-button--danger ${isCancelOpen ? 'is-active' : ''}`}
+                onClick={() => setOpenCancelOrderId((current) => (current === order.id ? '' : order.id))}
                 disabled={loadingCancel}
               >
                 {loadingCancel ? <Loader2 size={16} className="spin" /> : <XCircle size={16} />}
-                {loadingCancel ? 'Cancelling...' : 'Cancel Order'}
+                {isCancelOpen ? 'Hide Cancel Form' : 'Cancel Order'}
               </button>
             )}
             {canCustomerReportIssue(order) && (
@@ -723,6 +804,7 @@ const Orders = () => {
         )}
 
         {variant === 'active' && renderReceiptPanel(order)}
+        {variant === 'active' && renderCancelPanel(order, isCancelOpen)}
         {variant === 'active' && renderIssuePanel(order, isIssueOpen)}
       </article>
     );
