@@ -611,6 +611,130 @@ router.post('/', requireAuth, async (req, res, next) => {
   }
 });
 
+router.patch('/:id/items', requireAuth, requireRole('admin', 'staff'), async (req, res, next) => {
+  try {
+    const supabase = getSupabaseAdmin();
+    const currentOrder = await fetchOrderById(supabase, req.params.id);
+    const currentStatus = normalizeOrderStatus(currentOrder.order_status);
+    const currentReviewStatus = normalizeReviewStatus(currentOrder.review_status);
+
+    if (!['pending', 'confirmed'].includes(currentStatus)) {
+      return res.status(400).json({ error: 'Only pending or confirmed orders can be edited from the POS.' });
+    }
+
+    if (currentReviewStatus === 'under_review') {
+      return res.status(409).json({ error: 'This order is under review and cannot be edited right now.' });
+    }
+
+    const items = req.body?.items || req.body?.lineItems || [];
+
+    if (!Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ error: 'At least one order item is required.' });
+    }
+
+    const normalizedItems = normalizeRequestedItems(items);
+
+    if (normalizedItems.some((item) => !item.product_id)) {
+      return res.status(400).json({ error: 'Each order item must include a product_id.' });
+    }
+
+    const productsById = await fetchProductsByIds(
+      supabase,
+      [...new Set(normalizedItems.map((item) => item.product_id))],
+    );
+    const shortages = getShortagesForItems(normalizedItems, productsById);
+
+    if (shortages.length > 0) {
+      return res.status(409).json({
+        error: 'Some products do not have enough stock.',
+        shortages,
+      });
+    }
+
+    const finalizedItems = enrichItemsFromProducts(normalizedItems, productsById).map((item) => ({
+      ...item,
+      available_stock_quantity: Number(productsById.get(item.product_id)?.stock_quantity) || 0,
+    }));
+
+    const deliveryMethod = String(req.body?.delivery_method || currentOrder.delivery_method || 'pickup').toLowerCase();
+    const paymentMethod = String(req.body?.payment_method || currentOrder.payment_method || 'cash').toLowerCase();
+    const normalizedDistanceValue = Number(req.body?.delivery_distance_km ?? currentOrder.delivery_distance_km);
+    const deliveryDistanceKm = Number.isFinite(normalizedDistanceValue) ? normalizedDistanceValue : null;
+    const subtotal = finalizedItems.reduce((sum, item) => sum + (Number(item.price) || 0) * (Number(item.quantity) || 0), 0);
+    const totalPrice = subtotal + (deliveryMethod === 'delivery' ? DELIVERY_FEE : 0);
+    const containsLecheFlan = hasLecheFlanItems(finalizedItems);
+    const restrictionMessage = deliveryMethod === 'delivery'
+      ? getLecheFlanRestrictionMessage(deliveryDistanceKm)
+      : '';
+    const now = new Date().toISOString();
+    const notifications = normalizeNotifications(currentOrder.notifications || []);
+
+    const orderPatch = {
+      customer_name: String(req.body?.customer_name || currentOrder.customer_name || 'Customer').trim() || currentOrder.customer_name || 'Customer',
+      phone_number: String(req.body?.phone_number ?? currentOrder.phone_number ?? '').trim() || null,
+      address: String(req.body?.address ?? currentOrder.address ?? '').trim() || null,
+      delivery_method: deliveryMethod,
+      payment_method: paymentMethod,
+      delivery_distance_km: deliveryDistanceKm,
+      total_price: totalPrice,
+      contains_leche_flan: containsLecheFlan,
+    };
+
+    if (restrictionMessage && containsLecheFlan) {
+      const cancelledSnapshot = {
+        ...currentOrder,
+        delivery_method: deliveryMethod,
+        delivery_distance_km: deliveryDistanceKm,
+      };
+      const { statusPatch, notifications: cancellationNotifications } = await setOrderStatus(
+        supabase,
+        cancelledSnapshot,
+        'cancelled',
+        { reason: restrictionMessage },
+      );
+
+      Object.assign(orderPatch, statusPatch, {
+        review_status: 'none',
+        review_reason: null,
+        review_status_updated_at: null,
+        cancellation_reason: restrictionMessage,
+        notifications: [...notifications, ...cancellationNotifications],
+      });
+    }
+
+    const { error: removeItemsError } = await supabase
+      .from('order_items')
+      .delete()
+      .eq('order_id', currentOrder.id);
+
+    if (removeItemsError) {
+      throw removeItemsError;
+    }
+
+    const orderItemsPayload = finalizedItems.map((item) => ({
+      order_id: currentOrder.id,
+      product_id: item.product_id,
+      quantity: item.quantity,
+      price: item.price,
+    }));
+
+    if (orderItemsPayload.length > 0) {
+      const { error: insertItemsError } = await supabase
+        .from('order_items')
+        .insert(orderItemsPayload);
+
+      if (insertItemsError) {
+        throw insertItemsError;
+      }
+    }
+
+    const updatedOrder = await updateOrderRecord(supabase, currentOrder.id, orderPatch);
+    res.json(mapOrder(updatedOrder));
+  } catch (error) {
+    next(error);
+  }
+});
+
 router.post('/lookup', requireAuth, requireRole('admin', 'staff'), async (req, res, next) => {
   try {
     const identifier = req.body?.identifier || req.body?.orderCode || req.body?.orderId || '';

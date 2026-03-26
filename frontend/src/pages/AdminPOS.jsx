@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Search, Plus, Minus, Trash2 } from 'lucide-react';
 import { useProducts } from '../context/ProductContext';
 import { useOrders } from '../context/OrderContext';
@@ -6,7 +6,7 @@ import './AdminPOS.css';
 
 const AdminPOS = () => {
   const { products, validateStockAvailability, refreshProducts } = useProducts();
-  const { addOrder } = useOrders();
+  const { addOrder, updateOrderItems } = useOrders();
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('All');
   const [customerName, setCustomerName] = useState('');
@@ -15,10 +15,18 @@ const AdminPOS = () => {
   const [paymentMode, setPaymentMode] = useState(null);
   const [cashAmount, setCashAmount] = useState('');
   const [saleError, setSaleError] = useState('');
+  const [saleReceipt, setSaleReceipt] = useState(null);
+  const [activeSaleOrderId, setActiveSaleOrderId] = useState(null);
 
   const categories = ['All', 'Leche Flan', 'Cakes', 'Special Desserts', 'Pastries', 'Cringkles'];
 
   const total = posCart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+
+  useEffect(() => {
+    if (saleReceipt) {
+      setSaleReceipt(null);
+    }
+  }, [posCart]);
 
   const handleKeypadPress = (val) => {
     if (val === 'C') {
@@ -30,8 +38,34 @@ const AdminPOS = () => {
     }
   };
 
+  const resetPaymentFlow = () => {
+    setPaymentMode(null);
+    setCashAmount('');
+    setSaleError('');
+    setShowNameWarning(false);
+  };
+
+  const handleAddMoreOrder = () => {
+    setSaleReceipt(null);
+    resetPaymentFlow();
+  };
+
+  const handleClearCart = () => {
+    setPosCart([]);
+    setActiveSaleOrderId(null);
+    setSaleReceipt(null);
+    resetPaymentFlow();
+    setCustomerName('');
+    setSubmittedName('Customer');
+  };
+
   const handleCompleteSale = async () => {
     setSaleError('');
+
+    if (posCart.length === 0) {
+      setSaleError('Add items to the cart before completing the sale.');
+      return;
+    }
 
     const lineItems = posCart.map((item) => ({
       productId: item.id,
@@ -52,8 +86,16 @@ const AdminPOS = () => {
       return;
     }
 
+    const isCashSale = paymentMode === 'cash';
+    const cashTendered = isCashSale ? Number.parseFloat(cashAmount) : total;
+
+    if (isCashSale && (!Number.isFinite(cashTendered) || cashTendered < total)) {
+      setSaleError(`Cash received must be at least PHP ${total.toFixed(2)}.`);
+      return;
+    }
+
     try {
-      await addOrder({
+      const orderPayload = {
         customer: submittedName,
         lineItems,
         totalAmount: total,
@@ -62,16 +104,44 @@ const AdminPOS = () => {
         deliveryMethod: 'pickup',
         status: 'confirmed',
         subtext: `Walk-in / ${paymentMode === 'gcash' ? 'GCash' : 'Cash on Pickup'}`,
+      };
+
+      const savedOrder = activeSaleOrderId
+        ? await updateOrderItems(activeSaleOrderId, orderPayload)
+        : await addOrder(orderPayload);
+
+      try {
+        await refreshProducts();
+      } catch (refreshError) {
+        console.warn('Failed to refresh products after POS sale completion:', refreshError);
+      }
+
+      const savedOrderStatus = String(savedOrder?.status || savedOrder?.orderStatus || '').toLowerCase();
+      const nextOrderId = savedOrder?.id || savedOrder?.orderId || activeSaleOrderId || null;
+      setActiveSaleOrderId(nextOrderId);
+
+      if (savedOrderStatus === 'cancelled') {
+        setSaleReceipt(null);
+        setSaleError(savedOrder?.cancellationReason || 'The order was cancelled by system rules.');
+        return;
+      }
+
+      const changeDue = isCashSale
+        ? Number((cashTendered - total).toFixed(2))
+        : 0;
+
+      setSaleReceipt({
+        orderId: nextOrderId,
+        orderCode: savedOrder?.orderCode || savedOrder?.displayId || savedOrder?.id || nextOrderId || 'POS order',
+        customerName: submittedName,
+        paymentMode,
+        total,
+        cashReceived: cashTendered,
+        changeDue,
+        completedAt: new Date().toISOString(),
       });
 
-      await refreshProducts();
-
-      alert(`Sale completed for ${submittedName}! Total: PHP ${total.toFixed(2)}`);
-      setPosCart([]);
-      setPaymentMode(null);
-      setCashAmount('');
-      setCustomerName('');
-      setSubmittedName('Customer');
+      resetPaymentFlow();
       setSaleError('');
     } catch (error) {
       const shortageItems = error?.details?.shortages;
@@ -249,13 +319,43 @@ const AdminPOS = () => {
           <span className="pos-total-price-large">PHP {total.toFixed(2)}</span>
         </div>
 
-        {!paymentMode ? (
+        {saleReceipt ? (
+          <div className="pos-completion-card">
+            <div className="pos-completion-badge">Sale completed</div>
+            <h3 style={{ margin: '0.75rem 0 0.5rem' }}>Order {saleReceipt.orderCode}</h3>
+            <p className="pos-completion-copy">
+              The current order stays editable. Use Add More Order if you want to keep adding items before starting a new sale.
+            </p>
+
+            <div className="pos-completion-grid">
+              <div className="pos-completion-metric">
+                <span>Total</span>
+                <strong>PHP {saleReceipt.total.toFixed(2)}</strong>
+              </div>
+              <div className="pos-completion-metric">
+                <span>Payment received</span>
+                <strong>PHP {saleReceipt.cashReceived.toFixed(2)}</strong>
+              </div>
+              {saleReceipt.paymentMode === 'cash' && (
+                <div className="pos-completion-metric pos-completion-change">
+                  <span>Change</span>
+                  <strong>PHP {saleReceipt.changeDue.toFixed(2)}</strong>
+                </div>
+              )}
+            </div>
+
+            <div className="pos-completion-actions">
+              <button className="btn-pos-secondary" onClick={handleAddMoreOrder}>Add More Order</button>
+              <button className="btn-pos-clear" onClick={handleClearCart}>Clear Cart</button>
+            </div>
+          </div>
+        ) : !paymentMode ? (
           <>
             <div className="pos-payment-grid" style={{ marginBottom: '1.5rem' }}>
               <button className="btn-payment-pill btn-payment-cash" onClick={() => setPaymentMode('cash')}>Cash</button>
               <button className="btn-payment-pill btn-payment-gcash-inactive" onClick={() => setPaymentMode('gcash')}>GCash</button>
             </div>
-            <button className="btn-pos-clear" onClick={() => setPosCart([])}>Clear Cart</button>
+            <button className="btn-pos-clear" onClick={handleClearCart}>Clear Cart</button>
           </>
         ) : (
           <div className="pos-payment-logic">
@@ -289,7 +389,7 @@ const AdminPOS = () => {
                 </div>
 
                 <button className="btn-complete-cash" onClick={handleCompleteSale}>Complete Cash Sale</button>
-                <button className="btn-pos-cancel" onClick={() => setPaymentMode(null)}>Cancel</button>
+                <button className="btn-pos-cancel" onClick={resetPaymentFlow}>Cancel</button>
               </div>
             ) : (
               <div className="pos-gcash-view">
@@ -307,10 +407,10 @@ const AdminPOS = () => {
                 </div>
 
                 <button className="btn-complete-gcash" onClick={handleCompleteSale}>Complete GCash Sale</button>
-                <button className="btn-pos-cancel" onClick={() => setPaymentMode(null)}>Cancel</button>
+                <button className="btn-pos-cancel" onClick={resetPaymentFlow}>Cancel</button>
               </div>
             )}
-            <button className="btn-pos-clear" style={{ marginTop: '2rem' }} onClick={() => { setPosCart([]); setPaymentMode(null); }}>Clear Cart</button>
+            <button className="btn-pos-clear" style={{ marginTop: '2rem' }} onClick={handleClearCart}>Clear Cart</button>
           </div>
         )}
       </div>

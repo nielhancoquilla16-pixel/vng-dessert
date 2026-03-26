@@ -267,6 +267,38 @@ export const OrderProvider = ({ children }) => {
     return normalizedOrder;
   }, [session]);
 
+  const updateOrderItems = useCallback(async (orderId, orderData) => {
+    const payload = {
+      customer_name: orderData.customer || orderData.customerName || '',
+      phone_number: orderData.phoneNumber || '',
+      address: orderData.address || '',
+      delivery_method: orderData.deliveryMethod || 'pickup',
+      payment_method: orderData.paymentMethod || 'cash',
+      delivery_distance_km: Number.isFinite(Number(orderData.deliveryDistanceKm))
+        ? Number(orderData.deliveryDistanceKm)
+        : null,
+      items: (orderData.lineItems || []).map((item) => ({
+        product_id: item.productId || item.product_id || item.id,
+        quantity: Number(item.quantity) || 0,
+        price: Number(item.price) || 0,
+      })),
+    };
+
+    const updatedOrder = await apiRequest(`/api/orders/${orderId}/items`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    }, {
+      auth: true,
+      accessToken: session?.access_token,
+    });
+
+    const normalizedOrder = syncOrderFromResponse(updatedOrder);
+    setOrders((prev) => prev.map((order) => (
+      order.id === normalizedOrder.id ? normalizedOrder : order
+    )));
+    return normalizedOrder;
+  }, [session]);
+
   const syncOrderFromResponse = (response) => normalizeOrder(response?.order || response);
 
   const updateOrderStatus = useCallback(async (orderId, newStatus, options = {}) => {
@@ -401,6 +433,7 @@ export const OrderProvider = ({ children }) => {
         orders,
         isOrdersLoading,
         addOrder,
+        updateOrderItems,
         updateOrderStatus,
         markOrderAsDelivered,
         confirmOrderReceipt,
