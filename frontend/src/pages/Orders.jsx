@@ -13,6 +13,7 @@ import {
   PackageCheck,
   ReceiptText,
   Send,
+  RotateCcw,
   ShieldAlert,
   ShieldCheck,
   Sparkles,
@@ -77,6 +78,7 @@ const Orders = () => {
   const [loadingAction, setLoadingAction] = useState(null);
   const [receiptDrafts, setReceiptDrafts] = useState({});
   const [issueDrafts, setIssueDrafts] = useState({});
+  const [openIssueOrderId, setOpenIssueOrderId] = useState('');
 
   const activeOrders = useMemo(() => (
     [...orders]
@@ -299,6 +301,7 @@ const Orders = () => {
         error: '',
         success: 'Your issue report has been sent to the admin team for review.',
       });
+      setOpenIssueOrderId('');
       setPageNotice(`Issue report submitted for order ${order.displayId || order.orderCode || order.id}.`);
     } catch (error) {
       setIssueDraft(order.id, {
@@ -404,8 +407,8 @@ const Orders = () => {
     );
   };
 
-  const renderIssuePanel = (order) => {
-    if (!canCustomerReportIssue(order)) {
+  const renderIssuePanel = (order, isOpen) => {
+    if (!canCustomerReportIssue(order) || !isOpen) {
       return null;
     }
 
@@ -431,14 +434,20 @@ const Orders = () => {
       <div className="order-action-panel order-action-panel--issue">
         <div className="order-action-panel-header">
           <div>
-            <p className="order-panel-kicker">Report Issue</p>
+            <p className="order-panel-kicker">Request Refund</p>
             <h3>Damage or discrepancy report</h3>
           </div>
-          <ShieldAlert size={20} />
+          <button
+            type="button"
+            className="order-button order-button--ghost order-button--compact"
+            onClick={() => setOpenIssueOrderId('')}
+          >
+            Hide form
+          </button>
         </div>
 
         <p className="order-panel-copy">
-          If the delivered order is damaged, missing items, or otherwise mismatched, submit a report with image proof so the admin team can review it.
+          If the delivered order is damaged, missing items, or otherwise mismatched, request a refund with image proof so the admin team can review it.
         </p>
 
         <div className="order-form-grid">
@@ -533,7 +542,7 @@ const Orders = () => {
           disabled={isLoading}
         >
           {isLoading ? <Loader2 size={16} className="spin" /> : <Send size={16} />}
-          {isLoading ? 'Sending...' : 'Submit Issue Report'}
+          {isLoading ? 'Sending...' : 'Submit Refund Request'}
         </button>
       </div>
     );
@@ -554,6 +563,7 @@ const Orders = () => {
     const isHistoryCard = variant === 'history';
     const isCancelled = order.status === 'cancelled';
     const isRefunded = order.status === 'refunded';
+    const isIssueOpen = openIssueOrderId === order.id;
     const loadingCancel = loadingAction?.type === 'cancel' && loadingAction.orderId === order.id;
 
     return (
@@ -699,11 +709,21 @@ const Orders = () => {
                 {loadingCancel ? 'Cancelling...' : 'Cancel Order'}
               </button>
             )}
+            {canCustomerReportIssue(order) && (
+              <button
+                type="button"
+                className={`order-button order-button--refund ${isIssueOpen ? 'is-active' : ''}`}
+                onClick={() => setOpenIssueOrderId((current) => (current === order.id ? '' : order.id))}
+              >
+                <RotateCcw size={16} />
+                {isIssueOpen ? 'Hide Refund Form' : 'Request Refund'}
+              </button>
+            )}
           </div>
         )}
 
         {variant === 'active' && renderReceiptPanel(order)}
-        {variant === 'active' && renderIssuePanel(order)}
+        {variant === 'active' && renderIssuePanel(order, isIssueOpen)}
       </article>
     );
   };

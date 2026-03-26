@@ -1187,6 +1187,13 @@
   color: #1d4ed8;
 }
 
+.customer-order-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: center;
+}
+
 .workflow-rail {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
@@ -1263,6 +1270,10 @@
   justify-content: space-between;
   gap: 1rem;
   align-items: flex-start;
+}
+
+.order-action-panel-header .order-button {
+  flex-shrink: 0;
 }
 
 .order-action-panel-header h3 {
@@ -1440,6 +1451,30 @@
   background: #fff;
   border-color: #e2e8f0;
   color: #0f172a;
+}
+
+.order-button--compact {
+  padding: 0.65rem 0.95rem;
+  border-radius: 999px;
+  font-size: 0.84rem;
+}
+
+.order-button--refund {
+  background: #fff7ed;
+  border-color: #fdba74;
+  color: #c2410c;
+  box-shadow: 0 10px 24px rgba(251, 146, 60, 0.12);
+}
+
+.order-button--refund:hover {
+  background: #ffedd5;
+}
+
+.order-button--refund.is-active {
+  background: linear-gradient(135deg, #f97316, #ea580c);
+  border-color: #ea580c;
+  color: #fff;
+  box-shadow: 0 14px 28px rgba(249, 115, 22, 0.24);
 }
 
 .checkout-helper-copy {
