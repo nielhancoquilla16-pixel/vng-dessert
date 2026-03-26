@@ -1,13 +1,10 @@
 import React, { useState } from 'react';
 import {
   BadgeCheck,
-  Brain,
   DollarSign,
   ShieldAlert,
   RotateCcw,
-  Sparkles,
   ShoppingBag,
-  Zap,
   XCircle,
 } from 'lucide-react';
 import {
@@ -23,7 +20,6 @@ import {
 } from 'recharts';
 import { useOrders } from '../context/OrderContext';
 import { useProducts } from '../context/ProductContext';
-import { useAI } from '../context/AIContext';
 import {
   buildTopProducts,
   buildWeeklyHistory,
@@ -39,7 +35,6 @@ import './AdminReports.css';
 const AdminReports = () => {
   const { orders, reviewOrderIssue } = useOrders();
   const { products } = useProducts();
-  const { salesInsights, isAnalyzing } = useAI();
   const [pageNotice, setPageNotice] = useState('');
   const [pageError, setPageError] = useState('');
   const [loadingReportId, setLoadingReportId] = useState('');
@@ -186,44 +181,6 @@ const AdminReports = () => {
           )}
         </div>
       )}
-
-      <div className="ai-insights-container">
-        <div className="ai-header">
-          <div className="ai-title">
-            <Sparkles className="ai-icon" size={24} />
-            Llama AI Business Insights
-          </div>
-          {isAnalyzing && <div className="ai-analyzing-badge"><Zap size={14} className="spin" /> Analyzing Trends...</div>}
-        </div>
-
-        <div className="ai-content-grid">
-          <div className="ai-main-card">
-            <div className="ai-summary-label"><Brain size={18} /> Sales Summary</div>
-            <p className="ai-summary-text">
-              {salesInsights?.summary || 'Analyzing recent order history to generate your business summary...'}
-            </p>
-            <div className="ai-action-list">
-              {salesInsights?.details?.map((detail, index) => (
-                <div key={index} className="ai-action-item">
-                  <div className="ai-bullet"></div>
-                  {detail}
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <div className="ai-stat-card">
-            <div className="ai-stat-label">AI Confidence</div>
-            <div className="ai-stat-value">{salesInsights?.confidence || '--'}%</div>
-            <div className="ai-stat-meter">
-              <div className="ai-stat-fill" style={{ width: `${salesInsights?.confidence || 0}%` }}></div>
-            </div>
-            <p style={{ fontSize: '0.75rem', color: '#94a3b8', marginTop: '1rem' }}>
-              Statistically calculated based on {orders?.length || 0} historical data points.
-            </p>
-          </div>
-        </div>
-      </div>
 
       <div className="reports-grid">
         <div className="report-card">
