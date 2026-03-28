@@ -2,7 +2,8 @@ import { supabase, isSupabaseConfigured } from './supabase';
 
 const rawApiBaseUrl = (import.meta.env.VITE_API_BASE_URL ?? '').trim();
 const devFallbackBase = 'http://localhost:3001';
-const resolvedBase = rawApiBaseUrl || (import.meta.env.DEV ? devFallbackBase : '');
+const productionFallbackBase = 'https://vng-dessert-backend-production.up.railway.app';
+const resolvedBase = rawApiBaseUrl || (import.meta.env.DEV ? devFallbackBase : productionFallbackBase);
 
 const BACKEND_RETRY_DELAY_MS = 5000;
 const BACKEND_STARTUP_GRACE_MS = 4000;
@@ -152,7 +153,9 @@ const getSessionAccessToken = async () => {
 
 export const apiRequest = async (path, options = {}, config = {}) => {
   if (backendUnavailableUntil && Date.now() < backendUnavailableUntil) {
-    const message = 'Backend server is temporarily unavailable. Please make sure dessert-ai-system is running on port 3001.';
+    const message = import.meta.env.DEV
+      ? 'Backend server is temporarily unavailable. Please make sure dessert-ai-system is running on port 3001.'
+      : 'Backend server is temporarily unavailable. Please check the Railway backend and try again.';
     setApiStatus({ level: 'error', message });
     throw new ApiError(message, 503);
   }
@@ -194,9 +197,9 @@ export const apiRequest = async (path, options = {}, config = {}) => {
     }
 
     backendUnavailableUntil = Date.now() + BACKEND_RETRY_DELAY_MS;
-    const message = rawApiBaseUrl
-      ? 'Backend server is temporarily unavailable. Please start it and try again.'
-      : 'Backend server is unavailable. Start dessert-ai-system on port 3001 or set VITE_API_BASE_URL.';
+    const message = import.meta.env.DEV
+      ? 'Backend server is temporarily unavailable. Please start dessert-ai-system on port 3001 and try again.'
+      : 'Backend server is unavailable. Check the Railway backend or set VITE_API_BASE_URL.';
     setApiStatus({ level: 'error', message });
     throw new ApiError(message, 503, error);
   }

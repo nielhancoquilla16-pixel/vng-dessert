@@ -1,10 +1,9 @@
 /* eslint-disable react-refresh/only-export-components */
 import React, { createContext, useContext, useState, useCallback } from 'react';
 import { useProducts } from './ProductContext';
+import { API_BASE_URL } from '../lib/api';
 
 const AIContext = createContext();
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL
-  || (import.meta.env.DEV ? 'http://localhost:3001' : '');
 const AI_REQUEST_TIMEOUT_MS = 12000;
 const CAPITALS = {
   australia: 'Canberra',
