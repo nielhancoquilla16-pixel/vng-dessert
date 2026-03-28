@@ -10,6 +10,7 @@
     "dev:app": "npm --prefix frontend run dev",
     "dev:frontend": "npm --prefix frontend run dev",
     "dev:backend": "npm --prefix dessert-ai-system run dev",
+    "start": "npm --prefix dessert-ai-system start",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],

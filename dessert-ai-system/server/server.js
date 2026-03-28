@@ -1,6 +1,7 @@
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
+import fetch from "node-fetch";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
 import authRoute from "./routes/auth.js";
@@ -153,6 +154,39 @@ app.use((error, req, res, next) => {
   });
 });
 
-app.listen(PORT, () => {
-  console.log(`V&G Dessert AI Server running on http://localhost:${PORT}`);
+const startServer = async () => {
+  const healthUrl = `http://127.0.0.1:${PORT}/api/health`;
+
+  try {
+    const response = await fetch(healthUrl, {
+      method: "GET",
+      cache: "no-store",
+    });
+
+    if (response.ok) {
+      console.log(`V&G Dessert AI Server is already running on http://localhost:${PORT}.`);
+      return;
+    }
+  } catch {
+    // No healthy backend is responding on this port, so we can try to bind it.
+  }
+
+  const server = app.listen(PORT, () => {
+    console.log(`V&G Dessert AI Server running on http://localhost:${PORT}`);
+  });
+
+  server.on("error", (error) => {
+    if (error?.code === "EADDRINUSE") {
+      console.error(`Port ${PORT} is already in use. If another V&G backend is already running, keep that instance and do not start a duplicate.`);
+      process.exit(0);
+      return;
+    }
+
+    throw error;
+  });
+};
+
+startServer().catch((error) => {
+  console.error(error);
+  process.exit(1);
 });
