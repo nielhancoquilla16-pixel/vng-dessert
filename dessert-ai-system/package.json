@@ -6,7 +6,7 @@
   "main": "server/server.js",
   "scripts": {
     "start": "node server/server.js",
-    "dev": "nodemon"
+    "dev": "node server/server.js"
   },
   "dependencies": {
     "@api/paymongo": "file:.api/apis/paymongo",
