@@ -4,7 +4,7 @@
     "builder": "RAILPACK"
   },
   "deploy": {
-    "startCommand": "npm start",
+    "startCommand": "node server/server.js",
     "healthcheckPath": "/api/health",
     "restartPolicyType": "ON_FAILURE"
   }

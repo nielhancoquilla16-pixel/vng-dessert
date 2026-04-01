@@ -8,7 +8,7 @@
     ]
   },
   "deploy": {
-    "startCommand": "if [ -f dessert-ai-system/package.json ]; then npm --prefix dessert-ai-system start; elif [ -f ../package.json ] && [ -f server.js ]; then npm --prefix .. start; else npm start; fi",
+    "startCommand": "if [ -f dessert-ai-system/server/server.js ]; then node dessert-ai-system/server/server.js; elif [ -f server/server.js ]; then node server/server.js; elif [ -f server.js ]; then node server.js; else npm start; fi",
     "healthcheckPath": "/api/health",
     "restartPolicyType": "ON_FAILURE"
   }
