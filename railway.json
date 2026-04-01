@@ -2,7 +2,6 @@
   "$schema": "https://railway.com/railway.schema.json",
   "build": {
     "builder": "RAILPACK",
-    "buildCommand": "if [ -f dessert-ai-system/package.json ]; then npm --prefix dessert-ai-system ci; elif [ -f ../package.json ] && [ -f server.js ]; then npm --prefix .. ci; else npm ci; fi",
     "watchPatterns": [
       "railway.json",
       "dessert-ai-system/**"
