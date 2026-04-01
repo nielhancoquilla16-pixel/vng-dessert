@@ -1,0 +1,16 @@
+{
+  "$schema": "https://railway.com/railway.schema.json",
+  "build": {
+    "builder": "RAILPACK",
+    "buildCommand": "if [ -f dessert-ai-system/package.json ]; then npm --prefix dessert-ai-system ci; elif [ -f ../package.json ] && [ -f server.js ]; then npm --prefix .. ci; else npm ci; fi",
+    "watchPatterns": [
+      "railway.json",
+      "dessert-ai-system/**"
+    ]
+  },
+  "deploy": {
+    "startCommand": "if [ -f dessert-ai-system/package.json ]; then npm --prefix dessert-ai-system start; elif [ -f ../package.json ] && [ -f server.js ]; then npm --prefix .. start; else npm start; fi",
+    "healthcheckPath": "/api/health",
+    "restartPolicyType": "ON_FAILURE"
+  }
+}
