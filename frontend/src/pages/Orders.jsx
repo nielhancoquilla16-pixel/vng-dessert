@@ -69,12 +69,6 @@ const readFileAsDataUrl = (file) => new Promise((resolve, reject) => {
   reader.readAsDataURL(file);
 });
 
-const getNotificationAudience = (notification) => String(notification?.audience || 'customer').toLowerCase();
-
-const getNotificationType = (notification) => String(notification?.type || 'info').toLowerCase();
-
-const formatIssueType = (value) => String(value || 'damage').replace(/_/g, ' ');
-
 const OrderVerificationPanel = ({ order }) => {
   const hasQrPayload = Boolean(order?.verificationRequired && order?.qrPayload);
   const isAwaitingOnlinePayment = String(order?.paymentMethod || '').toLowerCase() === 'online'
@@ -220,24 +214,20 @@ const Orders = () => {
     return () => window.clearTimeout(timer);
   }, [confirmOrderId, isOrdersLoading, orders]);
 
-  const notifications = useMemo(() => {
-    const feed = orders.flatMap((order) => (
-      (order.notifications || [])
-        .filter((notification) => {
-          const audience = getNotificationAudience(notification);
-          return audience === 'customer' || audience === 'all';
-        })
-        .map((notification) => ({
-          ...notification,
-          orderId: order.displayId || order.orderCode || order.id,
-          orderStatus: order.status,
-        }))
-    ));
-
-    return feed
-      .sort((left, right) => new Date(right.createdAt || 0).getTime() - new Date(left.createdAt || 0).getTime())
-      .slice(0, 6);
-  }, [orders]);
+  const notifications = useMemo(() => (
+    orders
+      .filter((order) => hasCustomerConfirmationPending(order))
+      .sort((left, right) => (
+        new Date(right.deliveredAt || right.updatedAt || right.createdAt || 0).getTime()
+        - new Date(left.deliveredAt || left.updatedAt || left.createdAt || 0).getTime()
+      ))
+      .map((order) => ({
+        id: order.id,
+        orderId: order.displayId || order.orderCode || order.id,
+        createdAt: order.deliveredAt || order.updatedAt || order.createdAt || '',
+        message: 'This delivered order is waiting for your confirmation.',
+      }))
+  ), [orders]);
 
   const summaryCards = useMemo(() => ([
     {
@@ -790,12 +780,6 @@ const Orders = () => {
     const statusLabel = getOrderStatusLabel(order.status);
     const reviewStatusLabel = getReviewStatusLabel(order.reviewStatus);
     const workflowSteps = buildOrderWorkflowProgress(order.status);
-    const orderNotifications = (order.notifications || [])
-      .filter((notification) => {
-        const audience = getNotificationAudience(notification);
-        return audience === 'customer' || audience === 'all';
-      })
-      .slice(0, 3);
     const latestReport = order.latestIssueReport;
     const isUnderReview = normalizeReviewStatus(order.reviewStatus) === 'under_review';
     const isHistoryCard = variant === 'history';
@@ -929,28 +913,6 @@ const Orders = () => {
           </div>
         )}
 
-        {orderNotifications.length > 0 && (
-          <div className="customer-order-feed">
-            <div className="customer-order-section-title">
-              <BellRing size={16} />
-              <span>Order notifications</span>
-            </div>
-            {orderNotifications.map((notification, index) => (
-              <div key={`${order.id}-${index}`} className="customer-order-feed-item">
-                <div className={`customer-order-feed-icon customer-order-feed-icon--${getNotificationType(notification)}`}>
-                  {getNotificationType(notification) === 'refund_approved' || getNotificationType(notification) === 'receipt_confirmed'
-                    ? <CheckCircle2 size={14} />
-                    : <BellRing size={14} />}
-                </div>
-                <div>
-                  <strong>{notification.message}</strong>
-                  <p>{formatDateTime(notification.createdAt)}</p>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-
         {variant === 'active' && (
           <div className="customer-order-actions">
             {canCustomerCancelOrder(order) && (
@@ -1018,40 +980,40 @@ const Orders = () => {
         ))}
       </section>
 
-      <section className="orders-notification-panel">
-        <div className="orders-section-header">
-          <div>
-            <p className="orders-eyebrow">Latest Alerts</p>
-            <h2>Notifications</h2>
+      {notifications.length > 0 && (
+        <section className="orders-notification-panel">
+          <div className="orders-section-header">
+            <div>
+              <p className="orders-eyebrow">Action Needed</p>
+              <h2>Pending Confirmation</h2>
+            </div>
+            <span className="orders-section-chip">{notifications.length} pending</span>
           </div>
-          <span className="orders-section-chip">{notifications.length} updates</span>
-        </div>
 
-        {notifications.length === 0 ? (
-          <div className="orders-empty-state">
-            <BellRing size={28} />
-            <p>No order notifications yet.</p>
-            <span>Status updates, delivery alerts, and report decisions will appear here.</span>
-          </div>
-        ) : (
           <div className="orders-notification-grid">
-            {notifications.map((notification, index) => (
-              <article key={`${notification.orderId}-${index}`} className="orders-notification-card">
+            {notifications.map((notification) => (
+              <article key={notification.id} className="orders-notification-card">
                 <div className="orders-notification-icon">
                   <BellRing size={18} />
                 </div>
-                <div>
+                <div className="orders-notification-body">
                   <p className="orders-notification-title">
-                    {notification.orderId} - {formatIssueType(notification.type)}
+                    {notification.orderId} - pending confirmation
                   </p>
                   <h3>{notification.message}</h3>
                   <span>{formatDateTime(notification.createdAt)}</span>
                 </div>
+                <Link
+                  to={`/orders?confirm=${encodeURIComponent(notification.id)}`}
+                  className="order-button order-button--primary order-button--compact orders-notification-action"
+                >
+                  Confirm Now
+                </Link>
               </article>
             ))}
           </div>
-        )}
-      </section>
+        </section>
+      )}
 
       <section className="orders-section">
         <div className="orders-section-header">

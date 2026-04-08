@@ -820,6 +820,11 @@
   background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
 }
 
+.orders-notification-body {
+  flex: 1;
+  min-width: 0;
+}
+
 .orders-notification-icon {
   width: 2.5rem;
   height: 2.5rem;
@@ -850,6 +855,12 @@
 .orders-notification-card span {
   color: #64748b;
   font-size: 0.85rem;
+}
+
+.orders-notification-action {
+  margin-left: auto;
+  align-self: center;
+  text-decoration: none;
 }
 
 .orders-empty-state {
