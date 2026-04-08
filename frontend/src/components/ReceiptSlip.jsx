@@ -68,6 +68,14 @@ const ReceiptSlip = ({
     paymentCheckoutStatus: paymentStatus || order?.paymentCheckoutStatus || '',
   });
   const paymentMethodLabel = getPaymentMethodLabel(order);
+  const isPendingOnlineReference = paymentMethodLabel === 'Online Payment'
+    && /^waiting for online payment$/i.test(paymentStatusLabel);
+  const documentTitle = isPendingOnlineReference ? 'Order Reference Slip' : 'Official Receipt';
+  const documentSubtitle = isPendingOnlineReference
+    ? 'Reference slip before online payment'
+    : String(order?.deliveryMethod || '').toLowerCase() === 'delivery'
+      ? 'Delivery order receipt'
+      : 'Pickup order receipt';
   const qrImage = useMemo(() => (
     order?.verificationRequired && order?.qrPayload && !order?.qrUsedAt
       ? generateQrDataUrl(order.qrPayload, 180)
@@ -87,13 +95,19 @@ const ReceiptSlip = ({
           <div className="receipt-brand">
             <img src={logoSrc} alt={`${companyName} logo`} className="receipt-logo" />
             <div className="receipt-brand-copy">
-              <p className="receipt-kicker">Official Receipt</p>
+              <p className="receipt-kicker">{documentTitle}</p>
               <h2>{companyName}</h2>
-              <p>{String(order?.deliveryMethod || '').toLowerCase() === 'delivery' ? 'Delivery order receipt' : 'Pickup order receipt'}</p>
+              <p>{documentSubtitle}</p>
             </div>
           </div>
 
-          <div className={`receipt-status-badge ${/failed|cancelled|expired/.test(paymentStatusLabel.toLowerCase()) ? 'is-danger' : 'is-success'}`}>
+          <div className={`receipt-status-badge ${
+            /failed|cancelled|expired/.test(paymentStatusLabel.toLowerCase())
+              ? 'is-danger'
+              : isPendingOnlineReference
+                ? 'is-warning'
+                : 'is-success'
+          }`}>
             {paymentStatusLabel}
           </div>
         </header>
@@ -182,7 +196,9 @@ const ReceiptSlip = ({
             )}
 
             <p className="receipt-note">
-              Present this receipt with the QR code or Order ID when claiming the order.
+              {isPendingOnlineReference
+                ? 'Use this QR code or Order ID as your reference while completing the online payment.'
+                : 'Present this receipt with the QR code or Order ID when claiming the order.'}
               {order?.verificationRequired
                 ? ' QR codes are one-time use only.'
                 : ' Staff can process this order manually if needed.'}
@@ -206,8 +222,16 @@ const ReceiptSlip = ({
         </div>
 
         <footer className="receipt-footer">
-          <p>Thank you for ordering with {companyName}. Please keep this receipt for pickup and reference.</p>
-          <p>Need help? Show this receipt and Order ID to staff at the counter.</p>
+          <p>
+            {isPendingOnlineReference
+              ? `Keep this reference slip for ${companyName}. It confirms that your Order ID and QR were generated before payment confirmation.`
+              : `Thank you for ordering with ${companyName}. Please keep this receipt for pickup and reference.`}
+          </p>
+          <p>
+            {isPendingOnlineReference
+              ? 'Need help? Show this reference slip and Order ID to staff if you need payment assistance.'
+              : 'Need help? Show this receipt and Order ID to staff at the counter.'}
+          </p>
         </footer>
       </div>
     </section>

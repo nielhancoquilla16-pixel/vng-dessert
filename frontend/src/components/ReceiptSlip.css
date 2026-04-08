@@ -75,6 +75,11 @@
   color: #166534;
 }
 
+.receipt-status-badge.is-warning {
+  background: #fef3c7;
+  color: #92400e;
+}
+
 .receipt-status-badge.is-danger {
   background: #fee2e2;
   color: #991b1b;

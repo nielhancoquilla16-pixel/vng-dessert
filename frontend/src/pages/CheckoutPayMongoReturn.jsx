@@ -26,6 +26,10 @@ const CheckoutPayMongoReturn = ({ mode = 'success' }) => {
   const referenceNumber = useMemo(() => (
     new URLSearchParams(location.search).get('reference') || ''
   ), [location.search]);
+  const checkoutStage = useMemo(() => (
+    new URLSearchParams(location.search).get('stage') || ''
+  ), [location.search]);
+  const isPaymentSelectionStage = checkoutStage === 'payment-selection';
 
   useEffect(() => {
     let isActive = true;
@@ -102,14 +106,18 @@ const CheckoutPayMongoReturn = ({ mode = 'success' }) => {
 
         let latestCheckout = null;
 
-        for (let attempt = 0; attempt < 5; attempt += 1) {
+        if (isPaymentSelectionStage) {
           latestCheckout = await loadCheckout();
+        } else {
+          for (let attempt = 0; attempt < 5; attempt += 1) {
+            latestCheckout = await loadCheckout();
 
-          if (latestCheckout?.status !== 'created') {
-            break;
+            if (latestCheckout?.status !== 'created') {
+              break;
+            }
+
+            await wait(1500);
           }
-
-          await wait(1500);
         }
 
         if (!isActive) {
@@ -135,7 +143,7 @@ const CheckoutPayMongoReturn = ({ mode = 'success' }) => {
     return () => {
       isActive = false;
     };
-  }, [isAuthLoading, loggedInCustomer, mode, referenceNumber, refreshKey, refreshOrders, refreshProducts, refreshRemoteCart]);
+  }, [checkoutStage, isAuthLoading, isPaymentSelectionStage, loggedInCustomer, mode, referenceNumber, refreshKey, refreshOrders, refreshProducts, refreshRemoteCart]);
 
   const checkoutStatus = checkout?.status || (mode === 'cancel' ? 'cancelled' : 'created');
   const hasReceipt = Boolean(checkout?.order);
@@ -143,9 +151,13 @@ const CheckoutPayMongoReturn = ({ mode = 'success' }) => {
   const isFailed = checkoutStatus === 'cancelled' || checkoutStatus === 'failed' || checkoutStatus === 'expired';
   const isManualReview = checkoutStatus === 'paid' && !checkout?.orderId;
   const isStillProcessing = checkoutStatus === 'created';
+  const isReferenceReady = isPaymentSelectionStage && isStillProcessing && hasReceipt;
+  const canContinuePayment = Boolean(checkout?.checkoutUrl) && isStillProcessing;
   const checkoutStatusLabel = isSuccessful ? 'paid' : checkoutStatus.replace(/_/g, ' ');
 
-  const statusColor = isSuccessful
+  const statusColor = isReferenceReady
+    ? '#1d4ed8'
+    : isSuccessful
     ? '#166534'
     : isFailed
       ? '#991b1b'
@@ -153,7 +165,9 @@ const CheckoutPayMongoReturn = ({ mode = 'success' }) => {
         ? '#1d4ed8'
         : '#92400e';
 
-  const statusBackground = isSuccessful
+  const statusBackground = isReferenceReady
+    ? '#dbeafe'
+    : isSuccessful
     ? '#dcfce7'
     : isFailed
       ? '#fee2e2'
@@ -163,6 +177,8 @@ const CheckoutPayMongoReturn = ({ mode = 'success' }) => {
 
   const HeaderIcon = mode === 'cancel' && checkoutStatus === 'cancelled'
     ? XCircle
+    : isReferenceReady
+      ? CheckCircle2
     : isLoading || isStillProcessing
       ? Clock3
       : isFailed
@@ -171,6 +187,8 @@ const CheckoutPayMongoReturn = ({ mode = 'success' }) => {
 
   const headerIconColor = mode === 'cancel' && checkoutStatus === 'cancelled'
     ? '#dc2626'
+    : isReferenceReady
+      ? '#2563eb'
     : isLoading || isStillProcessing
       ? '#d97706'
       : isFailed
@@ -179,6 +197,8 @@ const CheckoutPayMongoReturn = ({ mode = 'success' }) => {
 
   const pageTitle = mode === 'cancel' && checkoutStatus === 'cancelled'
     ? 'Payment Cancelled'
+    : isReferenceReady
+      ? 'Order Reference Ready'
     : isSuccessful
       ? 'Payment Confirmed'
       : isManualReview
@@ -233,7 +253,9 @@ const CheckoutPayMongoReturn = ({ mode = 'success' }) => {
             }}
           >
             <Clock3 size={18} />
-            We're syncing your PayMongo checkout and finishing your order.
+            {isPaymentSelectionStage
+              ? 'Preparing your order reference and payment details.'
+              : 'We\'re syncing your PayMongo checkout and finishing your order.'}
           </div>
         )}
 
@@ -294,6 +316,12 @@ const CheckoutPayMongoReturn = ({ mode = 'success' }) => {
               {checkoutStatusLabel}
             </div>
 
+        {isReferenceReady && (
+          <p className="checkout-return-help" style={{ color: '#0f172a', lineHeight: 1.7 }}>
+            Your Order ID and QR code are ready below. Use them as your reference for payment verification and pickup validation, then continue to PayMongo when you're ready.
+          </p>
+        )}
+
         {isSuccessful && (
           <p className="checkout-return-help" style={{ color: '#0f172a', lineHeight: 1.7 }}>
             Your payment was confirmed and your printable receipt is ready below. You can also track the order from your orders page.
@@ -307,7 +335,7 @@ const CheckoutPayMongoReturn = ({ mode = 'success' }) => {
               </p>
             )}
 
-            {isStillProcessing && (
+            {isStillProcessing && !isPaymentSelectionStage && (
               <p className="checkout-return-help" style={{ color: '#0f172a', lineHeight: 1.7 }}>
                 We have your checkout reference, but PayMongo has not confirmed the final result yet. If you just completed the payment, wait a few seconds and refresh this status.
               </p>
@@ -315,7 +343,7 @@ const CheckoutPayMongoReturn = ({ mode = 'success' }) => {
 
             {isFailed && (
               <p className="checkout-return-help" style={{ color: '#0f172a', lineHeight: 1.7 }}>
-                The payment was not completed, so no paid online order was created. You can go back to checkout and try again.
+                The payment was not completed. Any temporary online order from this checkout has been marked cancelled, and you can go back to checkout to try again.
               </p>
             )}
 
@@ -334,6 +362,15 @@ const CheckoutPayMongoReturn = ({ mode = 'success' }) => {
               className="checkout-return-actions"
               style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem', marginTop: '1.5rem' }}
             >
+              {canContinuePayment && (
+                <a
+                  className="btn-primary"
+                  href={checkout.checkoutUrl}
+                  style={{ textDecoration: 'none' }}
+                >
+                  Continue to PayMongo
+                </a>
+              )}
               {isSuccessful && checkout?.order && (
                 <button
                   type="button"

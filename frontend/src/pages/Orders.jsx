@@ -76,6 +76,9 @@ const formatIssueType = (value) => String(value || 'damage').replace(/_/g, ' ');
 
 const OrderVerificationPanel = ({ order }) => {
   const hasQrPayload = Boolean(order?.verificationRequired && order?.qrPayload);
+  const isAwaitingOnlinePayment = String(order?.paymentMethod || '').toLowerCase() === 'online'
+    && String(order?.paymentCheckoutStatus || '').toLowerCase() === 'created'
+    && Boolean(order?.paymentCheckout?.checkoutUrl);
   const qrImage = useMemo(() => (
     hasQrPayload && !order?.qrUsedAt
       ? generateQrDataUrl(order.qrPayload, 220)
@@ -96,9 +99,6 @@ const OrderVerificationPanel = ({ order }) => {
           </div>
           <QrCode size={20} />
         </div>
-        <p className="order-qr-note">
-          Cash on Delivery orders can be processed manually by staff even without presenting QR code or Order ID.
-        </p>
       </div>
     );
   }
@@ -136,8 +136,21 @@ const OrderVerificationPanel = ({ order }) => {
           <p className="order-qr-note">
             {order.qrUsedAt
               ? 'This QR code has already been used and cannot be scanned again.'
-              : 'Present this QR or your Order ID to staff during pickup/payment.'}
+              : isAwaitingOnlinePayment
+                ? 'Your QR and Order ID are ready. Complete the online payment to continue processing this order.'
+                : 'Present this QR or your Order ID to staff during pickup/payment.'}
           </p>
+          {isAwaitingOnlinePayment && (
+            <div className="order-qr-actions">
+              <a
+                className="order-button order-button--primary"
+                href={order.paymentCheckout.checkoutUrl}
+                style={{ textDecoration: 'none' }}
+              >
+                Continue Online Payment
+              </a>
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -491,7 +504,7 @@ const Orders = () => {
           </div>
 
           <p className="order-panel-copy">
-            This button only appears after the order is marked Delivered. A photo is required before the order can move to Completed.
+            A photo is required before the order can move to Completed.
           </p>
 
           <label className="order-upload-card">
@@ -833,9 +846,9 @@ const Orders = () => {
                   : isRefunded && order.reviewReason
                     ? order.reviewReason
                     : order.status === 'delivered'
-                      ? 'Delivered orders can be confirmed with photo proof or reported if something is wrong.'
+                      ? 'The order has been marked as delivered. Please confirm receipt once you have received the order.'
                       : order.status === 'ready'
-                        ? 'The order is ready and inventory has already been reduced.'
+                        ? ' The order is ready for pickup/delivery. Please wait for the delivery or pick it up at the store.'
                         : `Current state: ${statusLabel}.`}
               </p>
             </div>
@@ -868,7 +881,6 @@ const Orders = () => {
               <AlertTriangle size={16} />
               <div>
                 <strong>Delivery discrepancy check</strong>
-                <p>If the order matches, confirm receipt with photo proof. If something is wrong, submit a report right away.</p>
               </div>
             </div>
           )}

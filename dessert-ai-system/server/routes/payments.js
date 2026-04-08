@@ -11,8 +11,13 @@ import {
   getLecheFlanRestrictionMessage,
   hasLecheFlanItems,
   hydrateOrderById,
+  hydrateOrderWithProfile,
   mapOrder,
+  normalizeNotifications,
+  normalizeOrderStatus,
   normalizeRequestedItems,
+  normalizeStatusTimestamps,
+  orderSelect,
 } from '../lib/orderUtils.js';
 import {
   createPayMongoCheckoutSession,
@@ -27,6 +32,8 @@ import {
 const router = express.Router();
 
 const TERMINAL_CHECKOUT_STATUSES = new Set(['failed', 'expired', 'cancelled', 'fulfilled']);
+const PAYMENT_CANCELLED_ORDER_STATUSES = new Set(['failed', 'expired', 'cancelled']);
+const NON_CANCELLABLE_ORDER_STATUSES = new Set(['delivered', 'completed', 'cancelled', 'refunded']);
 
 const normalizeCheckoutStatus = (value = '') => {
   const normalized = String(value || '').toLowerCase();
@@ -193,11 +200,153 @@ const updateCheckoutRecord = async (supabase, checkoutId, patch) => {
   return data;
 };
 
+const updateOrderRecord = async (supabase, orderId, patch) => {
+  const { data, error } = await supabase
+    .from('orders')
+    .update(patch)
+    .eq('id', orderId)
+    .select(orderSelect)
+    .maybeSingle();
+
+  if (error) {
+    throw error;
+  }
+
+  if (!data) {
+    return null;
+  }
+
+  return hydrateOrderWithProfile(supabase, data);
+};
+
+const buildOrderNotification = (audience, type, message, createdAt = new Date().toISOString()) => ({
+  audience,
+  type,
+  message,
+  createdAt,
+});
+
+const confirmAttachedOrderForCheckout = async (supabase, checkout) => {
+  if (!checkout?.order_id) {
+    return await loadOrderForCheckout(supabase, checkout);
+  }
+
+  const currentOrder = await hydrateOrderById(supabase, checkout.order_id);
+  if (!currentOrder) {
+    return null;
+  }
+
+  const currentStatus = normalizeOrderStatus(currentOrder.order_status || 'pending');
+  if (currentStatus !== 'pending') {
+    return mapOrder(currentOrder);
+  }
+
+  const now = checkout.paid_at || new Date().toISOString();
+  const orderCode = currentOrder.order_code || currentOrder.id || 'order';
+  const customerName = currentOrder.customer_name
+    || currentOrder.profiles?.full_name
+    || currentOrder.profiles?.username
+    || 'Customer';
+  const notifications = [
+    ...normalizeNotifications(currentOrder.notifications || []),
+    buildOrderNotification(
+      'customer',
+      'order_confirmed',
+      `${customerName}, your order ${orderCode} has been accepted and is now being processed.`,
+      now,
+    ),
+    buildOrderNotification(
+      'admin_staff',
+      'order_confirmed',
+      `Order ${orderCode} has been accepted and is now being processed.`,
+      now,
+    ),
+    buildOrderNotification(
+      'customer',
+      'payment_confirmed',
+      `Online payment for order ${orderCode} has been received. Your QR and Order ID are now ready for verification.`,
+      now,
+    ),
+  ];
+
+  const updatedOrder = await updateOrderRecord(supabase, checkout.order_id, {
+    order_status: 'confirmed',
+    status_timestamps: {
+      ...normalizeStatusTimestamps(currentOrder.status_timestamps || {}),
+      confirmed: currentOrder.status_timestamps?.confirmed || now,
+    },
+    notifications,
+  });
+
+  return updatedOrder ? mapOrder(updatedOrder) : mapOrder(currentOrder);
+};
+
+const cancelAttachedOrderForCheckout = async (
+  supabase,
+  checkout,
+  reason = 'Online payment was cancelled before completion.',
+) => {
+  if (!checkout?.order_id) {
+    return await loadOrderForCheckout(supabase, checkout);
+  }
+
+  const currentOrder = await hydrateOrderById(supabase, checkout.order_id);
+  if (!currentOrder) {
+    return null;
+  }
+
+  const currentStatus = normalizeOrderStatus(currentOrder.order_status || 'pending');
+  if (NON_CANCELLABLE_ORDER_STATUSES.has(currentStatus)) {
+    return mapOrder(currentOrder);
+  }
+
+  const now = new Date().toISOString();
+  const orderCode = currentOrder.order_code || currentOrder.id || 'order';
+  const notifications = [
+    ...normalizeNotifications(currentOrder.notifications || []),
+    buildOrderNotification(
+      'customer',
+      'order_cancelled',
+      reason,
+      now,
+    ),
+    buildOrderNotification(
+      'admin_staff',
+      'order_cancelled',
+      `Order ${orderCode} was cancelled. ${reason}`,
+      now,
+    ),
+  ];
+
+  const updatedOrder = await updateOrderRecord(supabase, checkout.order_id, {
+    order_status: 'cancelled',
+    cancellation_reason: reason,
+    review_status: 'none',
+    review_reason: null,
+    review_status_updated_at: null,
+    status_timestamps: {
+      ...normalizeStatusTimestamps(currentOrder.status_timestamps || {}),
+      cancelled: currentOrder.status_timestamps?.cancelled || now,
+    },
+    notifications,
+  });
+
+  return updatedOrder ? mapOrder(updatedOrder) : mapOrder(currentOrder);
+};
+
 const finalizePaidCheckout = async (supabase, checkout) => {
   if (checkout.order_id) {
+    const updatedCheckout = checkout.status === 'fulfilled' && checkout.paid_at
+      ? checkout
+      : await updateCheckoutRecord(supabase, checkout.id, {
+          status: 'fulfilled',
+          paid_at: checkout.paid_at || new Date().toISOString(),
+          failure_reason: null,
+        });
+
     return {
-      checkout,
-      order: await loadOrderForCheckout(supabase, checkout),
+      checkout: updatedCheckout,
+      order: await confirmAttachedOrderForCheckout(supabase, updatedCheckout),
     };
   }
 
@@ -249,6 +398,7 @@ const finalizePaidCheckout = async (supabase, checkout) => {
 
   const order = await createFulfilledOrder(supabase, {
     userId: checkout.user_id,
+    profile: null,
     customerName: checkout.customer_name,
     phoneNumber: checkout.phone_number,
     address: checkout.address,
@@ -277,9 +427,17 @@ const finalizePaidCheckout = async (supabase, checkout) => {
 
 const syncCheckoutFromPayMongo = async (supabase, checkout) => {
   if (!checkout?.checkout_session_id || !isPayMongoConfigured()) {
+    const attachedOrder = PAYMENT_CANCELLED_ORDER_STATUSES.has(checkout?.status)
+      ? await cancelAttachedOrderForCheckout(
+          supabase,
+          checkout,
+          `Online payment was ${checkout.status} before completion.`,
+        )
+      : await loadOrderForCheckout(supabase, checkout);
+
     return {
       checkout,
-      order: await loadOrderForCheckout(supabase, checkout),
+      order: attachedOrder,
     };
   }
 
@@ -315,6 +473,17 @@ const syncCheckoutFromPayMongo = async (supabase, checkout) => {
 
   if (sessionState.status === 'paid' || syncedCheckout.status === 'paid' || syncedCheckout.status === 'fulfilled') {
     return finalizePaidCheckout(supabase, syncedCheckout);
+  }
+
+  if (PAYMENT_CANCELLED_ORDER_STATUSES.has(syncedCheckout.status)) {
+    return {
+      checkout: syncedCheckout,
+      order: await cancelAttachedOrderForCheckout(
+        supabase,
+        syncedCheckout,
+        `Online payment was ${syncedCheckout.status} before completion.`,
+      ),
+    };
   }
 
   return {
@@ -443,7 +612,25 @@ router.post('/checkout-sessions', requireAuth, async (req, res, next) => {
       throw checkoutError;
     }
 
-    res.status(201).json(mapCheckoutResponse(createdCheckout, null, {
+    const createdOrder = await createFulfilledOrder(supabase, {
+      userId: req.authUser.id,
+      profile: req.profile,
+      customerName: customerName || req.profile?.full_name || req.profile?.username || 'Customer',
+      phoneNumber: phoneNumber || req.profile?.phone_number || '',
+      address: address || req.profile?.address || '',
+      deliveryMethod,
+      paymentMethod: String(paymentMethod || 'online').toLowerCase(),
+      totalPrice: totalAmount,
+      deliveryDistanceKm: Number.isFinite(distanceKm) ? distanceKm : null,
+      orderStatus: 'pending',
+      items: finalizedItems,
+    });
+
+    const linkedCheckout = await updateCheckoutRecord(supabase, createdCheckout.id, {
+      order_id: createdOrder.id,
+    });
+
+    res.status(201).json(mapCheckoutResponse(linkedCheckout, createdOrder, {
       checkoutSessionId: checkoutSession?.id || '',
       checkoutUrl: checkoutSession?.attributes?.checkout_url || '',
     }));
@@ -486,8 +673,8 @@ router.post('/checkouts/:referenceNumber/cancel', requireAuth, async (req, res, 
       return res.status(404).json({ error: 'Payment checkout not found.' });
     }
 
-    if (checkout.order_id) {
-      return res.status(409).json({ error: 'This payment is already tied to a completed order.' });
+    if (checkout.status === 'paid' || checkout.status === 'fulfilled') {
+      return res.status(409).json({ error: 'This payment is already tied to a paid order.' });
     }
 
     if (checkout.checkout_session_id && isPayMongoConfigured()) {
@@ -503,7 +690,13 @@ router.post('/checkouts/:referenceNumber/cancel', requireAuth, async (req, res, 
       failure_reason: 'Checkout was cancelled before payment was completed.',
     });
 
-    res.json(mapCheckoutResponse(updatedCheckout));
+    const cancelledOrder = await cancelAttachedOrderForCheckout(
+      supabase,
+      updatedCheckout,
+      'Online payment was cancelled before completion.',
+    );
+
+    res.json(mapCheckoutResponse(updatedCheckout, cancelledOrder));
   } catch (error) {
     next(error);
   }
@@ -546,10 +739,16 @@ router.post('/webhooks/paymongo', async (req, res, next) => {
     }
 
     if (eventType === 'payment.failed') {
-      await updateCheckoutRecord(supabase, checkout.id, {
+      const failedCheckout = await updateCheckoutRecord(supabase, checkout.id, {
         status: 'failed',
         failure_reason: eventResourceAttributes?.status || 'PayMongo marked this payment as failed.',
       });
+
+      await cancelAttachedOrderForCheckout(
+        supabase,
+        failedCheckout,
+        'Online payment failed before completion.',
+      );
     }
 
     res.json({ received: true });

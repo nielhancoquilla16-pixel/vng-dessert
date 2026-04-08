@@ -14,7 +14,7 @@ const DELIVERY_FEE = 50;
 const Checkout = () => {
   const { cartItems, clearCart } = useCart();
   const { loggedInCustomer, updateLoggedInCustomer } = useAuth();
-  const { addOrder } = useOrders();
+  const { addOrder, refreshOrders } = useOrders();
   const { validateStockAvailability, refreshProducts } = useProducts();
   const navigate = useNavigate();
 
@@ -175,7 +175,13 @@ const Checkout = () => {
           throw new Error('PayMongo did not return a checkout URL.');
         }
 
-        window.location.assign(checkoutSession.checkoutUrl);
+        if (!checkoutSession?.referenceNumber) {
+          throw new Error('PayMongo did not return a checkout reference.');
+        }
+
+        await clearCart();
+        void refreshOrders();
+        navigate(`/checkout/paymongo/success?reference=${encodeURIComponent(checkoutSession.referenceNumber)}&stage=payment-selection`);
         return;
       }
 
@@ -391,7 +397,7 @@ const Checkout = () => {
                   <span className="method-name">Pay Online</span>
                   <span className="method-desc">
                     {paymentStatus.configured
-                      ? 'Pay now through PayMongo and receive a printable receipt plus pickup QR.'
+                      ? 'Generate your order reference instantly, then continue through PayMongo.'
                       : 'Online payment is not configured yet on the backend.'}
                   </span>
                 </div>
@@ -412,7 +418,7 @@ const Checkout = () => {
                   <span className="method-desc">
                     {formData.deliveryMethod === 'delivery'
                       ? 'Pay when you receive your order.'
-                      : 'Pay when you pick up your order.'}
+                      : 'Generate your Order ID right away and pay during pickup.'}
                   </span>
                 </div>
               </label>
@@ -431,7 +437,24 @@ const Checkout = () => {
                   lineHeight: 1.6,
                 }}
               >
-                Online pick-up orders are auto-processed, and your printable receipt plus pickup QR will be available after payment.
+                Your Order ID and QR will appear right after you continue, before you leave for PayMongo payment.
+              </div>
+            )}
+
+            {formData.deliveryMethod === 'pickup' && formData.paymentMethod === 'cash' && (
+              <div
+                style={{
+                  marginTop: '0.9rem',
+                  padding: '0.9rem 1rem',
+                  borderRadius: '0.85rem',
+                  background: '#f0fdf4',
+                  border: '1px solid #bbf7d0',
+                  color: '#166534',
+                  fontSize: '0.92rem',
+                  lineHeight: 1.6,
+                }}
+              >
+                Your Order ID and QR will be generated as soon as you place this pickup order. No staff confirmation is needed before your reference appears.
               </div>
             )}
           </div>
@@ -440,7 +463,7 @@ const Checkout = () => {
             {isSubmitting
               ? 'Processing...'
               : formData.paymentMethod === 'online'
-                ? 'Continue to PayMongo'
+                ? 'Review QR and Continue'
                 : 'Place Order'}
           </button>
         </form>
