@@ -2,7 +2,7 @@ import { supabase, isSupabaseConfigured } from './supabase';
 
 const rawApiBaseUrl = (import.meta.env.VITE_API_BASE_URL ?? '').trim();
 const devFallbackBase = 'http://localhost:3001';
-const productionFallbackBase = 'https://vng-dessert-backend-production.up.railway.app';
+const productionFallbackBase = 'https://dessert-ai-backend-production.up.railway.app';
 const resolvedBase = rawApiBaseUrl || (import.meta.env.DEV ? devFallbackBase : productionFallbackBase);
 const BACKEND_RETRY_DELAY_MS = import.meta.env.DEV ? 2000 : 1500;
 const BACKEND_STARTUP_GRACE_MS = import.meta.env.DEV ? 4000 : 45000;
