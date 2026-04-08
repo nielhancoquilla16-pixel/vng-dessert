@@ -174,20 +174,6 @@ const Orders = () => {
     new URLSearchParams(location.search).get('confirm') || ''
   ), [location.search]);
 
-  // Guard: Check if user is authenticated as a customer
-  if (!isAuthLoading && !loggedInCustomer) {
-    return (
-      <div className="orders-workflow-page">
-        <section className="orders-alert-stack">
-          <div className="orders-alert-card orders-alert-card--error">
-            <CircleAlert size={18} />
-            <div>You must be logged in as a customer to view your orders.</div>
-          </div>
-        </section>
-      </div>
-    );
-  }
-
   const activeOrders = useMemo(() => (
     [...orders]
       .filter((order) => !isHistoryOrderStatus(order.status))
@@ -273,6 +259,19 @@ const Orders = () => {
       icon: ShieldAlert,
     },
   ]), [activeOrders.length, historyOrders.length, orders]);
+
+  if (!isAuthLoading && !loggedInCustomer) {
+    return (
+      <div className="orders-workflow-page">
+        <section className="orders-alert-stack">
+          <div className="orders-alert-card orders-alert-card--error">
+            <CircleAlert size={18} />
+            <div>You must be logged in as a customer to view your orders.</div>
+          </div>
+        </section>
+      </div>
+    );
+  }
 
   const setReceiptDraft = (orderId, patch) => {
     setReceiptDrafts((current) => ({
