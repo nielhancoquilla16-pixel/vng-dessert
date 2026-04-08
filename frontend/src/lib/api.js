@@ -60,6 +60,10 @@ export const normalizeApiErrorMessage = (message = '') => {
     return 'Backend Supabase setup is incomplete. Update dessert-ai-system/server/.env with the real SUPABASE_URL, SUPABASE_ANON_KEY, and SUPABASE_SERVICE_ROLE_KEY, then restart the backend.';
   }
 
+  if (/column orders\.(verification_required|qr_token|qr_generated_at|qr_used_at|verified_at|verified_by|verification_method) does not exist/i.test(message)) {
+    return 'The live database is missing the order verification migration. Run supabase/migrations/20260408_add_order_qr_verification.sql in Supabase SQL Editor, then refresh the app.';
+  }
+
   return message;
 };
 

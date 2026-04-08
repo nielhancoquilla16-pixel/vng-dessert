@@ -185,6 +185,40 @@ const buildInitialNotifications = ({
     ];
   }
 
+  if (normalizedStatus === 'confirmed') {
+    return [
+      {
+        audience: 'customer',
+        type: 'order_confirmed',
+        message: `${customerName}, your order ${orderCode} has been accepted and is now being processed.`,
+        createdAt: now,
+      },
+      {
+        audience: 'admin_staff',
+        type: 'order_confirmed',
+        message: `Order ${orderCode} has been accepted and is now being processed.`,
+        createdAt: now,
+      },
+    ];
+  }
+
+  if (normalizedStatus === 'ready') {
+    return [
+      {
+        audience: 'customer',
+        type: 'order_ready',
+        message: `${customerName}, your order ${orderCode} is ready for pickup.`,
+        createdAt: now,
+      },
+      {
+        audience: 'admin_staff',
+        type: 'order_ready',
+        message: `Order ${orderCode} is ready for handoff.`,
+        createdAt: now,
+      },
+    ];
+  }
+
   return [
     {
       audience: 'customer',
@@ -263,6 +297,22 @@ export const orderSelect = `
     reviewed_at,
     created_at,
     updated_at
+  ),
+  payment_checkouts!payment_checkouts_order_id_fkey (
+    id,
+    provider,
+    status,
+    payment_method,
+    reference_number,
+    checkout_session_id,
+    checkout_url,
+    amount,
+    currency,
+    failure_reason,
+    paid_at,
+    created_at,
+    updated_at,
+    order_id
   )
 `;
 
@@ -315,6 +365,7 @@ export const hydrateOrderWithProfile = async (supabase, order = null) => {
   const [hydratedOrder] = await hydrateOrdersWithProfiles(supabase, [order]);
   return hydratedOrder || null;
 };
+
 export const toDisplayId = (id) => `ORD-${String(id).replace(/-/g, '').slice(0, 4).toUpperCase()}`;
 
 export const formatCurrency = (value) => `PHP ${Number(value || 0).toFixed(2)}`;
@@ -332,6 +383,63 @@ export const getPaymentLabel = (value = 'cash') => {
 
   return 'Cash';
 };
+
+const getPaymentStatusLabel = ({
+  paymentMethod = 'cash',
+  deliveryMethod = 'pickup',
+  paymentCheckoutStatus = '',
+} = {}) => {
+  const normalizedPaymentMethod = String(paymentMethod || 'cash').toLowerCase();
+  const normalizedDeliveryMethod = String(deliveryMethod || 'pickup').toLowerCase();
+  const normalizedCheckoutStatus = String(paymentCheckoutStatus || '').toLowerCase();
+
+  if (normalizedPaymentMethod === 'online') {
+    if (['fulfilled', 'paid'].includes(normalizedCheckoutStatus)) {
+      return 'Paid online';
+    }
+
+    if (['failed', 'expired', 'cancelled'].includes(normalizedCheckoutStatus)) {
+      return 'Online payment failed';
+    }
+
+    if (normalizedCheckoutStatus === 'created') {
+      return 'Waiting for online payment';
+    }
+
+    return 'Online payment';
+  }
+
+  if (normalizedPaymentMethod === 'gcash') {
+    return 'GCash';
+  }
+
+  if (normalizedDeliveryMethod === 'delivery') {
+    return 'Cash on Delivery';
+  }
+
+  if (normalizedDeliveryMethod === 'pickup') {
+    return 'Pay at Store';
+  }
+
+  return 'Cash';
+};
+
+const normalizePaymentCheckout = (checkout = {}) => ({
+  id: checkout.id,
+  provider: checkout.provider || 'paymongo',
+  status: String(checkout.status || '').toLowerCase(),
+  paymentMethod: String(checkout.payment_method || checkout.paymentMethod || 'online').toLowerCase(),
+  referenceNumber: checkout.reference_number || checkout.referenceNumber || '',
+  checkoutSessionId: checkout.checkout_session_id || checkout.checkoutSessionId || '',
+  checkoutUrl: checkout.checkout_url || checkout.checkoutUrl || '',
+  amount: Number(checkout.amount) || 0,
+  currency: checkout.currency || 'PHP',
+  failureReason: checkout.failure_reason || checkout.failureReason || '',
+  paidAt: checkout.paid_at || checkout.paidAt || null,
+  createdAt: checkout.created_at || checkout.createdAt || '',
+  updatedAt: checkout.updated_at || checkout.updatedAt || '',
+  orderId: checkout.order_id || checkout.orderId || '',
+});
 
 export const buildItemsText = (items = []) => (
   items
@@ -363,15 +471,18 @@ export const mapOrder = (row) => {
     || row.profiles?.username
     || 'Customer';
 
-  const paymentLabel = getPaymentLabel(row.payment_method);
   const deliveryMethod = String(row.delivery_method || 'pickup').toLowerCase();
   const paymentMethod = String(row.payment_method || 'cash').toLowerCase();
+  const paymentCheckouts = (row.payment_checkouts || [])
+    .map(normalizePaymentCheckout)
+    .sort((left, right) => (
+      new Date(right.updatedAt || right.createdAt || 0).getTime()
+      - new Date(left.updatedAt || left.createdAt || 0).getTime()
+    ));
+  const latestPaymentCheckout = paymentCheckouts[0] || null;
   const normalizedStatus = normalizeOrderStatus(row.order_status || 'pending');
   const normalizedReviewStatus = normalizeReviewStatus(row.review_status || 'none');
   const orderCode = row.order_code || toDisplayId(row.id);
-  const subtext = deliveryMethod === 'delivery'
-    ? (row.address || 'Delivery')
-    : `Walk-in / ${paymentLabel}${paymentLabel === 'Cash' ? ' on Pickup' : ''}`;
   const createdAt = row.created_at || new Date().toISOString();
   const totalPrice = Number(row.total_price) || 0;
   const statusTimestamps = normalizeStatusTimestamps(row.status_timestamps || {});
@@ -392,6 +503,13 @@ export const mapOrder = (row) => {
   const isWalkInOrder = ['admin', 'staff'].includes(placedByRole)
     && deliveryMethod === 'pickup'
     && paymentMethod !== 'online';
+  const paymentCheckoutStatus = latestPaymentCheckout?.status || '';
+  const pickupPaymentLabel = paymentMethod === 'online' ? 'Online Payment' : 'Pay at Store';
+  const subtext = deliveryMethod === 'delivery'
+    ? (row.address || 'Delivery')
+    : (isWalkInOrder
+      ? `Walk-in / ${pickupPaymentLabel}`
+      : `Pick-up / ${pickupPaymentLabel}`);
   const latestIssueReport = issueReports[0] || null;
   const verificationRequired = Boolean(
     row.verification_required ?? shouldRequireOrderVerification(deliveryMethod, paymentMethod),
@@ -450,6 +568,19 @@ export const mapOrder = (row) => {
     qrClaimedAt: row.qr_claimed_at || null,
     readyNotifiedAt: row.ready_notified_at || null,
     readyNotificationMessage: row.ready_notification_message || '',
+    paymentCheckouts,
+    paymentCheckout: latestPaymentCheckout,
+    paymentCheckoutStatus,
+    paymentCheckoutReferenceNumber: latestPaymentCheckout?.referenceNumber || '',
+    paymentCheckoutPaidAt: latestPaymentCheckout?.paidAt || null,
+    paymentCheckoutFailureReason: latestPaymentCheckout?.failureReason || '',
+    paymentCheckoutAmount: latestPaymentCheckout?.amount || 0,
+    paymentReceiptNumber: latestPaymentCheckout?.referenceNumber || orderCode,
+    paymentStatusLabel: getPaymentStatusLabel({
+      paymentMethod,
+      deliveryMethod,
+      paymentCheckoutStatus,
+    }),
     receiptImageUrl: row.receipt_image_url || '',
     receiptReceivedAt: row.receipt_received_at || null,
     notifications,

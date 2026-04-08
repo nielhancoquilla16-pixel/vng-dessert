@@ -66,6 +66,48 @@ export const getReviewStatusLabel = (status = '') => (
   REVIEW_STATUS_LABELS[normalizeReviewStatus(status)] || 'None'
 );
 
+export const getPaymentStatusLabel = (order = {}) => {
+  const paymentMethod = String(order.paymentMethod || order.payment_method || '').toLowerCase();
+  const deliveryMethod = String(order.deliveryMethod || order.delivery_method || '').toLowerCase();
+  const checkoutStatus = String(
+    order.paymentCheckoutStatus
+    || order.payment_checkout_status
+    || order.checkoutStatus
+    || order.checkout_status
+    || '',
+  ).toLowerCase();
+
+  if (paymentMethod === 'online') {
+    if (['fulfilled', 'paid'].includes(checkoutStatus)) {
+      return 'Paid online';
+    }
+
+    if (['failed', 'expired', 'cancelled'].includes(checkoutStatus)) {
+      return 'Online payment failed';
+    }
+
+    if (checkoutStatus === 'created') {
+      return 'Waiting for online payment';
+    }
+
+    return 'Online payment';
+  }
+
+  if (paymentMethod === 'gcash') {
+    return 'GCash';
+  }
+
+  if (deliveryMethod === 'delivery') {
+    return 'Cash on Delivery';
+  }
+
+  if (deliveryMethod === 'pickup') {
+    return 'Pay at Store';
+  }
+
+  return 'Cash';
+};
+
 export const isTerminalOrderStatus = (status = '') => {
   const normalized = normalizeOrderStatus(status);
   return ['completed', 'cancelled', 'refunded'].includes(normalized);

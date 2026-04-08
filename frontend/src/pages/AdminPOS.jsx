@@ -109,7 +109,7 @@ const AdminPOS = () => {
         paymentMethod: paymentMode,
         deliveryMethod: 'pickup',
         status: 'confirmed',
-        subtext: `Walk-in / ${paymentMode === 'gcash' ? 'GCash' : 'Cash on Pickup'}`,
+        subtext: `Walk-in / ${paymentMode === 'gcash' ? 'GCash' : 'Pay at Store'}`,
       };
 
       const savedOrder = activeSaleOrderId

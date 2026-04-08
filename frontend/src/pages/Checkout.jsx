@@ -77,15 +77,6 @@ const Checkout = () => {
   }, [formData.paymentMethod, paymentStatus.configured]);
 
   useEffect(() => {
-    if (formData.deliveryMethod === 'pickup' && formData.paymentMethod !== 'cash') {
-      setFormData((current) => ({
-        ...current,
-        paymentMethod: 'cash',
-      }));
-    }
-  }, [formData.deliveryMethod, formData.paymentMethod]);
-
-  useEffect(() => {
     if (formData.deliveryMethod === 'pickup' && formData.deliveryDistanceKm) {
       setFormData((current) => ({
         ...current,
@@ -195,12 +186,13 @@ const Checkout = () => {
         address: formData.address,
         subtext: formData.deliveryMethod === 'delivery'
           ? formData.address
-          : 'Walk-in / Cash on Pickup',
+          : 'Pick-up / Pay at Store',
         lineItems,
         totalAmount: total,
         total: `PHP ${total.toFixed(2)}`,
         paymentMethod: formData.paymentMethod,
         deliveryMethod: formData.deliveryMethod,
+        status: 'confirmed',
         deliveryDistanceKm: formData.deliveryMethod === 'delivery' && Number.isFinite(deliveryDistance)
           ? deliveryDistance
           : null,
@@ -327,7 +319,7 @@ const Checkout = () => {
                 />
                 <Store size={24} className="method-icon" />
                 <div className="method-details">
-                  <span className="method-name">Walk-in / Pick-up</span>
+                  <span className="method-name">Pick-up</span>
                   <span className="method-desc">Pick up at our store (Free)</span>
                 </div>
               </label>
@@ -384,28 +376,26 @@ const Checkout = () => {
           <div className="form-section">
             <h2 className="section-title">3. Payment Method</h2>
             <div className="method-options">
-              {formData.deliveryMethod === 'delivery' && (
-                <label className={`method-card ${formData.paymentMethod === 'online' ? 'selected' : ''}`}>
-                  <input
-                    type="radio"
-                    name="paymentMethod"
-                    value="online"
-                    checked={formData.paymentMethod === 'online'}
-                    onChange={handleChange}
-                    style={{ display: 'none' }}
-                    disabled={!paymentStatus.configured}
-                  />
-                  <CreditCard size={24} className="method-icon" style={{ color: '#3b82f6' }} />
-                  <div className="method-details">
-                    <span className="method-name">Online Payment</span>
-                    <span className="method-desc">
-                      {paymentStatus.configured
-                        ? 'Continue to PayMongo for GCash and other enabled online methods.'
-                        : 'PayMongo is not configured yet on the backend.'}
-                    </span>
-                  </div>
-                </label>
-              )}
+              <label className={`method-card ${formData.paymentMethod === 'online' ? 'selected' : ''}`}>
+                <input
+                  type="radio"
+                  name="paymentMethod"
+                  value="online"
+                  checked={formData.paymentMethod === 'online'}
+                  onChange={handleChange}
+                  style={{ display: 'none' }}
+                  disabled={!paymentStatus.configured}
+                />
+                <CreditCard size={24} className="method-icon" style={{ color: '#3b82f6' }} />
+                <div className="method-details">
+                  <span className="method-name">Pay Online</span>
+                  <span className="method-desc">
+                    {paymentStatus.configured
+                      ? 'Pay now through PayMongo and receive a printable receipt plus pickup QR.'
+                      : 'Online payment is not configured yet on the backend.'}
+                  </span>
+                </div>
+              </label>
 
               <label className={`method-card ${formData.paymentMethod === 'cash' ? 'selected' : ''}`}>
                 <input
@@ -418,11 +408,32 @@ const Checkout = () => {
                 />
                 <Banknote size={24} className="method-icon" style={{ color: '#10b981' }} />
                 <div className="method-details">
-                  <span className="method-name">{formData.deliveryMethod === 'delivery' ? 'Cash on Delivery (COD)' : 'Cash on Pick-up'}</span>
-                  <span className="method-desc">Pay when you receive your order.</span>
+                  <span className="method-name">{formData.deliveryMethod === 'delivery' ? 'Cash on Delivery (COD)' : 'Pay at Store'}</span>
+                  <span className="method-desc">
+                    {formData.deliveryMethod === 'delivery'
+                      ? 'Pay when you receive your order.'
+                      : 'Pay when you pick up your order.'}
+                  </span>
                 </div>
               </label>
             </div>
+
+            {formData.deliveryMethod === 'pickup' && formData.paymentMethod === 'online' && paymentStatus.configured && (
+              <div
+                style={{
+                  marginTop: '0.9rem',
+                  padding: '0.9rem 1rem',
+                  borderRadius: '0.85rem',
+                  background: '#eff6ff',
+                  border: '1px solid #bfdbfe',
+                  color: '#1d4ed8',
+                  fontSize: '0.92rem',
+                  lineHeight: 1.6,
+                }}
+              >
+                Online pick-up orders are auto-processed, and your printable receipt plus pickup QR will be available after payment.
+              </div>
+            )}
           </div>
 
           <button type="submit" className="btn-primary place-order-btn" disabled={isSubmitting}>

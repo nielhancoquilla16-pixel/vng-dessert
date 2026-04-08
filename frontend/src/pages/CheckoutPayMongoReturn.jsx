@@ -1,11 +1,12 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { CheckCircle2, Clock3, XCircle } from 'lucide-react';
+import { CheckCircle2, Clock3, Printer, XCircle } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useCart } from '../context/CartContext';
 import { useOrders } from '../context/OrderContext';
 import { useProducts } from '../context/ProductContext';
 import { apiRequest } from '../lib/api';
+import ReceiptSlip from '../components/ReceiptSlip';
 
 const wait = (ms) => new Promise((resolve) => {
   window.setTimeout(resolve, ms);
@@ -137,10 +138,12 @@ const CheckoutPayMongoReturn = ({ mode = 'success' }) => {
   }, [isAuthLoading, loggedInCustomer, mode, referenceNumber, refreshKey, refreshOrders, refreshProducts, refreshRemoteCart]);
 
   const checkoutStatus = checkout?.status || (mode === 'cancel' ? 'cancelled' : 'created');
-  const isSuccessful = checkoutStatus === 'fulfilled';
+  const hasReceipt = Boolean(checkout?.order);
+  const isSuccessful = checkoutStatus === 'fulfilled' || (checkoutStatus === 'paid' && hasReceipt);
   const isFailed = checkoutStatus === 'cancelled' || checkoutStatus === 'failed' || checkoutStatus === 'expired';
   const isManualReview = checkoutStatus === 'paid' && !checkout?.orderId;
   const isStillProcessing = checkoutStatus === 'created';
+  const checkoutStatusLabel = isSuccessful ? 'paid' : checkoutStatus.replace(/_/g, ' ');
 
   const statusColor = isSuccessful
     ? '#166534'
@@ -184,9 +187,19 @@ const CheckoutPayMongoReturn = ({ mode = 'success' }) => {
           ? 'Payment Not Completed'
           : 'Checking Your Payment';
 
+  const handlePrintReceipt = () => {
+    if (typeof window !== 'undefined') {
+      window.print();
+    }
+  };
+
   return (
-    <div style={{ maxWidth: '880px', margin: '2rem auto', padding: '0 1.25rem 2rem' }}>
+    <div
+      className="checkout-paymongo-return-page"
+      style={{ maxWidth: '960px', margin: '2rem auto', padding: '0 1.25rem 2rem' }}
+    >
       <div
+        className="checkout-return-shell"
         style={{
           background: 'white',
           borderRadius: '1.5rem',
@@ -195,7 +208,7 @@ const CheckoutPayMongoReturn = ({ mode = 'success' }) => {
           border: '1px solid rgba(148, 163, 184, 0.16)',
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.9rem', marginBottom: '1.25rem' }}>
+        <div className="checkout-return-header" style={{ display: 'flex', alignItems: 'center', gap: '0.9rem', marginBottom: '1.25rem' }}>
           <HeaderIcon size={28} color={headerIconColor} />
           <div>
             <h1 style={{ margin: 0, fontSize: '1.9rem', color: '#0f172a' }}>
@@ -265,6 +278,7 @@ const CheckoutPayMongoReturn = ({ mode = 'success' }) => {
         {!isLoading && !error && checkout && (
           <>
             <div
+              className="checkout-return-status"
               style={{
                 display: 'inline-flex',
                 marginTop: '0.5rem',
@@ -277,57 +291,59 @@ const CheckoutPayMongoReturn = ({ mode = 'success' }) => {
                 textTransform: 'capitalize',
               }}
             >
-              {checkoutStatus}
+              {checkoutStatusLabel}
             </div>
 
-            {isSuccessful && (
-              <p style={{ color: '#0f172a', lineHeight: 1.7 }}>
-                Your payment was confirmed and your order has been created successfully. You can now track it from your orders page.
-              </p>
-            )}
+        {isSuccessful && (
+          <p className="checkout-return-help" style={{ color: '#0f172a', lineHeight: 1.7 }}>
+            Your payment was confirmed and your printable receipt is ready below. You can also track the order from your orders page.
+          </p>
+        )}
 
             {isManualReview && (
-              <p style={{ color: '#0f172a', lineHeight: 1.7 }}>
+              <p className="checkout-return-help" style={{ color: '#0f172a', lineHeight: 1.7 }}>
                 PayMongo marked this checkout as paid, but the order still needs manual review on our side.
                 {checkout.failureReason ? ` ${checkout.failureReason}` : ''}
               </p>
             )}
 
             {isStillProcessing && (
-              <p style={{ color: '#0f172a', lineHeight: 1.7 }}>
+              <p className="checkout-return-help" style={{ color: '#0f172a', lineHeight: 1.7 }}>
                 We have your checkout reference, but PayMongo has not confirmed the final result yet. If you just completed the payment, wait a few seconds and refresh this status.
               </p>
             )}
 
             {isFailed && (
-              <p style={{ color: '#0f172a', lineHeight: 1.7 }}>
+              <p className="checkout-return-help" style={{ color: '#0f172a', lineHeight: 1.7 }}>
                 The payment was not completed, so no paid online order was created. You can go back to checkout and try again.
               </p>
             )}
 
             {checkout.order && (
-              <div
-                style={{
-                  marginTop: '1.25rem',
-                  padding: '1rem 1.1rem',
-                  borderRadius: '1rem',
-                  background: '#f8fafc',
-                  border: '1px solid #e2e8f0',
-                }}
-              >
-                <div style={{ fontWeight: 700, color: '#0f172a', marginBottom: '0.35rem' }}>
-                  Order {checkout.order.displayId || checkout.order.id}
-                </div>
-                <div style={{ color: '#475569', lineHeight: 1.6 }}>
-                  {checkout.order.items}
-                </div>
-                <div style={{ marginTop: '0.5rem', fontWeight: 700, color: '#0f172a' }}>
-                  {checkout.order.total}
-                </div>
+              <div style={{ marginTop: '1.25rem' }}>
+                <ReceiptSlip
+                  order={checkout.order}
+                  receiptNumber={checkout.referenceNumber}
+                  paymentStatus={checkoutStatus}
+                  paidAt={checkout.paidAt || checkout.order.paymentCheckoutPaidAt || checkout.order.updatedAt || checkout.order.createdAt}
+                />
               </div>
             )}
 
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem', marginTop: '1.5rem' }}>
+            <div
+              className="checkout-return-actions"
+              style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem', marginTop: '1.5rem' }}
+            >
+              {isSuccessful && checkout?.order && (
+                <button
+                  type="button"
+                  className="btn-primary"
+                  onClick={handlePrintReceipt}
+                >
+                  <Printer size={16} />
+                  Print Receipt
+                </button>
+              )}
               {isStillProcessing && (
                 <button
                   type="button"

@@ -736,14 +736,19 @@ router.post('/', requireAuth, async (req, res, next) => {
     const normalizedDeliveryMethod = String(delivery_method || 'pickup').toLowerCase();
     const normalizedPaymentMethod = String(payment_method || 'cash').toLowerCase();
     const requestedStatus = normalizeOrderStatus(order_status);
-    const isWalkIn = normalizedDeliveryMethod === 'pickup';
-    const allowedStatuses = isWalkIn ? ['confirmed', 'ready'] : ['pending'];
+    const placedByRole = String(req.profile?.role || '').toLowerCase();
+    const isStaffWalkInOrder = ['admin', 'staff'].includes(placedByRole) && normalizedDeliveryMethod === 'pickup';
+    const isCustomerOrder = !isStaffWalkInOrder;
 
-    if (!allowedStatuses.includes(requestedStatus)) {
+    if (!VALID_ORDER_STATUSES.includes(requestedStatus)) {
       return res.status(400).json({
-        error: isWalkIn
-          ? 'Walk-in orders can only start with confirmed or ready status.'
-          : 'New orders must start as pending.',
+        error: 'order_status must be a valid status.',
+      });
+    }
+
+    if (isStaffWalkInOrder && !['confirmed', 'ready'].includes(requestedStatus)) {
+      return res.status(400).json({
+        error: 'Walk-in POS orders can only start with confirmed or ready status.',
       });
     }
 
@@ -779,6 +784,9 @@ router.post('/', requireAuth, async (req, res, next) => {
     const restrictionMessage = normalizedDeliveryMethod === 'delivery'
       ? getLecheFlanRestrictionMessage(normalizedDistance)
       : '';
+    const initialOrderStatus = containsLecheFlan && restrictionMessage
+      ? 'cancelled'
+      : (isCustomerOrder ? 'confirmed' : requestedStatus);
 
     const createdOrder = await createFulfilledOrder(supabase, {
       userId: req.authUser.id,
@@ -790,7 +798,7 @@ router.post('/', requireAuth, async (req, res, next) => {
       paymentMethod: normalizedPaymentMethod,
       totalPrice: finalTotal,
       deliveryDistanceKm: Number.isFinite(normalizedDistance) ? normalizedDistance : null,
-      orderStatus: containsLecheFlan && restrictionMessage ? 'cancelled' : requestedStatus,
+      orderStatus: initialOrderStatus,
       items: finalizedItems,
     });
 

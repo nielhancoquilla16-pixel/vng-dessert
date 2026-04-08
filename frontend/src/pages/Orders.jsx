@@ -28,6 +28,7 @@ import {
   canCustomerConfirmReceipt,
   canCustomerReportIssue,
   getOrderStatusLabel,
+  getPaymentStatusLabel,
   getReviewStatusLabel,
   isHistoryOrderStatus,
   normalizeReviewStatus,
@@ -796,7 +797,7 @@ const Orders = () => {
           </div>
           <div>
             <span>Payment</span>
-            <strong>{String(order.paymentMethod || 'cash').toLowerCase() === 'online' ? 'Online' : 'Cash'}</strong>
+            <strong>{order.paymentStatusLabel || getPaymentStatusLabel(order)}</strong>
           </div>
           <div>
             <span>Delivery</span>

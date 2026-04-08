@@ -256,6 +256,7 @@ const finalizePaidCheckout = async (supabase, checkout) => {
     paymentMethod: checkout.payment_method,
     totalPrice: Number(checkout.amount) || 0,
     deliveryDistanceKm: Number.isFinite(deliveryDistanceKm) ? deliveryDistanceKm : null,
+    orderStatus: 'confirmed',
     items: finalizedItems,
   });
 
@@ -266,9 +267,11 @@ const finalizePaidCheckout = async (supabase, checkout) => {
     failure_reason: null,
   });
 
+  const refreshedOrder = await loadOrderForCheckout(supabase, updatedCheckout);
+
   return {
     checkout: updatedCheckout,
-    order,
+    order: refreshedOrder || order,
   };
 };
 

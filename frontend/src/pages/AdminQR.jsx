@@ -11,7 +11,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { apiRequest } from '../lib/api';
-import { getOrderStatusLabel, getReviewStatusLabel } from '../utils/orderWorkflow';
+import { getOrderStatusLabel, getPaymentStatusLabel, getReviewStatusLabel } from '../utils/orderWorkflow';
 import './AdminQR.css';
 
 const getStatusLabel = (status = '') => getOrderStatusLabel(status, 'admin');
@@ -424,11 +424,19 @@ const AdminQR = () => {
                 </div>
                 <div>
                   <span>Pickup</span>
-                  <strong>{activeOrder.subtext || 'Walk-in / Cash on Pickup'}</strong>
+                  <strong>{activeOrder.subtext || 'Walk-in / Pay at Store'}</strong>
                 </div>
                 <div>
                   <span>Total</span>
                   <strong>{activeOrder.total}</strong>
+                </div>
+                <div>
+                  <span>Payment</span>
+                  <strong>{getPaymentStatusLabel(activeOrder)}</strong>
+                </div>
+                <div>
+                  <span>Receipt No.</span>
+                  <strong>{activeOrder.paymentCheckoutReferenceNumber || activeOrder.paymentReceiptNumber || activeOrder.orderCode || activeOrder.id}</strong>
                 </div>
                 <div>
                   <span>QR Status</span>
