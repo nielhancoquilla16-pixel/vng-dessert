@@ -5,6 +5,8 @@ import {
   BadgeCheck,
   BellRing,
   Camera,
+  ChevronDown,
+  ChevronUp,
   CheckCircle2,
   CircleAlert,
   Clock3,
@@ -164,6 +166,7 @@ const Orders = () => {
   const [openIssueOrderId, setOpenIssueOrderId] = useState('');
   const [cancelDrafts, setCancelDrafts] = useState({});
   const [openCancelOrderId, setOpenCancelOrderId] = useState('');
+  const [isHistoryExpanded, setIsHistoryExpanded] = useState(false);
   const confirmOrderId = useMemo(() => (
     new URLSearchParams(location.search).get('confirm') || ''
   ), [location.search]);
@@ -1049,7 +1052,21 @@ const Orders = () => {
             <p className="orders-eyebrow">History</p>
             <h2>Completed, cancelled, and returned orders</h2>
           </div>
-          <span className="orders-section-chip">{historyOrders.length} archived</span>
+          <div className="orders-section-actions">
+            <span className="orders-section-chip">{historyOrders.length} archived</span>
+            {historyOrders.length > 0 && (
+              <button
+                type="button"
+                className="order-button order-button--ghost order-button--compact orders-history-toggle"
+                onClick={() => setIsHistoryExpanded((current) => !current)}
+                aria-expanded={isHistoryExpanded}
+                aria-controls="orders-history-list"
+              >
+                {isHistoryExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                {isHistoryExpanded ? 'Hide History' : 'View History'}
+              </button>
+            )}
+          </div>
         </div>
 
         {historyOrders.length === 0 ? (
@@ -1057,8 +1074,16 @@ const Orders = () => {
             <History size={28} />
             <p>History will appear here once orders are completed, cancelled, or returned.</p>
           </div>
+        ) : !isHistoryExpanded ? (
+          <div className="orders-history-collapsed">
+            <History size={24} />
+            <div>
+              <p>Your archived orders are ready to view.</p>
+              <span>Click View History to open completed, cancelled, and returned orders.</span>
+            </div>
+          </div>
         ) : (
-          <div className="orders-card-stack">
+          <div id="orders-history-list" className="orders-card-stack">
             {historyOrders.map((order) => renderOrderCard(order, 'history'))}
           </div>
         )}
