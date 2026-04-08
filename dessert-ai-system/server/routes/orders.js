@@ -19,6 +19,8 @@ import {
   shouldRequireOrderVerification,
   hasLecheFlanItems,
   getLecheFlanRestrictionMessage,
+  hydrateOrdersWithProfiles,
+  hydrateOrderWithProfile,
   orderSelect,
 } from '../lib/orderUtils.js';
 import { validateReceiptImageDataUrl } from '../lib/receiptImages.js';
@@ -79,7 +81,7 @@ const fetchOrderByQrToken = async (supabase, qrToken = '') => {
     throw error;
   }
 
-  return data || null;
+  return hydrateOrderWithProfile(supabase, data || null);
 };
 
 const fetchOrderByIdentifier = async (supabase, identifier = '') => {
@@ -132,7 +134,7 @@ const fetchOrderByIdentifier = async (supabase, identifier = '') => {
     }
 
     if (data) {
-      return data;
+      return hydrateOrderWithProfile(supabase, data);
     }
   }
 
@@ -155,7 +157,7 @@ const fetchOrderByIdentifier = async (supabase, identifier = '') => {
     }
 
     if (data) {
-      return data;
+      return hydrateOrderWithProfile(supabase, data);
     }
   }
 
@@ -202,7 +204,7 @@ const fetchOrderById = async (supabase, orderId) => {
     throw notFoundError;
   }
 
-  return data;
+  return hydrateOrderWithProfile(supabase, data);
 };
 
 const updateOrderRecord = async (supabase, orderId, patch) => {
@@ -223,7 +225,7 @@ const updateOrderRecord = async (supabase, orderId, patch) => {
     throw notFoundError;
   }
 
-  return data;
+  return hydrateOrderWithProfile(supabase, data);
 };
 
 const adjustInventoryForOrder = async (supabase, order, direction = 'deduct') => {
@@ -548,7 +550,7 @@ const applyOrderVerification = async (
       throw conflictError;
     }
 
-    return data;
+    return hydrateOrderWithProfile(supabase, data);
   }
 
   return updateOrderRecord(supabase, workingOrder.id, verificationPatch);
@@ -687,7 +689,8 @@ router.get('/', requireAuth, requireRole('admin', 'staff'), async (req, res, nex
       throw error;
     }
 
-    res.json((data || []).map(mapOrder));
+    const hydratedOrders = await hydrateOrdersWithProfiles(supabase, data || []);
+    res.json(hydratedOrders.map(mapOrder));
   } catch (error) {
     next(error);
   }
@@ -706,7 +709,8 @@ router.get('/mine', requireAuth, async (req, res, next) => {
       throw error;
     }
 
-    res.json((data || []).map(mapOrder));
+    const hydratedOrders = await hydrateOrdersWithProfiles(supabase, data || []);
+    res.json(hydratedOrders.map(mapOrder));
   } catch (error) {
     next(error);
   }
@@ -1048,7 +1052,7 @@ router.post('/:id/confirm-pickup', requireAuth, requireRole('admin', 'staff'), h
 const handleCustomerReceiptConfirmation = async (req, res, next) => {
   try {
     const supabase = getSupabaseAdmin();
-    const { data: currentOrder, error: currentError } = await supabase
+    const { data: currentOrderRow, error: currentError } = await supabase
       .from('orders')
       .select(orderSelect)
       .eq('id', req.params.id)
@@ -1058,6 +1062,8 @@ const handleCustomerReceiptConfirmation = async (req, res, next) => {
     if (currentError) {
       throw currentError;
     }
+
+    const currentOrder = await hydrateOrderWithProfile(supabase, currentOrderRow);
 
     if (!currentOrder) {
       return res.status(404).json({ error: 'Order not found.' });

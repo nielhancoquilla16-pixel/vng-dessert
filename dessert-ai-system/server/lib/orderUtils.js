@@ -237,13 +237,6 @@ export const orderSelect = `
   status_timestamps,
   updated_at,
   created_at,
-  profiles (
-    id,
-    username,
-    email,
-    full_name,
-    role
-  ),
   order_items (
     id,
     product_id,
@@ -273,6 +266,55 @@ export const orderSelect = `
   )
 `;
 
+const ORDER_PROFILE_SELECT = `
+  id,
+  username,
+  email,
+  full_name,
+  role
+`;
+
+export const hydrateOrdersWithProfiles = async (supabase, orders = []) => {
+  const rows = Array.isArray(orders) ? orders.filter(Boolean) : [];
+
+  if (rows.length === 0) {
+    return [];
+  }
+
+  const userIds = [...new Set(rows.map((row) => row.user_id).filter(Boolean))];
+
+  if (userIds.length === 0) {
+    return rows.map((row) => ({
+      ...row,
+      profiles: null,
+    }));
+  }
+
+  const { data: profiles, error } = await supabase
+    .from('profiles')
+    .select(ORDER_PROFILE_SELECT)
+    .in('id', userIds);
+
+  if (error) {
+    throw error;
+  }
+
+  const profilesById = new Map((profiles || []).map((profile) => [profile.id, profile]));
+
+  return rows.map((row) => ({
+    ...row,
+    profiles: profilesById.get(row.user_id) || null,
+  }));
+};
+
+export const hydrateOrderWithProfile = async (supabase, order = null) => {
+  if (!order) {
+    return null;
+  }
+
+  const [hydratedOrder] = await hydrateOrdersWithProfiles(supabase, [order]);
+  return hydratedOrder || null;
+};
 export const toDisplayId = (id) => `ORD-${String(id).replace(/-/g, '').slice(0, 4).toUpperCase()}`;
 
 export const formatCurrency = (value) => `PHP ${Number(value || 0).toFixed(2)}`;
@@ -450,7 +492,7 @@ export const hydrateOrderById = async (supabase, orderId) => {
     throw error;
   }
 
-  return data;
+  return hydrateOrderWithProfile(supabase, data);
 };
 
 export const fetchProductsByIds = async (supabase, productIds = []) => {
