@@ -3,9 +3,12 @@ import { getSupabaseAdmin, hasSupabaseAdminConfig } from '../lib/supabaseAdmin.j
 import {
   DELIVERY_FEE,
   VALID_ORDER_STATUSES,
+  buildOrderQrPayload,
   createFulfilledOrder,
+  extractOrderQrToken,
   enrichItemsFromProducts,
   fetchProductsByIds,
+  generateOrderQrToken,
   getShortagesForItems,
   mapOrder,
   normalizeNotifications,
@@ -13,6 +16,7 @@ import {
   normalizeReviewStatus,
   normalizeRequestedItems,
   normalizeStatusTimestamps,
+  shouldRequireOrderVerification,
   hasLecheFlanItems,
   getLecheFlanRestrictionMessage,
   orderSelect,
@@ -32,16 +36,73 @@ const toTimestamp = (value) => {
 
 const normalizeLookupValue = (value = '') => String(value || '').trim();
 const normalizeLookupCode = (value = '') => normalizeLookupValue(value).toUpperCase();
+const normalizeLookupPhone = (value = '') => normalizeLookupValue(value).replace(/[^0-9+]/g, '');
+
+const getVerificationMethodLabel = (value = '') => {
+  const normalized = String(value || '').toLowerCase();
+
+  if (normalized === 'qr') {
+    return 'QR code';
+  }
+
+  if (normalized === 'order_id') {
+    return 'Order ID';
+  }
+
+  return 'manual';
+};
+
+const normalizeVerificationMethod = (value = '') => {
+  const normalized = String(value || '').toLowerCase();
+
+  if (['qr', 'order_id', 'manual'].includes(normalized)) {
+    return normalized;
+  }
+
+  return 'manual';
+};
+
+const fetchOrderByQrToken = async (supabase, qrToken = '') => {
+  const normalizedToken = String(qrToken || '').trim().toUpperCase();
+
+  if (!normalizedToken) {
+    return null;
+  }
+
+  const { data, error } = await supabase
+    .from('orders')
+    .select(orderSelect)
+    .eq('qr_token', normalizedToken)
+    .maybeSingle();
+
+  if (error) {
+    throw error;
+  }
+
+  return data || null;
+};
 
 const fetchOrderByIdentifier = async (supabase, identifier = '') => {
   const normalized = normalizeLookupValue(identifier);
   const normalizedCode = normalizeLookupCode(identifier);
+  const normalizedPhone = normalizeLookupPhone(identifier);
+  const qrToken = extractOrderQrToken(identifier);
 
   if (!normalized) {
     return null;
   }
 
   const lookupQueries = [];
+
+  if (qrToken) {
+    lookupQueries.push(
+      supabase
+        .from('orders')
+        .select(orderSelect)
+        .eq('qr_token', qrToken)
+        .maybeSingle(),
+    );
+  }
 
   if (normalizedCode) {
     lookupQueries.push(
@@ -65,6 +126,29 @@ const fetchOrderByIdentifier = async (supabase, identifier = '') => {
 
   for (const query of lookupQueries) {
     const { data, error } = await query;
+
+    if (error) {
+      throw error;
+    }
+
+    if (data) {
+      return data;
+    }
+  }
+
+  if (normalizedPhone.length >= 7 || normalized.length >= 3) {
+    const safeSearchText = normalized.replace(/[%_]/g, '');
+    let broadQuery = supabase
+      .from('orders')
+      .select(orderSelect)
+      .order('created_at', { ascending: false })
+      .limit(1);
+
+    broadQuery = normalizedPhone.length >= 7
+      ? broadQuery.ilike('phone_number', `%${normalizedPhone}%`)
+      : broadQuery.ilike('customer_name', `%${safeSearchText}%`);
+
+    const { data, error } = await broadQuery.maybeSingle();
 
     if (error) {
       throw error;
@@ -378,6 +462,98 @@ const applyOrderStatusChange = async (supabase, orderId, nextStatus, extra = {})
   });
 };
 
+const applyOrderVerification = async (
+  supabase,
+  currentOrder,
+  {
+    verifiedBy = null,
+    verificationMethod = 'manual',
+    consumeQr = false,
+  } = {},
+) => {
+  const normalizedMethod = normalizeVerificationMethod(verificationMethod);
+  const now = new Date().toISOString();
+  const currentStatus = normalizeOrderStatus(currentOrder.order_status || 'pending');
+  const deliveryMethod = String(currentOrder.delivery_method || 'pickup').toLowerCase();
+  const isTerminal = TERMINAL_ORDER_STATUSES.has(currentStatus);
+
+  if (isTerminal) {
+    const error = new Error('This order is already finalized and cannot be verified again.');
+    error.status = 409;
+    throw error;
+  }
+
+  if (normalizedMethod === 'qr' && currentOrder.qr_used_at) {
+    const error = new Error('This QR code has already been used and is no longer valid.');
+    error.status = 409;
+    throw error;
+  }
+
+  let workingOrder = currentOrder;
+  if (deliveryMethod === 'pickup' && currentStatus === 'ready') {
+    workingOrder = await applyOrderStatusChange(supabase, currentOrder.id, 'delivered');
+  }
+
+  const nextNotifications = [
+    ...normalizeNotifications(workingOrder.notifications || []),
+    buildNotificationEntry(
+      'admin_staff',
+      'order_verified',
+      `Order ${workingOrder.order_code || workingOrder.id} was verified using ${getVerificationMethodLabel(normalizedMethod)}.`,
+    ),
+  ];
+
+  if (normalizedMethod === 'qr') {
+    nextNotifications.push(
+      buildNotificationEntry(
+        'customer',
+        'order_verified',
+        `Order ${workingOrder.order_code || workingOrder.id} was verified by QR scan.`,
+      ),
+    );
+  }
+
+  const verificationPatch = {
+    verification_method: normalizedMethod,
+    verified_at: workingOrder.verified_at || now,
+    verified_by: workingOrder.verified_by || verifiedBy || null,
+    notifications: nextNotifications,
+  };
+
+  const shouldConsumeQr = consumeQr || normalizedMethod !== 'manual';
+  if (shouldConsumeQr && workingOrder.qr_token) {
+    verificationPatch.qr_used_at = workingOrder.qr_used_at || now;
+  }
+
+  if (deliveryMethod === 'pickup') {
+    verificationPatch.qr_claimed_at = workingOrder.qr_claimed_at || now;
+  }
+
+  if (normalizedMethod === 'qr' && workingOrder.qr_token) {
+    const { data, error } = await supabase
+      .from('orders')
+      .update(verificationPatch)
+      .eq('id', workingOrder.id)
+      .is('qr_used_at', null)
+      .select(orderSelect)
+      .maybeSingle();
+
+    if (error) {
+      throw error;
+    }
+
+    if (!data) {
+      const conflictError = new Error('This QR code has already been used and is no longer valid.');
+      conflictError.status = 409;
+      throw conflictError;
+    }
+
+    return data;
+  }
+
+  return updateOrderRecord(supabase, workingOrder.id, verificationPatch);
+};
+
 const createBestSellerEntry = (product) => ({
   id: product.id,
   name: product.product_name || 'Dessert Item',
@@ -553,9 +729,18 @@ router.post('/', requireAuth, async (req, res, next) => {
       return res.status(400).json({ error: 'At least one order item is required.' });
     }
 
+    const normalizedDeliveryMethod = String(delivery_method || 'pickup').toLowerCase();
+    const normalizedPaymentMethod = String(payment_method || 'cash').toLowerCase();
     const requestedStatus = normalizeOrderStatus(order_status);
-    if (requestedStatus !== 'pending') {
-      return res.status(400).json({ error: 'New orders must start as pending.' });
+    const isWalkIn = normalizedDeliveryMethod === 'pickup';
+    const allowedStatuses = isWalkIn ? ['confirmed', 'ready'] : ['pending'];
+
+    if (!allowedStatuses.includes(requestedStatus)) {
+      return res.status(400).json({
+        error: isWalkIn
+          ? 'Walk-in orders can only start with confirmed or ready status.'
+          : 'New orders must start as pending.',
+      });
     }
 
     const normalizedItems = normalizeRequestedItems(items);
@@ -584,10 +769,10 @@ router.post('/', requireAuth, async (req, res, next) => {
     }));
 
     const subtotal = finalizedItems.reduce((sum, item) => sum + (item.quantity * item.price), 0);
-    const finalTotal = subtotal + (delivery_method === 'delivery' ? DELIVERY_FEE : 0);
+    const finalTotal = subtotal + (normalizedDeliveryMethod === 'delivery' ? DELIVERY_FEE : 0);
     const normalizedDistance = Number(delivery_distance_km);
     const containsLecheFlan = hasLecheFlanItems(finalizedItems);
-    const restrictionMessage = delivery_method === 'delivery'
+    const restrictionMessage = normalizedDeliveryMethod === 'delivery'
       ? getLecheFlanRestrictionMessage(normalizedDistance)
       : '';
 
@@ -597,11 +782,11 @@ router.post('/', requireAuth, async (req, res, next) => {
       customerName: customer_name,
       phoneNumber: phone_number,
       address,
-      deliveryMethod: delivery_method,
-      paymentMethod: payment_method,
+      deliveryMethod: normalizedDeliveryMethod,
+      paymentMethod: normalizedPaymentMethod,
       totalPrice: finalTotal,
       deliveryDistanceKm: Number.isFinite(normalizedDistance) ? normalizedDistance : null,
-      orderStatus: containsLecheFlan && restrictionMessage ? 'cancelled' : 'pending',
+      orderStatus: containsLecheFlan && restrictionMessage ? 'cancelled' : requestedStatus,
       items: finalizedItems,
     });
 
@@ -673,6 +858,16 @@ router.patch('/:id/items', requireAuth, requireRole('admin', 'staff'), async (re
       : '';
     const now = new Date().toISOString();
     const notifications = normalizeNotifications(currentOrder.notifications || []);
+    const verificationRequired = shouldRequireOrderVerification(deliveryMethod, paymentMethod);
+    const shouldRotateQrToken = verificationRequired
+      && (
+        !currentOrder.verification_required
+        || !currentOrder.qr_token
+        || currentOrder.qr_used_at
+      );
+    const nextQrToken = verificationRequired
+      ? (shouldRotateQrToken ? generateOrderQrToken() : currentOrder.qr_token)
+      : null;
 
     const orderPatch = {
       customer_name: String(req.body?.customer_name || currentOrder.customer_name || 'Customer').trim() || currentOrder.customer_name || 'Customer',
@@ -683,6 +878,14 @@ router.patch('/:id/items', requireAuth, requireRole('admin', 'staff'), async (re
       delivery_distance_km: deliveryDistanceKm,
       total_price: totalPrice,
       contains_leche_flan: containsLecheFlan,
+      verification_required: verificationRequired,
+      qr_token: nextQrToken,
+      qr_generated_at: nextQrToken ? (shouldRotateQrToken ? now : (currentOrder.qr_generated_at || now)) : null,
+      qr_used_at: nextQrToken ? (shouldRotateQrToken ? null : currentOrder.qr_used_at) : null,
+      verified_at: nextQrToken ? (shouldRotateQrToken ? null : currentOrder.verified_at) : null,
+      verified_by: nextQrToken ? (shouldRotateQrToken ? null : currentOrder.verified_by) : null,
+      verification_method: nextQrToken ? (shouldRotateQrToken ? null : currentOrder.verification_method) : 'manual',
+      qr_claimed_at: nextQrToken ? (shouldRotateQrToken ? null : currentOrder.qr_claimed_at) : (currentOrder.qr_claimed_at || null),
     };
 
     if (restrictionMessage && containsLecheFlan) {
@@ -756,11 +959,84 @@ router.post('/lookup', requireAuth, requireRole('admin', 'staff'), async (req, r
   }
 });
 
+router.post('/verify', requireAuth, requireRole('admin', 'staff'), async (req, res, next) => {
+  try {
+    const identifier = req.body?.identifier || req.body?.orderCode || req.body?.orderId || '';
+    const explicitQrToken = req.body?.qrToken || req.body?.qr_token || '';
+    const supabase = getSupabaseAdmin();
+    const parsedQrToken = extractOrderQrToken(explicitQrToken || identifier);
+    let verificationMethod = parsedQrToken ? 'qr' : 'order_id';
+    let order = null;
+
+    if (parsedQrToken) {
+      order = await fetchOrderByQrToken(supabase, parsedQrToken);
+      if (!order) {
+        return res.status(404).json({ error: 'Order not found for that QR code.' });
+      }
+
+      if (order.verification_required === false) {
+        return res.status(409).json({ error: 'This order does not require QR verification.' });
+      }
+
+      if (!order.qr_token) {
+        return res.status(409).json({ error: 'This order has no active QR token.' });
+      }
+
+      if (order.qr_used_at) {
+        return res.status(409).json({ error: 'This QR code has already been used.' });
+      }
+    } else {
+      order = await fetchOrderByIdentifier(supabase, identifier);
+      if (!order) {
+        return res.status(404).json({ error: 'Order not found.' });
+      }
+
+      if (!identifier) {
+        verificationMethod = 'manual';
+      }
+    }
+
+    const normalizedStatus = normalizeOrderStatus(order.order_status);
+    if (TERMINAL_ORDER_STATUSES.has(normalizedStatus)) {
+      return res.status(409).json({ error: 'This order is already finalized and cannot be verified again.' });
+    }
+
+    const updatedOrder = await applyOrderVerification(supabase, order, {
+      verifiedBy: req.authUser.id,
+      verificationMethod,
+      consumeQr: verificationMethod !== 'manual',
+    });
+
+    res.json({
+      order: mapOrder(updatedOrder),
+      verification: {
+        method: normalizeVerificationMethod(verificationMethod),
+        qrConsumedAt: updatedOrder.qr_used_at || null,
+        verifiedAt: updatedOrder.verified_at || null,
+        qrPayload: updatedOrder.qr_token ? buildOrderQrPayload(updatedOrder.qr_token) : '',
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 const handleMarkDelivered = async (req, res, next) => {
   try {
     const supabase = getSupabaseAdmin();
     const updatedOrder = await applyOrderStatusChange(supabase, req.params.id, 'delivered');
-    res.json(mapOrder(updatedOrder));
+    const deliveryMethod = String(updatedOrder.delivery_method || 'pickup').toLowerCase();
+
+    if (deliveryMethod !== 'pickup') {
+      return res.json(mapOrder(updatedOrder));
+    }
+
+    const verifiedOrder = await applyOrderVerification(supabase, updatedOrder, {
+      verifiedBy: req.authUser.id,
+      verificationMethod: updatedOrder.verification_method || 'manual',
+      consumeQr: true,
+    });
+    return res.json(mapOrder(verifiedOrder));
   } catch (error) {
     next(error);
   }

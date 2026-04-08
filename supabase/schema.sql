@@ -70,6 +70,13 @@ create table if not exists public.orders (
   ready_notification_message text,
   receipt_image_url text,
   receipt_received_at timestamptz,
+  verification_required boolean not null default true,
+  qr_token text,
+  qr_generated_at timestamptz,
+  qr_used_at timestamptz,
+  verified_at timestamptz,
+  verified_by uuid references public.profiles(id) on delete set null,
+  verification_method text check (verification_method in ('qr', 'order_id', 'manual')),
   created_at timestamptz not null default timezone('utc', now())
 );
 
@@ -100,6 +107,15 @@ create table if not exists public.payment_checkouts (
   updated_at timestamptz not null default timezone('utc', now())
 );
 
+create table if not exists public.site_content (
+  id integer primary key,
+  src text not null,
+  title text not null,
+  text text,
+  created_at timestamptz not null default timezone('utc', now()),
+  updated_at timestamptz not null default timezone('utc', now())
+);
+
 create table if not exists public.order_issue_reports (
   id uuid primary key default gen_random_uuid(),
   order_id uuid not null references public.orders(id) on delete cascade,
@@ -120,7 +136,7 @@ create table if not exists public.order_issue_reports (
 create table if not exists public.order_items (
   id uuid primary key default gen_random_uuid(),
   order_id uuid not null references public.orders(id) on delete cascade,
-  product_id uuid not null references public.products(id) on delete restrict,
+  product_id uuid not null references public.products(id) on delete cascade,
   quantity integer not null check (quantity > 0),
   price numeric(10, 2) not null check (price >= 0)
 );
@@ -165,6 +181,13 @@ alter table if exists public.orders
   add column if not exists delivery_distance_km numeric(10, 2),
   add column if not exists contains_leche_flan boolean not null default false,
   add column if not exists inventory_deducted_at timestamptz,
+  add column if not exists verification_required boolean not null default true,
+  add column if not exists qr_token text,
+  add column if not exists qr_generated_at timestamptz,
+  add column if not exists qr_used_at timestamptz,
+  add column if not exists verified_at timestamptz,
+  add column if not exists verified_by uuid references public.profiles(id) on delete set null,
+  add column if not exists verification_method text,
   add column if not exists notifications jsonb not null default '[]'::jsonb,
   add column if not exists status_timestamps jsonb not null default '{}'::jsonb,
   add column if not exists updated_at timestamptz not null default timezone('utc', now());
@@ -183,6 +206,13 @@ alter table if exists public.payment_checkouts
   add column if not exists failure_reason text,
   add column if not exists order_id uuid references public.orders(id) on delete set null,
   add column if not exists paid_at timestamptz,
+  add column if not exists updated_at timestamptz not null default timezone('utc', now());
+
+alter table if exists public.site_content
+  add column if not exists src text not null default '',
+  add column if not exists title text not null default '',
+  add column if not exists text text,
+  add column if not exists created_at timestamptz not null default timezone('utc', now()),
   add column if not exists updated_at timestamptz not null default timezone('utc', now());
 
 alter table if exists public.order_issue_reports
@@ -240,9 +270,27 @@ alter table if exists public.orders
   add constraint orders_payment_method_check
   check (payment_method in ('cash', 'gcash', 'online'));
 
+alter table if exists public.orders drop constraint if exists orders_verification_method_check;
+alter table if exists public.orders
+  add constraint orders_verification_method_check
+  check (
+    verification_method is null
+    or verification_method in ('qr', 'order_id', 'manual')
+  );
+
 create unique index if not exists orders_order_code_unique_idx
 on public.orders (order_code)
 where order_code is not null;
+
+create unique index if not exists orders_qr_token_unique_idx
+on public.orders (qr_token)
+where qr_token is not null;
+
+create index if not exists orders_qr_used_at_idx
+on public.orders (qr_used_at);
+
+create index if not exists site_content_updated_at_idx
+on public.site_content (updated_at);
 
 alter table if exists public.payment_checkouts drop constraint if exists payment_checkouts_provider_check;
 alter table if exists public.payment_checkouts
@@ -294,11 +342,20 @@ before update on public.order_issue_reports
 for each row
 execute function public.set_updated_at();
 
+alter table public.site_content replica identity full;
+
+drop trigger if exists set_site_content_updated_at on public.site_content;
+create trigger set_site_content_updated_at
+before update on public.site_content
+for each row
+execute function public.set_updated_at();
+
 alter table public.profiles enable row level security;
 alter table public.inventory enable row level security;
 alter table public.products enable row level security;
 alter table public.orders enable row level security;
 alter table public.payment_checkouts enable row level security;
+alter table public.site_content enable row level security;
 alter table public.order_issue_reports enable row level security;
 alter table public.order_items enable row level security;
 alter table public.carts enable row level security;
@@ -342,6 +399,35 @@ for all
 to authenticated
 using (public.get_my_role() = 'admin')
 with check (public.get_my_role() = 'admin');
+
+drop policy if exists "site_content_select_public" on public.site_content;
+create policy "site_content_select_public"
+on public.site_content
+for select
+to anon, authenticated
+using (true);
+
+drop policy if exists "site_content_insert_admin_staff" on public.site_content;
+create policy "site_content_insert_admin_staff"
+on public.site_content
+for insert
+to authenticated
+with check (public.get_my_role() in ('admin', 'staff'));
+
+drop policy if exists "site_content_update_admin_staff" on public.site_content;
+create policy "site_content_update_admin_staff"
+on public.site_content
+for update
+to authenticated
+using (public.get_my_role() in ('admin', 'staff'))
+with check (public.get_my_role() in ('admin', 'staff'));
+
+drop policy if exists "site_content_delete_admin_staff" on public.site_content;
+create policy "site_content_delete_admin_staff"
+on public.site_content
+for delete
+to authenticated
+using (public.get_my_role() in ('admin', 'staff'));
 
 drop policy if exists "inventory_staff_manage" on public.inventory;
 create policy "inventory_staff_manage"
@@ -533,6 +619,25 @@ begin
       and tablename = 'payment_checkouts'
   ) then
     alter publication supabase_realtime add table public.payment_checkouts;
+  end if;
+end
+$$;
+
+do $$
+begin
+  if exists (
+    select 1
+    from information_schema.tables
+    where table_schema = 'public'
+      and table_name = 'site_content'
+  ) and not exists (
+    select 1
+    from pg_publication_tables
+    where pubname = 'supabase_realtime'
+      and schemaname = 'public'
+      and tablename = 'site_content'
+  ) then
+    alter publication supabase_realtime add table public.site_content;
   end if;
 end
 $$;

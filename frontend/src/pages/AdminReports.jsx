@@ -163,7 +163,6 @@ const AdminReports = () => {
       <div className="admin-products-header">
         <div>
           <h1 style={{ fontSize: '2rem', marginBottom: '0.25rem' }}>Reports & Analytics</h1>
-          <p style={{ color: '#64748b' }}>Sales overview and performance metrics</p>
         </div>
       </div>
 

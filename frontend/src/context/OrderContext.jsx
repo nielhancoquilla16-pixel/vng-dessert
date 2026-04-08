@@ -97,10 +97,16 @@ const getPaymentLabel = (value = 'cash') => {
 };
 
 const normalizeOrder = (order) => {
+  // Guard: Handle null or invalid order
+  if (!order || typeof order !== 'object') {
+    return null;
+  }
+
   const lineItems = normalizeLineItems(order.lineItems || order.items || []);
   const totalAmount = Number(order.totalAmount ?? order.totalPrice) || parseCurrencyAmount(order.total);
   const createdAt = order.createdAt || order.created_at || new Date().toISOString();
-  const paymentLabel = getPaymentLabel(order.paymentMethod || order.payment_method);
+  const paymentMethod = String(order.paymentMethod || order.payment_method || 'cash').toLowerCase();
+  const paymentLabel = getPaymentLabel(paymentMethod);
   const deliveryMethod = String(order.deliveryMethod || order.delivery_method || 'pickup').toLowerCase();
   const status = normalizeOrderStatus(order.status || order.orderStatus || order.order_status || 'pending');
   const reviewStatus = normalizeReviewStatus(order.reviewStatus || order.review_status || 'none');
@@ -118,10 +124,24 @@ const normalizeOrder = (order) => {
       && String(order.paymentMethod || order.payment_method || 'cash').toLowerCase() !== 'online'
     ),
   );
+  const verificationRequired = Boolean(order.verificationRequired ?? order.verification_required ?? true);
+  const qrToken = verificationRequired ? String(order.qrToken || order.qr_token || '').toUpperCase() : '';
+  const qrPayload = String(order.qrPayload || order.qr_payload || (qrToken ? `vng-order:${qrToken}` : ''));
+  const qrUsedAt = order.qrUsedAt || order.qr_used_at || order.qrClaimedAt || order.qr_claimed_at || null;
+  const qrActive = Boolean(order.qrActive ?? order.qr_active ?? (
+    verificationRequired
+    && Boolean(qrToken)
+    && !qrUsedAt
+    && !['delivered', 'completed', 'cancelled', 'refunded'].includes(status)
+  ));
+  const isCodOrder = Boolean(order.isCodOrder ?? order.is_cod_order ?? (
+    deliveryMethod === 'delivery' && paymentMethod === 'cash'
+  ));
 
   return {
     ...order,
     id: order.id,
+    orderId: order.orderId || order.order_id || order.orderCode || order.order_code || order.displayId || order.display_id || order.id,
     displayId: order.displayId || order.display_id || order.id,
     orderCode: order.orderCode || order.order_code || order.displayId || order.display_id || order.id,
     createdAt,
@@ -145,11 +165,20 @@ const normalizeOrder = (order) => {
       ? order.address
       : `Walk-in / ${paymentLabel}${paymentLabel === 'Cash' ? ' on Pickup' : ''}`),
     deliveryMethod,
-    paymentMethod: order.paymentMethod || order.payment_method || 'cash',
+    paymentMethod,
+    isCodOrder,
     deliveryDistanceKm: Number.isFinite(Number(order.deliveryDistanceKm || order.delivery_distance_km))
       ? Number(order.deliveryDistanceKm || order.delivery_distance_km)
       : null,
     containsLecheFlan: Boolean(order.containsLecheFlan ?? order.contains_leche_flan),
+    verificationRequired,
+    verificationMethod: order.verificationMethod || order.verification_method || '',
+    verifiedAt: order.verifiedAt || order.verified_at || null,
+    verifiedBy: order.verifiedBy || order.verified_by || null,
+    qrToken,
+    qrPayload,
+    qrGeneratedAt: order.qrGeneratedAt || order.qr_generated_at || null,
+    qrUsedAt,
     qrClaimedAt: order.qrClaimedAt || order.qr_claimed_at || null,
     readyNotifiedAt: order.readyNotifiedAt || order.ready_notified_at || null,
     readyNotificationMessage: order.readyNotificationMessage || order.ready_notification_message || '',
@@ -169,13 +198,7 @@ const normalizeOrder = (order) => {
     cancelledAt: statusTimestamps.cancelled || null,
     refundedAt: statusTimestamps.refunded || null,
     isHistory: isHistoryOrderStatus(status),
-    qrActive: Boolean(order.qrActive ?? order.qr_active ?? (
-      deliveryMethod === 'pickup'
-      && String(order.paymentMethod || order.payment_method || 'cash').toLowerCase() === 'cash'
-      && !order.qrClaimedAt
-      && !order.qr_claimed_at
-      && !['delivered', 'completed', 'cancelled', 'refunded'].includes(status)
-    )),
+    qrActive,
   };
 };
 
@@ -204,7 +227,7 @@ export const OrderProvider = ({ children }) => {
       accessToken: session.access_token,
     });
 
-    const normalizedOrders = (response || []).map(normalizeOrder);
+    const normalizedOrders = (response || []).map(normalizeOrder).filter(Boolean);
     setOrders(normalizedOrders);
     return normalizedOrders;
   }, [session, userRole]);
@@ -286,7 +309,9 @@ export const OrderProvider = ({ children }) => {
     });
 
     const normalizedOrder = normalizeOrder(createdOrder);
-    setOrders((prev) => [normalizedOrder, ...prev]);
+    if (normalizedOrder) {
+      setOrders((prev) => [normalizedOrder, ...prev]);
+    }
     return normalizedOrder;
   }, [session]);
 
@@ -316,9 +341,11 @@ export const OrderProvider = ({ children }) => {
     });
 
     const normalizedOrder = syncOrderFromResponse(updatedOrder);
-    setOrders((prev) => prev.map((order) => (
-      order.id === normalizedOrder.id ? normalizedOrder : order
-    )));
+    if (normalizedOrder) {
+      setOrders((prev) => prev.map((order) => (
+        order.id === normalizedOrder.id ? normalizedOrder : order
+      )));
+    }
     return normalizedOrder;
   }, [session]);
 
@@ -337,9 +364,11 @@ export const OrderProvider = ({ children }) => {
     });
 
     const normalizedOrder = syncOrderFromResponse(updatedOrder);
-    setOrders((prev) => prev.map((order) => (
-      order.id === normalizedOrder.id ? normalizedOrder : order
-    )));
+    if (normalizedOrder) {
+      setOrders((prev) => prev.map((order) => (
+        order.id === normalizedOrder.id ? normalizedOrder : order
+      )));
+    }
     return normalizedOrder;
   }, [session]);
 

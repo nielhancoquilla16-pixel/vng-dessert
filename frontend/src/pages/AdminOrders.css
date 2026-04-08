@@ -191,15 +191,6 @@
   max-width: 56rem;
 }
 
-.admin-orders-kicker {
-  margin: 0 0 0.4rem;
-  text-transform: uppercase;
-  letter-spacing: 0.14em;
-  font-size: 0.72rem;
-  font-weight: 800;
-  color: #ea580c;
-}
-
 .admin-orders-hero-copy h1 {
   margin: 0;
   font-size: clamp(2.1rem, 4vw, 3.4rem);
@@ -1061,12 +1052,6 @@
   margin: 0;
   color: #0f172a;
   font-size: 1.1rem;
-}
-
-.admin-order-cancel-copy {
-  margin: 0;
-  color: #64748b;
-  line-height: 1.55;
 }
 
 .admin-order-cancel-field {

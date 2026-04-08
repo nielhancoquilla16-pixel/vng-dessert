@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 
 const SHARED_IFRAME_STYLE = {
   border: 'none',
@@ -57,6 +57,11 @@ const getVimeoVideoId = (url) => {
 
 const MediaEmbed = ({ url, title = 'Embedded media', controls = true }) => {
   const normalizedUrl = String(url || '').trim();
+  const [hasDirectVideoError, setHasDirectVideoError] = useState(false);
+
+  useEffect(() => {
+    setHasDirectVideoError(false);
+  }, [normalizedUrl]);
 
   if (!normalizedUrl) {
     return null;
@@ -112,15 +117,17 @@ const MediaEmbed = ({ url, title = 'Embedded media', controls = true }) => {
     );
   }
 
-  if (isDirectVideoUrl(normalizedUrl)) {
+  if (isDirectVideoUrl(normalizedUrl) && !hasDirectVideoError) {
     return (
       <video
+        key={normalizedUrl}
         src={normalizedUrl}
         controls={controls}
         width="100%"
         height="100%"
         playsInline
         preload="metadata"
+        onError={() => setHasDirectVideoError(true)}
         style={{ display: 'block', width: '100%', height: '100%' }}
       />
     );

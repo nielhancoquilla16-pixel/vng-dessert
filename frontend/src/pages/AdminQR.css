@@ -36,13 +36,6 @@
   line-height: 1;
 }
 
-.admin-qr-subtitle {
-  margin: 0;
-  color: #64748b;
-  line-height: 1.6;
-  max-width: 52rem;
-}
-
 .admin-qr-status-pill {
   display: inline-flex;
   align-items: center;

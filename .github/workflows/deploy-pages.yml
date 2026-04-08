@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - master
   workflow_dispatch:
 
 permissions:
@@ -20,12 +21,15 @@ jobs:
     runs-on: ubuntu-latest
     env:
       VITE_PASSWORD_RECOVERY_MODE: link
-      VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL }}
-      VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
-      VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+      VITE_API_BASE_URL: https://dessert-ai-backend-production.up.railway.app
+      VITE_SUPABASE_URL: https://uqniavennyrfdyakmxan.supabase.co
+      VITE_SUPABASE_ANON_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVxbmlhdmVubnlyZmR5YWtteGFuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM5MjExMDksImV4cCI6MjA4OTQ5NzEwOX0.on-Kxg62tR-7tFiPSsRu7vWoqm3Nv0OGjGQlWZtURuE
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -44,13 +48,34 @@ jobs:
         working-directory: frontend
         run: npm ci
 
+      - name: Compute GitHub Pages base path
+        id: pages
+        run: |
+          REPO_NAME="${GITHUB_REPOSITORY#*/}"
+          OWNER_NAME="${GITHUB_REPOSITORY_OWNER}"
+
+          if [ "$REPO_NAME" = "${OWNER_NAME}.github.io" ]; then
+            echo "base_path=/" >> "$GITHUB_OUTPUT"
+            echo "site_url=https://${OWNER_NAME}.github.io/" >> "$GITHUB_OUTPUT"
+          else
+            echo "base_path=/${REPO_NAME}/" >> "$GITHUB_OUTPUT"
+            echo "site_url=https://${OWNER_NAME}.github.io/${REPO_NAME}/" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Show expected GitHub Pages URL
+        run: echo "Expected deploy URL -> ${{ steps.pages.outputs.site_url }}"
+
       - name: Build frontend
         working-directory: frontend
-        run: npm run build -- --base "/${{ github.event.repository.name }}/"
+        run: npm run build -- --base "${{ steps.pages.outputs.base_path }}"
 
       - name: Add SPA fallback
         working-directory: frontend/dist
         run: cp index.html 404.html
+
+      - name: Disable Jekyll processing
+        working-directory: frontend/dist
+        run: touch .nojekyll
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3

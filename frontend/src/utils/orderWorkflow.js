@@ -77,7 +77,12 @@ export const isDeliveryOrder = (order = {}) => String(order.deliveryMethod || or
 
 export const isPickupOrder = (order = {}) => String(order.deliveryMethod || order.delivery_method || '').toLowerCase() === 'pickup';
 
-export const isWalkInOrder = (order = {}) => {
+export const isWalkInOrder = (order) => {
+  // Handle null/undefined
+  if (!order || typeof order !== 'object') {
+    return false;
+  }
+
   if (typeof order.isWalkInOrder === 'boolean') {
     return order.isWalkInOrder;
   }

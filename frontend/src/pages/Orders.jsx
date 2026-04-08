@@ -11,6 +11,7 @@ import {
   History,
   Loader2,
   PackageCheck,
+  QrCode,
   ReceiptText,
   Send,
   RotateCcw,
@@ -31,6 +32,7 @@ import {
   isHistoryOrderStatus,
   normalizeReviewStatus,
 } from '../utils/orderWorkflow';
+import { generateQrDataUrl } from '../utils/qrCode';
 import './Orders.css';
 
 const ORDER_PRIORITY = {
@@ -71,8 +73,78 @@ const getNotificationType = (notification) => String(notification?.type || 'info
 
 const formatIssueType = (value) => String(value || 'damage').replace(/_/g, ' ');
 
+const OrderVerificationPanel = ({ order }) => {
+  const hasQrPayload = Boolean(order?.verificationRequired && order?.qrPayload);
+  const qrImage = useMemo(() => (
+    hasQrPayload && !order?.qrUsedAt
+      ? generateQrDataUrl(order.qrPayload, 220)
+      : ''
+  ), [hasQrPayload, order?.qrPayload, order?.qrUsedAt]);
+
+  if (!order) {
+    return null;
+  }
+
+  if (order.isCodOrder) {
+    return (
+      <div className="order-qr-panel">
+        <div className="order-qr-header">
+          <div>
+            <p className="order-panel-kicker">Verification</p>
+            <h3>COD Manual Processing</h3>
+          </div>
+          <QrCode size={20} />
+        </div>
+        <p className="order-qr-note">
+          Cash on Delivery orders can be processed manually by staff even without presenting QR code or Order ID.
+        </p>
+      </div>
+    );
+  }
+
+  if (!order.verificationRequired) {
+    return null;
+  }
+
+  return (
+    <div className="order-qr-panel">
+      <div className="order-qr-header">
+        <div>
+          <p className="order-panel-kicker">Verification</p>
+          <h3>Order QR and ID</h3>
+        </div>
+        <QrCode size={20} />
+      </div>
+
+      <div className="order-qr-body">
+        {qrImage ? (
+          <img
+            src={qrImage}
+            alt={`QR for order ${order.orderCode || order.id}`}
+            className="order-qr-image"
+          />
+        ) : (
+          <div className="order-qr-image" style={{ display: 'grid', placeItems: 'center', color: '#64748b', fontWeight: 700 }}>
+            QR Unavailable
+          </div>
+        )}
+
+        <div>
+          <p className="order-qr-code-label">Order ID</p>
+          <strong>{order.orderCode || order.orderId || order.id}</strong>
+          <p className="order-qr-note">
+            {order.qrUsedAt
+              ? 'This QR code has already been used and cannot be scanned again.'
+              : 'Present this QR or your Order ID to staff during pickup/payment.'}
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const Orders = () => {
-  const { loggedInCustomer } = useAuth();
+  const { loggedInCustomer, isAuthLoading } = useAuth();
   const { orders, isOrdersLoading, confirmOrderReceipt, submitOrderIssue, cancelOrder } = useOrders();
   const [pageNotice, setPageNotice] = useState('');
   const [pageError, setPageError] = useState('');
@@ -82,6 +154,20 @@ const Orders = () => {
   const [openIssueOrderId, setOpenIssueOrderId] = useState('');
   const [cancelDrafts, setCancelDrafts] = useState({});
   const [openCancelOrderId, setOpenCancelOrderId] = useState('');
+
+  // Guard: Check if user is authenticated as a customer
+  if (!isAuthLoading && !loggedInCustomer) {
+    return (
+      <div className="orders-workflow-page">
+        <section className="orders-alert-stack">
+          <div className="orders-alert-card orders-alert-card--error">
+            <CircleAlert size={18} />
+            <div>You must be logged in as a customer to view your orders.</div>
+          </div>
+        </section>
+      </div>
+    );
+  }
 
   const activeOrders = useMemo(() => (
     [...orders]
@@ -355,102 +441,120 @@ const Orders = () => {
   };
 
   const renderWorkflowRail = (order) => {
-    const steps = buildOrderWorkflowProgress(order.status);
+    try {
+      if (!order || typeof order.status !== 'string') {
+        return null;
+      }
 
-    return (
-      <div className="workflow-rail" aria-label={`Order workflow for ${order.displayId || order.id}`}>
-        {steps.map((step, index) => (
-          <div key={step.status} className="workflow-step">
-            <div className={`workflow-dot ${step.isComplete ? 'is-complete' : ''} ${step.isCurrent ? 'is-current' : ''}`} />
-            <div className="workflow-step-copy">
-              <span className="workflow-step-label">{step.label}</span>
-              <span className="workflow-step-index">{index + 1}</span>
+      const steps = buildOrderWorkflowProgress(order.status);
+      if (!Array.isArray(steps) || steps.length === 0) {
+        return null;
+      }
+
+      return (
+        <div className="workflow-rail" aria-label={`Order workflow for ${order.displayId || order.id}`}>
+          {steps.map((step, index) => (
+            <div key={step.status} className="workflow-step">
+              <div className={`workflow-dot ${step.isComplete ? 'is-complete' : ''} ${step.isCurrent ? 'is-current' : ''}`} />
+              <div className="workflow-step-copy">
+                <span className="workflow-step-label">{step.label}</span>
+                <span className="workflow-step-index">{index + 1}</span>
+              </div>
             </div>
-          </div>
-        ))}
-      </div>
-    );
+          ))}
+        </div>
+      );
+    } catch (error) {
+      console.error('Error rendering workflow rail:', error);
+      return null;
+    }
   };
 
   const renderReceiptPanel = (order) => {
-    if (!canCustomerConfirmReceipt(order)) {
+    try {
+      if (!order || !canCustomerConfirmReceipt(order)) {
+        return null;
+      }
+
+      const draft = receiptDrafts[order.id] || {};
+      const isLoading = loadingAction?.type === 'receipt' && loadingAction.orderId === order.id;
+
+      return (
+        <div className="order-action-panel order-action-panel--proof">
+          <div className="order-action-panel-header">
+            <div>
+              <p className="order-panel-kicker">Confirm Receipt</p>
+              <h3>Upload receipt proof</h3>
+            </div>
+            <BadgeCheck size={20} />
+          </div>
+
+          <p className="order-panel-copy">
+            This button only appears after the order is marked Delivered. A photo is required before the order can move to Completed.
+          </p>
+
+          <label className="order-upload-card">
+            <input
+              type="file"
+              accept="image/*"
+              capture="environment"
+              onChange={(event) => void handleReceiptFileChange(order.id, event)}
+              className="order-hidden-input"
+            />
+            <Upload size={18} />
+            <div>
+              <strong>{draft.receiptImageName || 'Choose an image file'}</strong>
+              <span>Image proof is required to mark the order completed.</span>
+            </div>
+          </label>
+
+          {draft.receiptImageDataUrl && (
+            <img
+              src={draft.receiptImageDataUrl}
+              alt="Receipt proof preview"
+              className="order-image-preview"
+            />
+          )}
+
+          {draft.error && <div className="order-inline-error">{draft.error}</div>}
+
+          <button
+            type="button"
+            className="order-button order-button--primary"
+            onClick={() => handleConfirmReceipt(order)}
+            disabled={isLoading}
+          >
+            {isLoading ? <Loader2 size={16} className="spin" /> : <CheckCircle2 size={16} />}
+            {isLoading ? 'Submitting...' : 'Confirm Received'}
+          </button>
+        </div>
+      );
+    } catch (error) {
+      console.error('Error rendering receipt panel:', error);
       return null;
     }
-
-    const draft = receiptDrafts[order.id] || {};
-    const isLoading = loadingAction?.type === 'receipt' && loadingAction.orderId === order.id;
-
-    return (
-      <div className="order-action-panel order-action-panel--proof">
-        <div className="order-action-panel-header">
-          <div>
-            <p className="order-panel-kicker">Confirm Receipt</p>
-            <h3>Upload receipt proof</h3>
-          </div>
-          <BadgeCheck size={20} />
-        </div>
-
-        <p className="order-panel-copy">
-          This button only appears after the order is marked Delivered. A photo is required before the order can move to Completed.
-        </p>
-
-        <label className="order-upload-card">
-          <input
-            type="file"
-            accept="image/*"
-            capture="environment"
-            onChange={(event) => void handleReceiptFileChange(order.id, event)}
-            className="order-hidden-input"
-          />
-          <Upload size={18} />
-          <div>
-            <strong>{draft.receiptImageName || 'Choose an image file'}</strong>
-            <span>Image proof is required to mark the order completed.</span>
-          </div>
-        </label>
-
-        {draft.receiptImageDataUrl && (
-          <img
-            src={draft.receiptImageDataUrl}
-            alt="Receipt proof preview"
-            className="order-image-preview"
-          />
-        )}
-
-        {draft.error && <div className="order-inline-error">{draft.error}</div>}
-
-        <button
-          type="button"
-          className="order-button order-button--primary"
-          onClick={() => handleConfirmReceipt(order)}
-          disabled={isLoading}
-        >
-          {isLoading ? <Loader2 size={16} className="spin" /> : <CheckCircle2 size={16} />}
-          {isLoading ? 'Submitting...' : 'Confirm Received'}
-        </button>
-      </div>
-    );
   };
 
   const renderIssuePanel = (order, isOpen) => {
-    if (!canCustomerReportIssue(order) || !isOpen) {
-      return null;
-    }
+    try {
+      if (!order || !canCustomerReportIssue(order) || !isOpen) {
+        return null;
+      }
 
-    const draft = issueDrafts[order.id] || {
-      customerName: loggedInCustomer?.fullName || loggedInCustomer?.username || order.customer || '',
-      description: '',
-      issueType: 'damage',
-      evidenceImageDataUrl: '',
-      evidenceImageName: '',
-      error: '',
-      success: '',
-    };
-    const isLoading = loadingAction?.type === 'issue' && loadingAction.orderId === order.id;
-    const detectionDate = new Date().toLocaleString(undefined, {
-      month: 'short',
-      day: 'numeric',
-      year: 'numeric',
+      const draft = issueDrafts[order.id] || {
+        customerName: loggedInCustomer?.fullName || loggedInCustomer?.username || order.customer || '',
+        description: '',
+        issueType: 'damage',
+        evidenceImageDataUrl: '',
+        evidenceImageName: '',
+        error: '',
+        success: '',
+      };
+      const isLoading = loadingAction?.type === 'issue' && loadingAction.orderId === order.id;
+      const detectionDate = new Date().toLocaleString(undefined, {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
       hour: 'numeric',
       minute: '2-digit',
     });
@@ -571,65 +675,80 @@ const Orders = () => {
         </button>
       </div>
     );
+    } catch (error) {
+      console.error('Error rendering issue panel:', error);
+      return null;
+    }
   };
 
   const renderCancelPanel = (order, isOpen) => {
-    if (!canCustomerCancelOrder(order) || !isOpen) {
-      return null;
-    }
+    try {
+      if (!order || !canCustomerCancelOrder(order) || !isOpen) {
+        return null;
+      }
 
-    const draft = cancelDrafts[order.id] || {
-      reason: '',
-      error: '',
-    };
-    const isLoading = loadingAction?.type === 'cancel' && loadingAction.orderId === order.id;
+      const draft = cancelDrafts[order.id] || {
+        reason: '',
+        error: '',
+      };
+      const isLoading = loadingAction?.type === 'cancel' && loadingAction.orderId === order.id;
 
-    return (
-      <div className="order-action-panel order-action-panel--cancel">
-        <div className="order-action-panel-header">
-          <div>
-            <p className="order-panel-kicker">Cancel Order</p>
-            <h3>Cancellation reason</h3>
+      return (
+        <div className="order-action-panel order-action-panel--cancel">
+          <div className="order-action-panel-header">
+            <div>
+              <p className="order-panel-kicker">Cancel Order</p>
+              <h3>Cancellation reason</h3>
+            </div>
+            <button
+              type="button"
+              className="order-button order-button--ghost order-button--compact"
+              onClick={() => setOpenCancelOrderId('')}
+            >
+              Hide form
+            </button>
           </div>
+
+          <p className="order-panel-copy">
+            Cancel this order while it is still pending. A reason is optional, but it helps the team understand the request.
+          </p>
+
+          <div className="order-form-field">
+            <label>Reason (optional)</label>
+            <textarea
+              className="order-textarea"
+              value={draft.reason || ''}
+              onChange={(event) => setCancelDraft(order.id, { reason: event.target.value, error: '' })}
+              placeholder="Add a short reason for the cancellation."
+            />
+          </div>
+
+          {draft.error && <div className="order-inline-error">{draft.error}</div>}
+
           <button
             type="button"
-            className="order-button order-button--ghost order-button--compact"
-            onClick={() => setOpenCancelOrderId('')}
+            className="order-button order-button--danger"
+            onClick={() => void handleCancelOrder(order)}
+            disabled={isLoading}
           >
-            Hide form
+            {isLoading ? <Loader2 size={16} className="spin" /> : <XCircle size={16} />}
+            {isLoading ? 'Cancelling...' : 'Confirm Cancellation'}
           </button>
         </div>
-
-        <p className="order-panel-copy">
-          Cancel this order while it is still pending. A reason is optional, but it helps the team understand the request.
-        </p>
-
-        <div className="order-form-field">
-          <label>Reason (optional)</label>
-          <textarea
-            className="order-textarea"
-            value={draft.reason || ''}
-            onChange={(event) => setCancelDraft(order.id, { reason: event.target.value, error: '' })}
-            placeholder="Add a short reason for the cancellation."
-          />
-        </div>
-
-        {draft.error && <div className="order-inline-error">{draft.error}</div>}
-
-        <button
-          type="button"
-          className="order-button order-button--danger"
-          onClick={() => void handleCancelOrder(order)}
-          disabled={isLoading}
-        >
-          {isLoading ? <Loader2 size={16} className="spin" /> : <XCircle size={16} />}
-          {isLoading ? 'Cancelling...' : 'Confirm Cancellation'}
-        </button>
-      </div>
-    );
+      );
+    } catch (error) {
+      console.error('Error rendering cancel panel:', error);
+      return null;
+    }
   };
 
   const renderOrderCard = (order, variant = 'active') => {
+    // Guard: Ensure order data is valid
+    if (!order || typeof order !== 'object') {
+      console.warn('Invalid order data:', order);
+      return null;
+    }
+
     const statusLabel = getOrderStatusLabel(order.status);
     const reviewStatusLabel = getReviewStatusLabel(order.reviewStatus);
     const workflowSteps = buildOrderWorkflowProgress(order.status);
@@ -753,6 +872,8 @@ const Orders = () => {
             </div>
           )}
         </div>
+
+        {variant === 'active' && <OrderVerificationPanel order={order} />}
 
         {variant === 'active' && renderWorkflowRail(order)}
 

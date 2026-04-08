@@ -72,7 +72,6 @@ const AdminInventory = () => {
       <div className="admin-products-header">
         <div>
           <h1 style={{ fontSize: '2rem', marginBottom: '0.25rem' }}>Inventory</h1>
-          <p style={{ color: '#64748b' }}>Track and manage {isProductsView ? 'finished products' : 'ingredients'} stock levels</p>
         </div>
 
         <div style={{ display: 'flex', gap: '1rem' }}>

@@ -45,6 +45,7 @@ const AdminQR = () => {
   const [isConfirming, setIsConfirming] = useState(false);
   const [lookupError, setLookupError] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
+  const [lastVerification, setLastVerification] = useState(null);
   const [isScanning, setIsScanning] = useState(false);
   const [scannerMessage, setScannerMessage] = useState(IDLE_SCAN_MESSAGE);
   const videoRef = useRef(null);
@@ -53,8 +54,8 @@ const AdminQR = () => {
 
   const canConfirmPickup = useMemo(() => (
     Boolean(activeOrder)
+    && String(activeOrder.deliveryMethod || '').toLowerCase() === 'pickup'
     && activeOrder.status === 'ready'
-    && activeOrder.qrActive
   ), [activeOrder]);
 
   useEffect(() => () => {
@@ -107,9 +108,49 @@ const AdminQR = () => {
       });
 
       setActiveOrder(result);
+      setLastVerification(null);
     } catch (error) {
       setActiveOrder(null);
       setLookupError(error.message || 'Unable to find that order right now.');
+    } finally {
+      setIsSearching(false);
+    }
+  };
+
+  const verifyOrderFromScan = async (scannedInput = '') => {
+    const identifier = String(scannedInput || '').trim();
+    if (!identifier) {
+      setLookupError('Scanned value is empty.');
+      return;
+    }
+
+    setIsSearching(true);
+    setLookupError('');
+    setSuccessMessage('');
+
+    try {
+      const result = await apiRequest('/api/orders/verify', {
+        method: 'POST',
+        body: JSON.stringify({
+          identifier,
+        }),
+      }, {
+        auth: true,
+        accessToken: session?.access_token,
+      });
+
+      const resolvedOrder = result?.order || null;
+      if (!resolvedOrder) {
+        throw new Error('No order was returned after verification.');
+      }
+
+      setActiveOrder(resolvedOrder);
+      setLastVerification(result?.verification || null);
+      setSuccessMessage('Order verified. QR code is now invalid for re-use.');
+    } catch (error) {
+      setActiveOrder(null);
+      setLastVerification(null);
+      setLookupError(error.message || 'Unable to verify this order right now.');
     } finally {
       setIsSearching(false);
     }
@@ -123,8 +164,8 @@ const AdminQR = () => {
     }
 
     setLookupValue(scannedValue);
-    stopScanner('QR detected. Looking up the order...');
-    void lookupOrder(scannedValue);
+    stopScanner('QR detected. Verifying order...');
+    void verifyOrderFromScan(scannedValue);
   };
 
   const startScanner = async () => {
@@ -229,7 +270,7 @@ const AdminQR = () => {
       });
 
       setActiveOrder(result);
-      setSuccessMessage('Order confirmed and QR code expired.');
+      setSuccessMessage('Order confirmed successfully.');
     } catch (error) {
       setLookupError(error.message || 'Unable to confirm this pickup right now.');
     } finally {
@@ -243,9 +284,6 @@ const AdminQR = () => {
         <div className="admin-qr-hero-copy">
           <p className="admin-qr-kicker">Pickup Validation</p>
           <h1>QR Scanner</h1>
-          <p className="admin-qr-subtitle">
-            Scan or enter the Order ID to validate pickup orders.
-          </p>
         </div>
 
         <div className={`admin-qr-status-pill ${isScanning ? 'is-scanning' : ''}`}>
@@ -309,7 +347,7 @@ const AdminQR = () => {
           </div>
 
           <p className="qr-helper-copy">
-            The QR code contains only the Order ID. Once the cashier confirms the order, the code expires immediately.
+            QR scans are one-time use. Staff can still process manually using Order ID when needed, including COD fallback.
           </p>
 
           <div className="scanner-message-bar" aria-live="polite">
@@ -324,7 +362,7 @@ const AdminQR = () => {
               <p className="lookup-eyebrow">Lookup Result</p>
               <h3>Order Details</h3>
               <p className="lookup-card-copy">
-                Search manually or scan a code, then confirm pickup from the details below.
+                Scan a QR to verify instantly, or use manual search to find and process by Order ID.
               </p>
             </div>
             <ShoppingBag size={20} />
@@ -360,7 +398,7 @@ const AdminQR = () => {
           {!activeOrder ? (
             <div className="lookup-empty-state">
               <QrCode size={44} />
-              <p>Scan an order QR or enter the Order ID to view products, total, and pickup status.</p>
+              <p>Scan a QR for one-time verification or enter Order ID / customer details for manual lookup.</p>
             </div>
           ) : (
             <div className="lookup-result">
@@ -394,9 +432,26 @@ const AdminQR = () => {
                 </div>
                 <div>
                   <span>QR Status</span>
-                  <strong>{activeOrder.qrActive ? 'Active' : 'Expired'}</strong>
+                  <strong>
+                    {activeOrder.verificationRequired
+                      ? (activeOrder.qrUsedAt ? 'Used / Invalid' : (activeOrder.qrActive ? 'Active' : 'Not available'))
+                      : 'Optional (COD/manual)'}
+                  </strong>
                 </div>
               </div>
+
+              {lastVerification && (
+                <div className="lookup-ready-banner">
+                  <CheckCircle2 size={18} />
+                  <div>
+                    <strong>Verification captured</strong>
+                    <p>
+                      Method: {String(lastVerification.method || 'manual').replace(/_/g, ' ').toUpperCase()}
+                      {lastVerification.verifiedAt ? ` - ${new Date(lastVerification.verifiedAt).toLocaleString()}` : ''}
+                    </p>
+                  </div>
+                </div>
+              )}
 
               <div className="lookup-items-list">
                 <h4>Items</h4>
@@ -435,9 +490,13 @@ const AdminQR = () => {
 
               {!canConfirmPickup && (
                 <p className="lookup-footnote">
-                  {activeOrder.qrActive
-                    ? 'This order can be confirmed only when its status is Ready for Pickup.'
-                    : 'This QR has already been used or expired.'}
+                  {String(activeOrder.deliveryMethod || '').toLowerCase() !== 'pickup'
+                    ? 'This order is not a pickup order. Process it from the Orders workflow.'
+                    : ['delivered', 'completed', 'cancelled', 'refunded'].includes(String(activeOrder.status || '').toLowerCase())
+                      ? 'This order has already been confirmed or verified.'
+                      : activeOrder.status !== 'ready'
+                        ? 'Pickup confirmation is available once the order reaches Ready status.'
+                        : 'This order has already been confirmed or verified.'}
                 </p>
               )}
             </div>

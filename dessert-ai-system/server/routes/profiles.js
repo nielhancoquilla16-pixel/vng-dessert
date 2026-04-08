@@ -299,4 +299,103 @@ router.delete("/staff/:id", requireAuth, requireRole("admin"), async (req, res, 
   }
 });
 
+router.put("/staff/:id", requireAuth, requireRole("admin"), async (req, res, next) => {
+  try {
+    const {
+      email,
+      username,
+      full_name,
+      role = "staff",
+      address = null,
+      phone_number = null,
+      avatar_url = null,
+      password = null,
+    } = req.body;
+
+    if (!email || !username) {
+      return res.status(400).json({ error: "email and username are required." });
+    }
+
+    if (!["staff", "admin"].includes(role)) {
+      return res.status(400).json({ error: "role must be staff or admin." });
+    }
+
+    const normalizedEmail = normalizeValue(email);
+    const normalizedUsername = normalizeValue(username);
+    const supabase = getSupabaseAdmin();
+
+    // Get current profile for avatar handling
+    const { data: currentProfile, error: profileFetchError } = await supabase
+      .from("profiles")
+      .select("*")
+      .eq("id", req.params.id)
+      .single();
+
+    if (profileFetchError || !currentProfile) {
+      return res.status(404).json({ error: "Staff account not found." });
+    }
+
+    const currentAuthUser = await getAuthUserById(supabase, req.params.id);
+    const currentAvatarUrl = getProfileAvatarUrl(currentAuthUser);
+    const hasAvatarUpdate = Object.prototype.hasOwnProperty.call(req.body || {}, "avatar_url");
+    
+    const avatarUrl = hasAvatarUpdate
+      ? await resolveProfileImageValue({
+          imageInput: avatar_url,
+          userId: req.params.id,
+          requestBaseUrl: getRequestBaseUrl(req),
+          previousValue: currentAvatarUrl,
+        })
+      : currentAvatarUrl;
+
+    // Update auth user metadata
+    const authUpdateData = {
+      user_metadata: {
+        ...currentAuthUser.user_metadata,
+        username: normalizedUsername || "",
+        full_name: full_name || "",
+        avatar_url: avatarUrl || "",
+      },
+    };
+
+    // Add password update if provided
+    if (password) {
+      authUpdateData.password = password;
+    }
+
+    const { error: authUpdateError } = await supabase.auth.admin.updateUserById(
+      req.params.id,
+      authUpdateData
+    );
+
+    if (authUpdateError) {
+      throw authUpdateError;
+    }
+
+    // Update profile in database
+    const { data: updatedProfile, error: profileUpdateError } = await supabase
+      .from("profiles")
+      .update({
+        username: normalizedUsername,
+        email: normalizedEmail,
+        full_name: full_name || "",
+        role,
+        address: normalizeOptionalValue(address),
+        phone_number: normalizeOptionalValue(phone_number),
+      })
+      .eq("id", req.params.id)
+      .select("*")
+      .single();
+
+    if (profileUpdateError) {
+      throw profileUpdateError;
+    }
+
+    const updatedAuthUser = await getAuthUserById(supabase, req.params.id);
+    res.json(mapProfile(updatedProfile, updatedAuthUser || currentAuthUser));
+  } catch (error) {
+    next(error);
+  }
+});
+
 export default router;

@@ -618,6 +618,32 @@ export const AuthProvider = ({ children }) => {
     await fetchStaffAccounts(session);
   }, [fetchStaffAccounts, session]);
 
+  const updateStaffAccount = useCallback(async (id, staffData) => {
+    if (!session?.access_token) {
+      throw new ApiError('You need to sign in first.', 401);
+    }
+
+    const updatedStaff = await apiRequest(`/api/profiles/staff/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify({
+        username: staffData.username,
+        email: staffData.email,
+        full_name: staffData.fullName,
+        role: staffData.role || 'staff',
+        address: staffData.address || '',
+        phone_number: staffData.phoneNumber || '',
+        avatar_url: staffData.avatarUrl || '',
+        ...(staffData.password && { password: staffData.password }),
+      }),
+    }, {
+      auth: true,
+      accessToken: session.access_token,
+    });
+
+    await fetchStaffAccounts(session);
+    return normalizeProfile(updatedStaff);
+  }, [fetchStaffAccounts, session]);
+
   const logout = useCallback(async () => {
     if (supabase) {
       await supabase.auth.signOut();
@@ -666,6 +692,7 @@ export const AuthProvider = ({ children }) => {
         updateLoggedInCustomer,
         logout,
         createStaffAccount,
+        updateStaffAccount,
         deleteStaffAccount,
         refreshProfile,
         isPasswordRecovery,

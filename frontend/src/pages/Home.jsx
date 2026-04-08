@@ -1,38 +1,16 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { MapPin, Sparkles, ShoppingCart } from 'lucide-react';
-import ReactPlayer from 'react-player';
 import { useProducts } from '../context/ProductContext';
 import { useAI } from '../context/AIContext';
 import { useContent } from '../context/ContentContext';
 import { apiRequest } from '../lib/api';
 import { resolveAssetUrl } from '../lib/publicUrl';
 import { formatCurrency } from '../utils/orderAnalytics';
+import MediaEmbed from '../components/MediaEmbed';
 import './Home.css';
 
 const BEST_SELLER_LIMIT = 3;
-
-const VideoEmbed = ({ url }) => {
-  if (!url) return null;
-
-  if (url.includes('facebook.com') || url.includes('fb.watch')) {
-    const fbIframeSrc = `https://www.facebook.com/plugins/video.php?href=${encodeURIComponent(url)}&show_text=0`;
-    return (
-      <iframe
-        src={fbIframeSrc}
-        width="100%"
-        height="100%"
-        style={{ border: 'none', overflow: 'hidden' }}
-        scrolling="no"
-        frameBorder="0"
-        allowFullScreen
-        allow="autoplay; clipboard-write; encrypted-media; picture-in-picture; web-share"
-      />
-    );
-  }
-
-  return <ReactPlayer url={url} controls width="100%" height="100%" />;
-};
 
 const normalizeBestSeller = (product = {}, fallbackRank = 1) => ({
   id: product.id,
@@ -91,8 +69,18 @@ const Home = () => {
   const [isBestSellersLoading, setIsBestSellersLoading] = useState(true);
   const { products, isProductsLoading } = useProducts();
   const { getSmartRecommendations } = useAI();
-  const { siteVideos } = useContent();
-  const safeSiteVideos = Array.isArray(siteVideos) ? siteVideos.filter(Boolean) : [];
+  const { siteVideos, defaultVideos } = useContent();
+  const safeSiteVideos = useMemo(() => {
+    const normalized = (Array.isArray(siteVideos) ? siteVideos : [])
+      .filter((video) => video && String(video.src || '').trim());
+
+    if (normalized.length > 0) {
+      return normalized;
+    }
+
+    return (Array.isArray(defaultVideos) ? defaultVideos : [])
+      .filter((video) => video && String(video.src || '').trim());
+  }, [siteVideos, defaultVideos]);
 
   useEffect(() => {
     if (location.state?.welcomeMessage) {
@@ -399,7 +387,10 @@ const Home = () => {
                   className="video-player-container"
                   style={isReel ? { aspectRatio: '9/16', maxHeight: '550px', maxWidth: '310px', margin: '0 auto' } : {}}
                 >
-                  <VideoEmbed url={videoSrc} />
+                  <MediaEmbed
+                    url={videoSrc}
+                    title={video?.title || `Section ${video?.id || 'video'}`}
+                  />
                 </div>
                 <div className="video-info">
                   <h3>{video?.title || 'Promotional Video'}</h3>

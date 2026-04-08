@@ -205,7 +205,7 @@ const AdminOrders = () => {
     }
   }, [selectedOrder, openEditOrderId]);
 
-  const selectedOrderIsWalkIn = Boolean(selectedOrder?.isWalkInOrder ?? isWalkInOrder(selectedOrder));
+  const selectedOrderIsWalkIn = selectedOrder ? Boolean(selectedOrder?.isWalkInOrder ?? isWalkInOrder(selectedOrder)) : false;
 
   const canEditSelectedOrder = Boolean(
     selectedOrder
@@ -498,7 +498,6 @@ const AdminOrders = () => {
         <div className="admin-order-cancel-panel-header">
           <div>
             <p className="admin-orders-kicker">Cancel order</p>
-            <h3>Cancellation reason</h3>
           </div>
           <button
             type="button"
@@ -508,10 +507,6 @@ const AdminOrders = () => {
             Hide form
           </button>
         </div>
-
-        <p className="admin-order-cancel-copy">
-          Staff and admin can cancel the order before delivery. The reason is optional, but it helps document the action.
-        </p>
 
         <div className="admin-order-cancel-field">
           <label htmlFor={`cancel-reason-${order.id}`}>Reason (optional)</label>
@@ -706,11 +701,7 @@ const AdminOrders = () => {
     <div className="admin-orders-page">
       <section className="admin-orders-hero">
         <div className="admin-orders-hero-copy">
-          <p className="admin-orders-kicker">Workflow control</p>
           <h1>Orders</h1>
-          <p>
-            Move each order through the strict lifecycle only: Pending, Confirmed, Preparing, Ready, Out for Delivery, Delivered, Completed, Cancelled, and Refunded.
-          </p>
         </div>
 
         <div className="admin-orders-hero-chip">

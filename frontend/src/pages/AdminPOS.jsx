@@ -1,7 +1,8 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Search, Plus, Minus, Trash2 } from 'lucide-react';
 import { useProducts } from '../context/ProductContext';
 import { useOrders } from '../context/OrderContext';
+import { generateQrDataUrl } from '../utils/qrCode';
 import './AdminPOS.css';
 
 const AdminPOS = () => {
@@ -21,6 +22,11 @@ const AdminPOS = () => {
   const categories = ['All', 'Leche Flan', 'Cakes', 'Special Desserts', 'Pastries', 'Cringkles'];
 
   const total = posCart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+  const saleReceiptQrImage = useMemo(() => (
+    saleReceipt?.verificationRequired && saleReceipt?.qrPayload && !saleReceipt?.qrUsedAt
+      ? generateQrDataUrl(saleReceipt.qrPayload, 180)
+      : ''
+  ), [saleReceipt]);
 
   useEffect(() => {
     if (saleReceipt) {
@@ -138,6 +144,9 @@ const AdminPOS = () => {
         total,
         cashReceived: cashTendered,
         changeDue,
+        verificationRequired: Boolean(savedOrder?.verificationRequired ?? savedOrder?.verification_required ?? false),
+        qrPayload: savedOrder?.qrPayload || savedOrder?.qr_payload || '',
+        qrUsedAt: savedOrder?.qrUsedAt || savedOrder?.qr_used_at || null,
         completedAt: new Date().toISOString(),
       });
 
@@ -343,6 +352,33 @@ const AdminPOS = () => {
                 </div>
               )}
             </div>
+
+            {saleReceipt.verificationRequired && (
+              <div className="pos-receipt-qr-panel">
+                <div className="pos-receipt-qr-header">
+                  <div>
+                    <p className="pos-receipt-qr-label">Order ID</p>
+                    <strong>{saleReceipt.orderCode}</strong>
+                  </div>
+                </div>
+                <div className="pos-receipt-qr-body">
+                  {saleReceiptQrImage ? (
+                    <img
+                      src={saleReceiptQrImage}
+                      alt={`Order QR ${saleReceipt.orderCode}`}
+                      className="pos-receipt-qr-image"
+                    />
+                  ) : (
+                    <div className="pos-receipt-qr-image pos-receipt-qr-image--fallback">
+                      QR Unavailable
+                    </div>
+                  )}
+                  <p className="pos-receipt-qr-note">
+                    Present this QR or Order ID during pickup verification. QR is one-time use only.
+                  </p>
+                </div>
+              </div>
+            )}
 
             <div className="pos-completion-actions">
               <button className="btn-pos-secondary" onClick={handleAddMoreOrder}>Add More Order</button>

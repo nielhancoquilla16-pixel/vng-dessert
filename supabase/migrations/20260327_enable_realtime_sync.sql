@@ -93,3 +93,22 @@ begin
   end if;
 end
 $$;
+
+do $$
+begin
+  if exists (
+    select 1
+    from information_schema.tables
+    where table_schema = 'public'
+      and table_name = 'site_content'
+  ) and not exists (
+    select 1
+    from pg_publication_tables
+    where pubname = 'supabase_realtime'
+      and schemaname = 'public'
+      and tablename = 'site_content'
+  ) then
+    alter publication supabase_realtime add table public.site_content;
+  end if;
+end
+$$;

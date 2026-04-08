@@ -13,6 +13,7 @@ const ORDER_STATUS_ALIASES = new Map([
 export const VALID_ORDER_STATUSES = ORDER_STATUS_SEQUENCE;
 export const DELIVERY_FEE = 50;
 export const DEFAULT_READY_NOTIFICATION_MESSAGE = 'Your order is ready for pickup. Please proceed to the cashier and present your QR code.';
+export const ORDER_QR_PREFIX = 'vng-order:';
 
 const STATUS_TIMESTAMP_KEYS = {
   pending: 'pending',
@@ -88,6 +89,55 @@ export const getLecheFlanRestrictionMessage = (distanceKm) => (
     ? 'Leche flan delivery is limited to 3 km only.'
     : ''
 );
+
+export const isCashOnDelivery = (deliveryMethod = 'pickup', paymentMethod = 'cash') => (
+  String(deliveryMethod || 'pickup').toLowerCase() === 'delivery'
+  && String(paymentMethod || 'cash').toLowerCase() === 'cash'
+);
+
+export const shouldRequireOrderVerification = (deliveryMethod = 'pickup', paymentMethod = 'cash') => (
+  !isCashOnDelivery(deliveryMethod, paymentMethod)
+);
+
+export const generateOrderQrToken = () => (
+  `VNGQR-${randomUUID().replace(/-/g, '').slice(0, 20).toUpperCase()}`
+);
+
+export const buildOrderQrPayload = (token = '') => {
+  const normalizedToken = String(token || '').trim().toUpperCase();
+  return normalizedToken ? `${ORDER_QR_PREFIX}${normalizedToken}` : '';
+};
+
+export const extractOrderQrToken = (value = '') => {
+  const normalizedInput = String(value || '').trim();
+
+  if (!normalizedInput) {
+    return '';
+  }
+
+  const normalizedLower = normalizedInput.toLowerCase();
+
+  if (normalizedLower.startsWith(ORDER_QR_PREFIX)) {
+    return normalizedInput.slice(ORDER_QR_PREFIX.length).trim().toUpperCase();
+  }
+
+  if (normalizedInput.startsWith('{') && normalizedInput.endsWith('}')) {
+    try {
+      const parsed = JSON.parse(normalizedInput);
+      const token = parsed?.qrToken || parsed?.token || parsed?.verificationToken || '';
+      return String(token || '').trim().toUpperCase();
+    } catch {
+      return '';
+    }
+  }
+
+  const normalizedUpper = normalizedInput.toUpperCase();
+  if (normalizedUpper.startsWith('VNGQR-')) {
+    return normalizedUpper;
+  }
+
+  return '';
+};
 
 export const normalizeIssueReport = (report = {}) => ({
   id: report.id,
@@ -171,6 +221,13 @@ export const orderSelect = `
   delivery_distance_km,
   contains_leche_flan,
   inventory_deducted_at,
+  verification_required,
+  qr_token,
+  qr_generated_at,
+  qr_used_at,
+  verified_at,
+  verified_by,
+  verification_method,
   qr_claimed_at,
   ready_notified_at,
   ready_notification_message,
@@ -265,10 +322,12 @@ export const mapOrder = (row) => {
     || 'Customer';
 
   const paymentLabel = getPaymentLabel(row.payment_method);
+  const deliveryMethod = String(row.delivery_method || 'pickup').toLowerCase();
+  const paymentMethod = String(row.payment_method || 'cash').toLowerCase();
   const normalizedStatus = normalizeOrderStatus(row.order_status || 'pending');
   const normalizedReviewStatus = normalizeReviewStatus(row.review_status || 'none');
   const orderCode = row.order_code || toDisplayId(row.id);
-  const subtext = row.delivery_method === 'delivery'
+  const subtext = deliveryMethod === 'delivery'
     ? (row.address || 'Delivery')
     : `Walk-in / ${paymentLabel}${paymentLabel === 'Cash' ? ' on Pickup' : ''}`;
   const createdAt = row.created_at || new Date().toISOString();
@@ -289,12 +348,23 @@ export const mapOrder = (row) => {
   );
   const placedByRole = String(row.profiles?.role || '').toLowerCase();
   const isWalkInOrder = ['admin', 'staff'].includes(placedByRole)
-    && String(row.delivery_method || 'pickup').toLowerCase() === 'pickup'
-    && String(row.payment_method || 'cash').toLowerCase() !== 'online';
+    && deliveryMethod === 'pickup'
+    && paymentMethod !== 'online';
   const latestIssueReport = issueReports[0] || null;
+  const verificationRequired = Boolean(
+    row.verification_required ?? shouldRequireOrderVerification(deliveryMethod, paymentMethod),
+  );
+  const qrToken = verificationRequired ? String(row.qr_token || '').toUpperCase() : '';
+  const qrPayload = buildOrderQrPayload(qrToken);
+  const qrUsedAt = row.qr_used_at || row.qr_claimed_at || null;
+  const qrActive = verificationRequired
+    && Boolean(qrToken)
+    && !qrUsedAt
+    && !['completed', 'cancelled', 'refunded', 'delivered'].includes(normalizedStatus);
 
   return {
     id: row.id,
+    orderId: orderCode,
     orderCode,
     displayId: orderCode,
     userId: row.user_id,
@@ -305,9 +375,10 @@ export const mapOrder = (row) => {
     isWalkInOrder,
     phoneNumber: row.phone_number || '',
     address: row.address || '',
-    deliveryMethod: row.delivery_method || 'pickup',
-    paymentMethod: row.payment_method || 'cash',
+    deliveryMethod,
+    paymentMethod,
     deliveryDistanceKm: Number.isFinite(deliveryDistanceKm) ? deliveryDistanceKm : null,
+    isCodOrder: isCashOnDelivery(deliveryMethod, paymentMethod),
     containsLecheFlan,
     subtext,
     totalPrice,
@@ -326,6 +397,14 @@ export const mapOrder = (row) => {
     lineItems: mappedItems,
     items: buildItemsText(mappedItems),
     itemsText: buildItemsText(mappedItems),
+    verificationRequired,
+    verificationMethod: row.verification_method || '',
+    verifiedAt: row.verified_at || null,
+    verifiedBy: row.verified_by || null,
+    qrToken,
+    qrPayload,
+    qrGeneratedAt: row.qr_generated_at || null,
+    qrUsedAt,
     qrClaimedAt: row.qr_claimed_at || null,
     readyNotifiedAt: row.ready_notified_at || null,
     readyNotificationMessage: row.ready_notification_message || '',
@@ -343,10 +422,7 @@ export const mapOrder = (row) => {
     refundedAt: statusTimestamps.refunded || null,
     issueReports,
     latestIssueReport,
-    qrActive: row.delivery_method === 'pickup'
-      && String(row.payment_method || 'cash').toLowerCase() === 'cash'
-      && !row.qr_claimed_at
-      && !['completed', 'cancelled', 'refunded', 'delivered'].includes(normalizedStatus),
+    qrActive,
   };
 };
 
@@ -475,9 +551,16 @@ export const createFulfilledOrder = async (
   },
 ) => {
   const normalizedStatus = normalizeOrderStatus(orderStatus);
+  const normalizedDeliveryMethod = String(deliveryMethod || 'pickup').toLowerCase();
+  const normalizedPaymentMethod = String(paymentMethod || 'cash').toLowerCase();
   const normalizedDistance = Number(deliveryDistanceKm);
   const now = new Date().toISOString();
   const containsLecheFlan = hasLecheFlanItems(items);
+  const verificationRequired = shouldRequireOrderVerification(
+    normalizedDeliveryMethod,
+    normalizedPaymentMethod,
+  );
+  const qrToken = verificationRequired ? generateOrderQrToken() : null;
   const cancellationReason = normalizedStatus === 'cancelled'
     ? getLecheFlanRestrictionMessage(normalizedDistance) || 'The order was cancelled before fulfillment.'
     : null;
@@ -499,8 +582,8 @@ export const createFulfilledOrder = async (
       customer_name: customerName || profile?.full_name || profile?.username || 'Customer',
       phone_number: phoneNumber || profile?.phone_number || null,
       address: address || profile?.address || null,
-      delivery_method: deliveryMethod,
-      payment_method: paymentMethod,
+      delivery_method: normalizedDeliveryMethod,
+      payment_method: normalizedPaymentMethod,
       total_price: Number(totalPrice) || 0,
       order_status: normalizedStatus,
       review_status: 'none',
@@ -510,6 +593,13 @@ export const createFulfilledOrder = async (
       delivery_distance_km: Number.isFinite(normalizedDistance) ? normalizedDistance : null,
       contains_leche_flan: containsLecheFlan,
       inventory_deducted_at: null,
+      verification_required: verificationRequired,
+      qr_token: qrToken,
+      qr_generated_at: qrToken ? now : null,
+      qr_used_at: null,
+      verified_at: null,
+      verified_by: null,
+      verification_method: null,
       notifications,
       status_timestamps: statusTimestamps,
     })

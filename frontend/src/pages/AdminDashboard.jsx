@@ -326,7 +326,6 @@ const AdminDashboard = () => {
       <div className="admin-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
         <div>
           <h1>Dashboard</h1>
-          <p>Welcome back! Here's what's happening today.</p>
         </div>
         <button
           onClick={requestResetCharts}

@@ -50,7 +50,6 @@ const AdminProducts = () => {
       <div className="admin-products-header">
         <div>
           <h1 style={{ fontSize: '2rem', marginBottom: '0.5rem' }}>Product Management</h1>
-          <p style={{ color: '#64748b' }}>Manage your dessert products</p>
         </div>
         
         <div className="search-and-add">

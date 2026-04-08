@@ -204,3 +204,57 @@
     grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
   }
 }
+
+.pos-receipt-qr-panel {
+  margin-top: 1rem;
+  border: 1px solid #dbeafe;
+  background: linear-gradient(180deg, #eff6ff 0%, #ffffff 100%);
+  border-radius: 1rem;
+  padding: 1rem;
+}
+
+.pos-receipt-qr-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.pos-receipt-qr-label {
+  margin: 0 0 0.25rem 0;
+  color: #1d4ed8;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 0.7rem;
+  font-weight: 800;
+}
+
+.pos-receipt-qr-body {
+  margin-top: 0.75rem;
+  display: flex;
+  gap: 0.9rem;
+  align-items: center;
+}
+
+.pos-receipt-qr-image {
+  width: 170px;
+  height: 170px;
+  border-radius: 0.9rem;
+  border: 1px solid #cbd5e1;
+  background: #ffffff;
+  padding: 0.45rem;
+}
+
+.pos-receipt-qr-image--fallback {
+  display: grid;
+  place-items: center;
+  color: #64748b;
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+
+.pos-receipt-qr-note {
+  margin: 0;
+  font-size: 0.85rem;
+  line-height: 1.45;
+  color: #334155;
+}
