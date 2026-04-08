@@ -896,6 +896,11 @@
   box-shadow: 0 16px 36px rgba(245, 158, 11, 0.12);
 }
 
+.customer-order-card--targeted {
+  border-color: #fb923c;
+  box-shadow: 0 18px 38px rgba(249, 115, 22, 0.14);
+}
+
 .customer-order-card--history {
   background: linear-gradient(180deg, #ffffff 0%, #fffaf5 100%);
 }
@@ -1121,6 +1126,12 @@
   background: #eff6ff;
   border-color: #bfdbfe;
   color: #1d4ed8;
+}
+
+.customer-order-note--confirmation {
+  background: #fffbeb;
+  border-color: #fde68a;
+  color: #92400e;
 }
 
 .customer-order-actions {

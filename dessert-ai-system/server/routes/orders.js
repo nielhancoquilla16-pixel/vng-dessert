@@ -176,6 +176,37 @@ const buildStatusTimestampPatch = (currentOrder, nextStatus, now = new Date().to
   [String(nextStatus || '').toLowerCase().replace(/-/g, '_')]: now,
 });
 
+const getRecordedSaleTimestamp = (order = {}) => {
+  const statusTimestamps = normalizeStatusTimestamps(order?.status_timestamps || order?.statusTimestamps || {});
+  const deliveryMethod = String(order?.delivery_method || order?.deliveryMethod || 'pickup').toLowerCase();
+  const paymentMethod = String(order?.payment_method || order?.paymentMethod || 'cash').toLowerCase();
+  const placedByRole = String(order?.profiles?.role || order?.placedByRole || '').toLowerCase();
+  const isWalkInSale = ['admin', 'staff'].includes(placedByRole)
+    && deliveryMethod === 'pickup'
+    && paymentMethod !== 'online';
+
+  if (isWalkInSale) {
+    return statusTimestamps.confirmed
+      || order?.confirmedAt
+      || order?.confirmed_at
+      || order?.created_at
+      || order?.createdAt
+      || '';
+  }
+
+  return statusTimestamps.completed
+    || order?.completedAt
+    || order?.completed_at
+    || order?.receipt_received_at
+    || order?.receiptReceivedAt
+    || '';
+};
+
+const isOrderSaleRecognized = (order = {}) => (
+  Boolean(getRecordedSaleTimestamp(order))
+  && normalizeOrderStatus(order?.order_status || order?.status || '') !== 'cancelled'
+);
+
 const getOrderItemsForInventory = (order = {}) => (
   (order.order_items || []).map((item) => ({
     product_id: item.product_id,
@@ -304,7 +335,7 @@ const buildStatusMessages = (currentOrder, nextStatus, extra = {}) => {
     case 'completed':
       return {
         customer: `Thanks for confirming receipt for Order ${orderCode}. The order is now completed.`,
-        adminStaff: `Customer confirmed receipt for Order ${orderCode}. Revenue has been recorded.`,
+        adminStaff: `Customer confirmed receipt for Order ${orderCode}. The sale has now been recorded.`,
       };
     case 'cancelled':
       return {
@@ -313,8 +344,8 @@ const buildStatusMessages = (currentOrder, nextStatus, extra = {}) => {
       };
     case 'refunded':
       return {
-        customer: `Your refund for Order ${orderCode} was approved. The order is now refunded.${reasonSuffix}`,
-        adminStaff: `Refund approved for Order ${orderCode}. Revenue has been reversed.${reasonSuffix}`,
+        customer: `Your return request for Order ${orderCode} was approved. The order is now marked Returned.${reasonSuffix}`,
+        adminStaff: `Return approved for Order ${orderCode}. Any recorded sale has been adjusted.${reasonSuffix}`,
       };
     default:
       return {
@@ -558,15 +589,15 @@ const applyOrderVerification = async (
 
 const createBestSellerEntry = (product) => ({
   id: product.id,
-  name: product.product_name || 'Dessert Item',
-  productName: product.product_name || 'Dessert Item',
+  name: product.product_name || product.productName || 'Dessert Item',
+  productName: product.product_name || product.productName || 'Dessert Item',
   description: product.description || '',
   price: Number(product.price) || 0,
   category: product.category || 'Uncategorized',
   stockQuantity: Number(product.stock_quantity) || 0,
   availability: product.availability || 'available',
-  imageUrl: product.image_url || '/logo.png',
-  image: product.image_url || '/logo.png',
+  imageUrl: product.image_url || product.imageUrl || '/logo.png',
+  image: product.image_url || product.imageUrl || '/logo.png',
   soldCount: 0,
   orderCount: 0,
   lastOrderedAt: '',
@@ -586,27 +617,7 @@ router.get('/best-sellers', async (req, res, next) => {
     const supabase = getSupabaseAdmin();
     const { data, error } = await supabase
       .from('orders')
-      .select(`
-        created_at,
-        order_status,
-        order_items (
-          quantity,
-          product_id,
-          products (
-            id,
-            product_name,
-            description,
-            price,
-            category,
-            stock_quantity,
-            availability,
-            image_url,
-            created_at,
-            updated_at
-          )
-        )
-      `)
-      .neq('order_status', 'cancelled')
+      .select(orderSelect)
       .order('created_at', { ascending: true });
 
     if (error) {
@@ -614,24 +625,29 @@ router.get('/best-sellers', async (req, res, next) => {
     }
 
     const productSales = new Map();
+    const hydratedOrders = await hydrateOrdersWithProfiles(supabase, data || []);
 
-    (data || []).forEach((order) => {
-      const normalizedStatus = normalizeOrderStatus(order.order_status);
-      if (['cancelled', 'refunded'].includes(normalizedStatus)) {
+    hydratedOrders.map(mapOrder).forEach((order) => {
+      const normalizedStatus = normalizeOrderStatus(order.status || order.orderStatus);
+      if (['cancelled', 'refunded'].includes(normalizedStatus) || !isOrderSaleRecognized(order)) {
         return;
       }
 
       const countedInOrder = new Set();
 
-      (order.order_items || []).forEach((item) => {
-        const product = item.products;
+      (order.lineItems || []).forEach((item) => {
+        const product = item.product;
         const quantity = Math.max(0, Number(item.quantity) || 0);
 
         if (!product?.id || quantity <= 0) {
           return;
         }
 
-        const existing = productSales.get(product.id) || createBestSellerEntry(product);
+        const existing = productSales.get(product.id) || createBestSellerEntry({
+          ...product,
+          price: product.price ?? item.price,
+          category: product.category || item.category,
+        });
         existing.soldCount += quantity;
         existing.lastOrderedAt = order.created_at || existing.lastOrderedAt;
 
@@ -669,7 +685,7 @@ router.get('/best-sellers', async (req, res, next) => {
 
     res.json({
       generatedAt: new Date().toISOString(),
-      rankingMode: 'total-units-sold',
+      rankingMode: 'recognized-sales-units',
       items,
     });
   } catch (error) {
@@ -1110,7 +1126,7 @@ const handleCustomerReceiptConfirmation = async (req, res, next) => {
     const notifications = [
       ...normalizeNotifications(currentOrder.notifications || []),
       buildNotificationEntry('customer', 'receipt_confirmed', `Thanks for confirming receipt for Order ${currentOrder.order_code || currentOrder.id}. The order is now completed.`),
-      buildNotificationEntry('admin_staff', 'receipt_confirmed', `Customer confirmed receipt for Order ${currentOrder.order_code || currentOrder.id}. Revenue has been recorded.`),
+      buildNotificationEntry('admin_staff', 'receipt_confirmed', `Customer confirmed receipt for Order ${currentOrder.order_code || currentOrder.id}. The sale has now been recorded.`),
     ];
 
     const updatedOrder = await updateOrderRecord(supabase, currentOrder.id, {
@@ -1246,8 +1262,8 @@ router.post('/:id/report-issue', requireAuth, async (req, res, next) => {
     };
     const notifications = [
       ...normalizeNotifications(currentOrder.notifications || []),
-      buildNotificationEntry('customer', 'issue_report_submitted', `Your issue report for Order ${currentOrder.order_code || currentOrder.id} is under review.`),
-      buildNotificationEntry('admin_staff', 'issue_report_submitted', `New issue report received for Order ${currentOrder.order_code || currentOrder.id}. Review the photo proof and details.`),
+      buildNotificationEntry('customer', 'issue_report_submitted', `Your return request for Order ${currentOrder.order_code || currentOrder.id} is now under review.`),
+      buildNotificationEntry('admin_staff', 'issue_report_submitted', `New return request received for Order ${currentOrder.order_code || currentOrder.id}. Review the photo proof and details.`),
     ];
 
     const updatedOrder = await updateOrderRecord(supabase, currentOrder.id, {
@@ -1311,7 +1327,7 @@ router.patch('/reports/:reportId', requireAuth, requireRole('admin', 'staff'), a
         .from('order_issue_reports')
         .update({
           review_status: 'approved',
-          review_reason: reason || 'Refund approved.',
+          review_reason: reason || 'Return approved.',
           reviewed_by: reviewerId,
           reviewed_at: now,
         })
@@ -1329,14 +1345,14 @@ router.patch('/reports/:reportId', requireAuth, requireRole('admin', 'staff'), a
       };
 
       mergedNotifications.push(
-        buildNotificationEntry('customer', 'refund_approved', `Your refund for Order ${currentOrder.order_code || currentOrder.id} was approved. The order is now refunded.`),
-        buildNotificationEntry('admin_staff', 'refund_approved', `Refund approved for Order ${currentOrder.order_code || currentOrder.id}. Revenue has been reversed.`),
+        buildNotificationEntry('customer', 'refund_approved', `Your return request for Order ${currentOrder.order_code || currentOrder.id} was approved. The order is now marked Returned.`),
+        buildNotificationEntry('admin_staff', 'refund_approved', `Return approved for Order ${currentOrder.order_code || currentOrder.id}. Any recorded sale has been adjusted.`),
       );
 
       const updatedOrder = await updateOrderRecord(supabase, currentOrder.id, {
         order_status: 'refunded',
         review_status: 'approved',
-        review_reason: reason || 'Refund approved.',
+        review_reason: reason || 'Return approved.',
         review_status_updated_at: now,
         status_timestamps: statusTimestamps,
         notifications: mergedNotifications,
@@ -1365,8 +1381,8 @@ router.patch('/reports/:reportId', requireAuth, requireRole('admin', 'staff'), a
     }
 
     mergedNotifications.push(
-      buildNotificationEntry('customer', 'refund_rejected', `Your issue report for Order ${currentOrder.order_code || currentOrder.id} was rejected. Reason: ${reason}.`),
-      buildNotificationEntry('admin_staff', 'refund_rejected', `Issue report rejected for Order ${currentOrder.order_code || currentOrder.id}.`),
+      buildNotificationEntry('customer', 'refund_rejected', `Your return request for Order ${currentOrder.order_code || currentOrder.id} was rejected. Reason: ${reason}.`),
+      buildNotificationEntry('admin_staff', 'refund_rejected', `Return request rejected for Order ${currentOrder.order_code || currentOrder.id}.`),
     );
 
     const updatedOrder = await updateOrderRecord(supabase, currentOrder.id, {
@@ -1399,7 +1415,7 @@ router.patch('/:id/status', requireAuth, async (req, res, next) => {
     }
 
     if (['completed', 'refunded'].includes(nextStatus)) {
-      return res.status(400).json({ error: 'Customer confirmation or refund review is required for that status.' });
+      return res.status(400).json({ error: 'Customer confirmation or return review is required for that status.' });
     }
 
     const supabase = getSupabaseAdmin();

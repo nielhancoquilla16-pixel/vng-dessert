@@ -2,12 +2,14 @@ import React from 'react';
 import { Outlet } from 'react-router-dom';
 import Header from './Header';
 import Footer from './Footer';
+import CustomerOrderReminderBanner from './CustomerOrderReminderBanner';
 import './Layout.css';
 
 const Layout = () => {
   return (
     <div className="app-container">
       <Header />
+      <CustomerOrderReminderBanner />
       <main className="main-content">
         <Outlet />
       </main>

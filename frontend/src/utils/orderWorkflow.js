@@ -9,7 +9,7 @@ const ORDER_STATUS_ALIASES = new Map([
 ]);
 
 const ORDER_STATUS_LABELS = {
-  pending: 'Pending',
+  pending: 'Pending Confirmation',
   confirmed: 'Confirmed',
   preparing: 'Preparing',
   ready: 'Ready',
@@ -17,12 +17,12 @@ const ORDER_STATUS_LABELS = {
   delivered: 'Delivered',
   completed: 'Completed',
   cancelled: 'Cancelled',
-  refunded: 'Refunded',
+  refunded: 'Returned',
 };
 
 const CUSTOMER_STATUS_LABELS = {
   ...ORDER_STATUS_LABELS,
-  refunded: 'Returned/Refunded',
+  refunded: 'Returned',
 };
 
 const REVIEW_STATUS_LABELS = {
@@ -163,11 +163,15 @@ export const canCustomerCancelOrder = (order = {}) => normalizeOrderStatus(order
 
 export const canStaffCancelOrder = (order = {}) => !['delivered', 'completed', 'refunded', 'cancelled'].includes(normalizeOrderStatus(order.status || order.orderStatus));
 
-export const canCustomerConfirmReceipt = (order = {}) => (
+export const hasCustomerConfirmationPending = (order = {}) => (
   normalizeOrderStatus(order.status || order.orderStatus) === 'delivered'
   && !order.receiptReceivedAt
   && !order.receipt_received_at
   && normalizeReviewStatus(order.reviewStatus || order.review_status) !== 'under_review'
+);
+
+export const canCustomerConfirmReceipt = (order = {}) => (
+  hasCustomerConfirmationPending(order)
 );
 
 export const canCustomerReportIssue = (order = {}) => (

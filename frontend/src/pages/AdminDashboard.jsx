@@ -23,6 +23,7 @@ import {
 import { useOrders } from '../context/OrderContext';
 import { useProducts } from '../context/ProductContext';
 import { buildWeeklySalesData, getOrderRevenueEvents } from '../utils/orderAnalytics';
+import { getOrderStatusLabel } from '../utils/orderWorkflow';
 import './AdminDashboard.css';
 
 const CATEGORY_RESET_STORAGE_KEY = 'vng_dashboard_category_reset_at';
@@ -234,7 +235,6 @@ const AdminDashboard = () => {
   });
 
   const resetTimestamp = categoryResetAt ? new Date(categoryResetAt).getTime() : 0;
-  const trackedCategoryOrders = orders.filter((order) => getOrderTimestamp(order) >= resetTimestamp);
 
   const totalRevenue = orders.reduce((sum, order) => (
     sum + getOrderRevenueEvents(order).reduce((eventTotal, event) => eventTotal + event.amount, 0)
@@ -255,18 +255,22 @@ const AdminDashboard = () => {
   );
   const categoryTotals = new Map();
 
-  trackedCategoryOrders.forEach((order) => {
-    const orderStatus = String(order.status || '').toLowerCase();
-    const orderMultiplier = orderStatus === 'refunded' ? -1 : (orderStatus === 'completed' ? 1 : 0);
+  orders.forEach((order) => {
+    const lineItems = getOrderLineItems(order, productsByName);
 
-    if (orderMultiplier === 0) {
-      return;
-    }
+    getOrderRevenueEvents(order).forEach((event) => {
+      const eventTimestamp = new Date(event.timestamp || '').getTime();
+      if (!Number.isFinite(eventTimestamp) || eventTimestamp < resetTimestamp) {
+        return;
+      }
 
-    getOrderLineItems(order, productsByName).forEach((item) => {
-      const categoryName = item.category || item.name || 'Uncategorized';
-      const lineTotal = Number(item.lineTotal) || ((Number(item.price) || 0) * (Number(item.quantity) || 0));
-      categoryTotals.set(categoryName, (categoryTotals.get(categoryName) || 0) + (lineTotal * orderMultiplier));
+      const eventMultiplier = event.amount >= 0 ? 1 : -1;
+
+      lineItems.forEach((item) => {
+        const categoryName = item.category || item.name || 'Uncategorized';
+        const lineTotal = Number(item.lineTotal) || ((Number(item.price) || 0) * (Number(item.quantity) || 0));
+        categoryTotals.set(categoryName, (categoryTotals.get(categoryName) || 0) + (lineTotal * eventMultiplier));
+      });
     });
   });
 
@@ -410,7 +414,7 @@ const AdminDashboard = () => {
             </div>
           ) : categorySalesData.length === 0 ? (
             <div className="chart-empty-state">
-              No category sales yet. New customer orders will appear here.
+              No category sales yet. Walk-in checkouts and customer-confirmed online orders will appear here.
             </div>
           ) : (
             <div style={{ display: 'flex', gap: '2rem', alignItems: 'center' }}>
@@ -489,7 +493,7 @@ const AdminDashboard = () => {
                   <td>{order.total}</td>
                   <td>
                     <span className={`status-badge status-${order.status}`}>
-                      {order.status}
+                      {getOrderStatusLabel(order.status, 'admin')}
                     </span>
                   </td>
                   <td>{order.date}</td>

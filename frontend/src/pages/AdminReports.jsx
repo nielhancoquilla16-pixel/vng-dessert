@@ -49,8 +49,10 @@ const AdminReports = () => {
   const totalRevenue = orders.reduce((sum, order) => (
     sum + getOrderRevenueEvents(order).reduce((eventTotal, event) => eventTotal + event.amount, 0)
   ), 0);
-  const completedCount = orders.filter((order) => order.status === 'completed').length;
-  const refundedCount = orders.filter((order) => order.status === 'refunded').length;
+  const recordedSalesCount = orders.filter((order) => (
+    getOrderRevenueEvents(order).reduce((eventTotal, event) => eventTotal + event.amount, 0) > 0
+  )).length;
+  const returnedCount = orders.filter((order) => order.status === 'refunded').length;
   const underReviewCount = orders.filter((order) => normalizeReviewStatus(order.reviewStatus) === 'under_review').length;
   const activeCount = orders.filter((order) => !['completed', 'cancelled', 'refunded'].includes(order.status)).length;
 
@@ -125,8 +127,8 @@ const AdminReports = () => {
     try {
       await reviewOrderIssue(reportId, decision, reason);
       setPageNotice(decision.toLowerCase().startsWith('approve')
-        ? 'Refund approved and order marked as refunded.'
-        : 'Issue report rejected and the customer was notified.');
+        ? 'Return approved and any recorded sale has been adjusted.'
+        : 'Return request rejected and the customer was notified.');
       setReviewDrafts((current) => ({ ...current, [reportId]: undefined }));
     } catch (error) {
       setPageError(error.message || 'Unable to process that report right now.');
@@ -189,16 +191,16 @@ const AdminReports = () => {
           <div className="report-value">{formatCurrency(totalRevenue)}</div>
         </div>
         <div className="report-card">
-          <div className="report-label"><ShoppingBag size={14} style={{ marginRight: '0.4rem', verticalAlign: 'middle' }} /> Completed</div>
-          <div className="report-value">{completedCount}</div>
+          <div className="report-label"><ShoppingBag size={14} style={{ marginRight: '0.4rem', verticalAlign: 'middle' }} /> Recorded Sales</div>
+          <div className="report-value">{recordedSalesCount}</div>
         </div>
         <div className="report-card">
           <div className="report-label"><ShieldAlert size={14} style={{ marginRight: '0.4rem', verticalAlign: 'middle' }} /> Under Review</div>
           <div className="report-value">{underReviewCount}</div>
         </div>
         <div className="report-card">
-          <div className="report-label"><RotateCcw size={14} style={{ marginRight: '0.4rem', verticalAlign: 'middle' }} /> Refunded</div>
-          <div className="report-value">{refundedCount}</div>
+          <div className="report-label"><RotateCcw size={14} style={{ marginRight: '0.4rem', verticalAlign: 'middle' }} /> Returned</div>
+          <div className="report-value">{returnedCount}</div>
         </div>
       </div>
 
@@ -207,7 +209,7 @@ const AdminReports = () => {
           <div className="report-section-header">
             <div>
               <h3 className="chart-title">Weekly Sales History</h3>
-              <p className="chart-subtitle">Automatically recorded from real orders every Sunday-to-Saturday week.</p>
+              <p className="chart-subtitle">Recorded from walk-in checkout completion and customer-confirmed online orders every Sunday-to-Saturday week.</p>
             </div>
             {bestWeek && (
               <div className="report-highlight-chip">
@@ -218,7 +220,7 @@ const AdminReports = () => {
 
           {historyChartData.length === 0 ? (
             <div className="chart-empty-state">
-              No weekly sales history yet. New non-cancelled orders will be recorded here automatically.
+              No weekly sales history yet. Sales appear after walk-in checkout or customer confirmation for online orders.
             </div>
           ) : (
             <div className="reports-chart-shell">
@@ -255,7 +257,7 @@ const AdminReports = () => {
 
           {currentWeekOrders === 0 ? (
             <div className="chart-empty-state">
-              No sales yet for this week. Once customers order, the daily chart will update automatically.
+              No sales yet for this week. Walk-ins count immediately, while online orders count after customer confirmation.
             </div>
           ) : (
             <div className="reports-chart-shell">
@@ -310,7 +312,7 @@ const AdminReports = () => {
         <div className="top-selling-list">
           {topProductsList.length === 0 ? (
             <div className="chart-empty-state">
-              No sales data yet. Complete orders in the POS or customer checkout to see top products.
+              No sales data yet. Complete walk-in checkout or customer-confirm an online order to see top products.
             </div>
           ) : (
             topProductsList.map((product, index) => (
@@ -334,8 +336,8 @@ const AdminReports = () => {
       <div className="chart-container">
         <div className="report-section-header">
           <div>
-            <h3 className="chart-title">Issue Reports Queue</h3>
-            <p className="chart-subtitle">Approve or reject damaged-order and discrepancy reports after reviewing the image proof and description.</p>
+            <h3 className="chart-title">Return Requests Queue</h3>
+            <p className="chart-subtitle">Approve or reject return requests after reviewing the image proof and order details.</p>
           </div>
           <div className="report-highlight-chip">
             {pendingReports.length} under review
@@ -391,7 +393,7 @@ const AdminReports = () => {
                         className="issue-report-textarea"
                         value={draft.reason || ''}
                         onChange={(event) => setDraft(report.id, { reason: event.target.value, error: '' })}
-                        placeholder="Add a refund approval note or a rejection reason."
+                        placeholder="Add a return approval note or a rejection reason."
                       />
                     </label>
                     {draft.error && <div className="issue-report-error">{draft.error}</div>}
@@ -403,7 +405,7 @@ const AdminReports = () => {
                         disabled={loading}
                       >
                         {loading ? <Zap size={16} className="spin" /> : <BadgeCheck size={16} />}
-                        Approve Refund
+                        Approve Return
                       </button>
                       <button
                         type="button"
@@ -412,7 +414,7 @@ const AdminReports = () => {
                         disabled={loading}
                       >
                         {loading ? <Zap size={16} className="spin" /> : <XCircle size={16} />}
-                        Reject Request
+                        Reject Return
                       </button>
                     </div>
                   </div>

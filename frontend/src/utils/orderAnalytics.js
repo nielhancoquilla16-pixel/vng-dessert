@@ -15,14 +15,73 @@ export const formatCurrency = (amount) => `PHP ${Number(amount || 0).toLocaleStr
   maximumFractionDigits: 2,
 })}`;
 
+const getOrderStatusTimestamps = (order = {}) => (
+  order?.statusTimestamps || order?.status_timestamps || {}
+);
+
+const isWalkInSale = (order = {}) => {
+  if (typeof order?.isWalkInOrder === 'boolean') {
+    return order.isWalkInOrder;
+  }
+
+  if (typeof order?.is_walk_in_order === 'boolean') {
+    return order.is_walk_in_order;
+  }
+
+  const placedByRole = String(
+    order?.placedByRole
+    || order?.placed_by_role
+    || order?.profiles?.role
+    || '',
+  ).toLowerCase();
+  const deliveryMethod = String(order?.deliveryMethod || order?.delivery_method || '').toLowerCase();
+  const paymentMethod = String(order?.paymentMethod || order?.payment_method || '').toLowerCase();
+
+  return ['admin', 'staff'].includes(placedByRole)
+    && deliveryMethod === 'pickup'
+    && paymentMethod !== 'online';
+};
+
+const getRecordedSaleTimestamp = (order = {}) => {
+  const timestamps = getOrderStatusTimestamps(order);
+
+  if (isWalkInSale(order)) {
+    return timestamps.confirmed
+      || order?.confirmedAt
+      || order?.confirmed_at
+      || order?.createdAt
+      || order?.created_at
+      || order?.date
+      || '';
+  }
+
+  return timestamps.completed
+    || order?.completedAt
+    || order?.completed_at
+    || order?.receiptReceivedAt
+    || order?.receipt_received_at
+    || '';
+};
+
+const getRefundedSaleTimestamp = (order = {}) => {
+  const timestamps = getOrderStatusTimestamps(order);
+  return timestamps.refunded
+    || order?.refundedAt
+    || order?.refunded_at
+    || order?.updatedAt
+    || order?.updated_at
+    || '';
+};
+
 export const getOrderTimestamp = (order) => {
   const status = normalizeOrderStatus(order?.status || order?.orderStatus);
-  const timestamps = order?.statusTimestamps || order?.status_timestamps || {};
+  const recordedSaleTimestamp = getRecordedSaleTimestamp(order);
+  const refundedSaleTimestamp = getRefundedSaleTimestamp(order);
   const source = (
-    status === 'completed'
-      ? timestamps.completed || order?.completedAt || order?.completed_at || order?.createdAt || order?.date
-      : status === 'refunded'
-        ? timestamps.refunded || order?.refundedAt || order?.refunded_at || order?.updatedAt || order?.updated_at || order?.createdAt || order?.date
+    status === 'refunded'
+      ? refundedSaleTimestamp || recordedSaleTimestamp || order?.createdAt || order?.date
+      : recordedSaleTimestamp
+        ? recordedSaleTimestamp
         : order?.createdAt || order?.date
   );
 
@@ -34,48 +93,33 @@ export const getOrderTotalAmount = (order) => (
   Number(order?.totalAmount) || parseCurrencyAmount(order?.total)
 );
 
-const getOrderStatusTimestamps = (order = {}) => (
-  order?.statusTimestamps || order?.status_timestamps || {}
-);
-
 export const getOrderRevenueEvents = (order = {}) => {
   const status = normalizeOrderStatus(order?.status || order?.orderStatus);
   const total = getOrderTotalAmount(order);
-  const timestamps = getOrderStatusTimestamps(order);
-  const completedTimestamp = timestamps.completed || order?.completedAt || order?.completed_at || order?.createdAt || order?.date;
-  const refundedTimestamp = timestamps.refunded || order?.refundedAt || order?.refunded_at || order?.updatedAt || order?.updated_at || completedTimestamp;
+  const recordedSaleTimestamp = getRecordedSaleTimestamp(order);
+  const refundedTimestamp = getRefundedSaleTimestamp(order) || recordedSaleTimestamp;
 
-  if (!total) {
+  if (!total || !recordedSaleTimestamp || status === 'cancelled') {
     return [];
   }
 
-  if (status === 'completed') {
-    return [{
-      kind: 'completed',
-      timestamp: completedTimestamp,
-      amount: total,
-      order,
-    }];
-  }
+  const events = [{
+    kind: 'sale_recorded',
+    timestamp: recordedSaleTimestamp,
+    amount: total,
+    order,
+  }];
 
   if (status === 'refunded') {
-    return [
-      {
-        kind: 'completed',
-        timestamp: completedTimestamp,
-        amount: total,
-        order,
-      },
-      {
-        kind: 'refunded',
-        timestamp: refundedTimestamp,
-        amount: -total,
-        order,
-      },
-    ];
+    events.push({
+      kind: 'sale_reversed',
+      timestamp: refundedTimestamp,
+      amount: -total,
+      order,
+    });
   }
 
-  return [];
+  return events;
 };
 
 export const getStartOfSundayWeek = (value = new Date()) => {
@@ -179,7 +223,7 @@ export const buildWeeklySalesData = (orders, options = {}) => {
       const dayIndex = new Date(orderTimestamp).getDay();
       data[dayIndex].sales += event.amount;
 
-      if (event.kind === 'completed' && event.amount > 0) {
+      if (event.kind === 'sale_recorded' && event.amount > 0) {
         data[dayIndex].orders += 1;
       }
     });
@@ -211,11 +255,11 @@ export const buildWeeklyHistory = (orders, options = {}) => {
 
       existing.revenue += event.amount;
 
-      if (event.kind === 'completed' && event.amount > 0) {
+      if (event.kind === 'sale_recorded' && event.amount > 0) {
         existing.orders += 1;
       }
 
-      if (event.kind === 'refunded') {
+      if (event.kind === 'sale_reversed') {
         existing.refunds += 1;
       }
 
@@ -243,7 +287,9 @@ export const buildTopProducts = (orders, productsByName = new Map()) => {
 
   (orders || []).forEach((order) => {
     const status = normalizeOrderStatus(order?.status || order?.orderStatus);
-    const multiplier = status === 'refunded' ? -1 : (status === 'completed' ? 1 : 0);
+    const multiplier = status !== 'refunded' && getOrderRevenueEvents(order).some((event) => event.kind === 'sale_recorded')
+      ? 1
+      : 0;
 
     if (multiplier === 0) {
       return;

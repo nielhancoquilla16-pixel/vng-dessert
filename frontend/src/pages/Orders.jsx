@@ -1,5 +1,5 @@
-import React, { useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Link, useLocation } from 'react-router-dom';
 import {
   AlertTriangle,
   BadgeCheck,
@@ -32,6 +32,7 @@ import {
   getReviewStatusLabel,
   isHistoryOrderStatus,
   normalizeReviewStatus,
+  hasCustomerConfirmationPending,
 } from '../utils/orderWorkflow';
 import { generateQrDataUrl } from '../utils/qrCode';
 import './Orders.css';
@@ -95,7 +96,7 @@ const OrderVerificationPanel = ({ order }) => {
         <div className="order-qr-header">
           <div>
             <p className="order-panel-kicker">Verification</p>
-            <h3>COD Manual Processing</h3>
+            <h3>COD Processing</h3>
           </div>
           <QrCode size={20} />
         </div>
@@ -158,6 +159,7 @@ const OrderVerificationPanel = ({ order }) => {
 };
 
 const Orders = () => {
+  const location = useLocation();
   const { loggedInCustomer, isAuthLoading } = useAuth();
   const { orders, isOrdersLoading, confirmOrderReceipt, submitOrderIssue, cancelOrder } = useOrders();
   const [pageNotice, setPageNotice] = useState('');
@@ -168,6 +170,9 @@ const Orders = () => {
   const [openIssueOrderId, setOpenIssueOrderId] = useState('');
   const [cancelDrafts, setCancelDrafts] = useState({});
   const [openCancelOrderId, setOpenCancelOrderId] = useState('');
+  const confirmOrderId = useMemo(() => (
+    new URLSearchParams(location.search).get('confirm') || ''
+  ), [location.search]);
 
   // Guard: Check if user is authenticated as a customer
   if (!isAuthLoading && !loggedInCustomer) {
@@ -209,6 +214,26 @@ const Orders = () => {
         - new Date(left.updatedAt || left.completedAt || left.cancelledAt || left.refundedAt || left.createdAt || 0).getTime())
   ), [orders]);
 
+  useEffect(() => {
+    if (!confirmOrderId || isOrdersLoading) {
+      return;
+    }
+
+    const targetElement = document.getElementById(`customer-order-${confirmOrderId}`);
+    if (!targetElement) {
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      targetElement.scrollIntoView({
+        behavior: 'smooth',
+        block: 'start',
+      });
+    }, 80);
+
+    return () => window.clearTimeout(timer);
+  }, [confirmOrderId, isOrdersLoading, orders]);
+
   const notifications = useMemo(() => {
     const feed = orders.flatMap((order) => (
       (order.notifications || [])
@@ -238,7 +263,7 @@ const Orders = () => {
     {
       label: 'History',
       value: historyOrders.length,
-      helper: 'Completed, cancelled, refunded',
+      helper: 'Completed, cancelled, returned',
       icon: History,
     },
     {
@@ -415,10 +440,10 @@ const Orders = () => {
         evidenceImageDataUrl: '',
         evidenceImageName: '',
         error: '',
-        success: 'Your issue report has been sent to the admin team for review.',
+        success: 'Your return request has been sent to the admin team for review.',
       });
       setOpenIssueOrderId('');
-      setPageNotice(`Issue report submitted for order ${order.displayId || order.orderCode || order.id}.`);
+      setPageNotice(`Return request submitted for order ${order.displayId || order.orderCode || order.id}.`);
     } catch (error) {
       setIssueDraft(order.id, {
         error: error.message || 'Unable to send this issue report right now.',
@@ -577,7 +602,7 @@ const Orders = () => {
       <div className="order-action-panel order-action-panel--issue">
         <div className="order-action-panel-header">
           <div>
-            <p className="order-panel-kicker">Request Refund</p>
+            <p className="order-panel-kicker">Request Return</p>
             <h3>Damage or discrepancy report</h3>
           </div>
           <button
@@ -590,7 +615,7 @@ const Orders = () => {
         </div>
 
         <p className="order-panel-copy">
-          If the delivered order is damaged, missing items, or otherwise mismatched, request a refund with image proof so the admin team can review it.
+          If the delivered order is damaged, missing items, or otherwise mismatched, submit a return request with image proof so admin or staff can review it.
         </p>
 
         <div className="order-form-grid">
@@ -685,7 +710,7 @@ const Orders = () => {
           disabled={isLoading}
         >
           {isLoading ? <Loader2 size={16} className="spin" /> : <Send size={16} />}
-          {isLoading ? 'Sending...' : 'Submit Refund Request'}
+          {isLoading ? 'Sending...' : 'Submit Return Request'}
         </button>
       </div>
     );
@@ -780,9 +805,14 @@ const Orders = () => {
     const isIssueOpen = openIssueOrderId === order.id;
     const isCancelOpen = openCancelOrderId === order.id;
     const loadingCancel = loadingAction?.type === 'cancel' && loadingAction.orderId === order.id;
+    const isTargetedForConfirmation = confirmOrderId === order.id && hasCustomerConfirmationPending(order);
 
     return (
-      <article key={order.id} className={`customer-order-card ${isHistoryCard ? 'customer-order-card--history' : ''} ${isUnderReview ? 'customer-order-card--review' : ''}`}>
+      <article
+        key={order.id}
+        id={`customer-order-${order.id}`}
+        className={`customer-order-card ${isHistoryCard ? 'customer-order-card--history' : ''} ${isUnderReview ? 'customer-order-card--review' : ''} ${isTargetedForConfirmation ? 'customer-order-card--targeted' : ''}`}
+      >
         <div className="customer-order-header">
           <div className="customer-order-title-block">
             <p className="order-panel-kicker">{variant === 'history' ? 'History' : 'Active Order'}</p>
@@ -795,7 +825,7 @@ const Orders = () => {
           <div className="customer-order-badges">
             <span className={`customer-order-badge customer-order-badge--${order.status}`}>{statusLabel}</span>
             {isUnderReview && <span className="customer-order-badge customer-order-badge--review">{reviewStatusLabel}</span>}
-            {isRefunded && <span className="customer-order-badge customer-order-badge--refunded">Returned/Refunded</span>}
+            {isRefunded && <span className="customer-order-badge customer-order-badge--refunded">Returned</span>}
           </div>
         </div>
 
@@ -890,6 +920,16 @@ const Orders = () => {
 
         {variant === 'active' && renderWorkflowRail(order)}
 
+        {variant === 'active' && isTargetedForConfirmation && (
+          <div className="customer-order-note customer-order-note--confirmation">
+            <CheckCircle2 size={16} />
+            <div>
+              <strong>Confirmation required</strong>
+              <p>Confirm this delivered order below to clear your reminder banner.</p>
+            </div>
+          </div>
+        )}
+
         {orderNotifications.length > 0 && (
           <div className="customer-order-feed">
             <div className="customer-order-section-title">
@@ -932,7 +972,7 @@ const Orders = () => {
                 onClick={() => setOpenIssueOrderId((current) => (current === order.id ? '' : order.id))}
               >
                 <RotateCcw size={16} />
-                {isIssueOpen ? 'Hide Refund Form' : 'Request Refund'}
+                {isIssueOpen ? 'Hide Return Form' : 'Request Return'}
               </button>
             )}
           </div>
@@ -1046,7 +1086,7 @@ const Orders = () => {
         <div className="orders-section-header">
           <div>
             <p className="orders-eyebrow">History</p>
-            <h2>Completed, cancelled, and refunded orders</h2>
+            <h2>Completed, cancelled, and returned orders</h2>
           </div>
           <span className="orders-section-chip">{historyOrders.length} archived</span>
         </div>
@@ -1054,7 +1094,7 @@ const Orders = () => {
         {historyOrders.length === 0 ? (
           <div className="orders-empty-state">
             <History size={28} />
-            <p>History will appear here once orders are completed, cancelled, or refunded.</p>
+            <p>History will appear here once orders are completed, cancelled, or returned.</p>
           </div>
         ) : (
           <div className="orders-card-stack">

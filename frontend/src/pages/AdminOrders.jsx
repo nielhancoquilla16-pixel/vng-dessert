@@ -182,8 +182,8 @@ const AdminOrders = () => {
 
     return [
       { label: 'Active Queue', value: activeCount, helper: 'Orders still in motion' },
-      { label: 'Pending', value: pendingCount, helper: 'Waiting for confirmation' },
-      { label: 'Under Review', value: underReviewCount, helper: 'Discrepancy or refund review' },
+      { label: 'Pending Confirmation', value: pendingCount, helper: 'Waiting for customer or payment confirmation' },
+      { label: 'Under Review', value: underReviewCount, helper: 'Return or discrepancy review' },
       { label: 'All Orders', value: orders.length, helper: 'Total records in the system' },
     ];
   }, [orders]);
@@ -696,6 +696,11 @@ const AdminOrders = () => {
   const isCancelOpen = openCancelOrderId === selectedOrder?.id;
   const loadingStatus = loadingAction?.type === 'status' && loadingAction.orderId === selectedOrder?.id;
   const loadingCancel = loadingAction?.type === 'cancel' && loadingAction.orderId === selectedOrder?.id;
+  const selectedOrderSourceLabel = selectedOrderIsWalkIn
+    ? 'Walk-in'
+    : String(selectedOrder?.paymentMethod || '').toLowerCase() === 'online'
+      ? 'Online Customer'
+      : 'Customer Order';
 
   return (
     <div className="admin-orders-page">
@@ -862,7 +867,7 @@ const AdminOrders = () => {
                 </div>
                 <div>
                   <span>Source</span>
-                  <strong>{selectedOrderIsWalkIn ? 'Walk-in' : 'Online'}</strong>
+                  <strong>{selectedOrderSourceLabel}</strong>
                 </div>
                 <div>
                   <span>Distance</span>
