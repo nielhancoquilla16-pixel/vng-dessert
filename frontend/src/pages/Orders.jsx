@@ -236,19 +236,16 @@ const Orders = () => {
     {
       label: 'Active Orders',
       value: activeOrders.length,
-      helper: 'Pending through delivered',
       icon: PackageCheck,
     },
     {
       label: 'History',
       value: historyOrders.length,
-      helper: 'Completed, cancelled, returned',
       icon: History,
     },
     {
       label: 'Under Review',
       value: orders.filter((order) => normalizeReviewStatus(order.reviewStatus) === 'under_review').length,
-      helper: 'Waiting on staff review',
       icon: ShieldAlert,
     },
   ]), [activeOrders.length, historyOrders.length, orders]);
@@ -1079,7 +1076,6 @@ const Orders = () => {
             <History size={24} />
             <div>
               <p>Your archived orders are ready to view.</p>
-              <span>Click View History to open completed, cancelled, and returned orders.</span>
             </div>
           </div>
         ) : (

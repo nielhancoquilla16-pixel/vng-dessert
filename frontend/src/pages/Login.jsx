@@ -2,6 +2,12 @@ import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Eye, EyeOff, Mail, Lock } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import {
+  TERMS_ACCEPTANCE_LABEL,
+  TERMS_LAST_UPDATED_LABEL,
+  TERMS_SECTIONS,
+  TERMS_VERSION,
+} from '../content/termsAndConditions';
 import { passwordRecoveryMode } from '../lib/supabase';
 import './Login.css';
 
@@ -73,6 +79,87 @@ const passwordToggleStyle = {
   color: '#64748b',
 };
 
+const termsContainerStyle = {
+  border: '1px solid #fed7aa',
+  background: '#fff7ed',
+  borderRadius: '1rem',
+  padding: '1rem',
+};
+
+const termsScrollStyle = {
+  maxHeight: '240px',
+  overflowY: 'auto',
+  marginTop: '0.9rem',
+  paddingRight: '0.5rem',
+  display: 'flex',
+  flexDirection: 'column',
+  gap: '0.85rem',
+};
+
+const termsSectionTitleStyle = {
+  margin: 0,
+  color: '#9a3412',
+  fontSize: '0.92rem',
+  fontWeight: 700,
+};
+
+const termsParagraphStyle = {
+  margin: '0.45rem 0 0',
+  color: '#7c2d12',
+  fontSize: '0.84rem',
+  lineHeight: 1.55,
+};
+
+const checkboxLabelStyle = {
+  display: 'flex',
+  alignItems: 'flex-start',
+  gap: '0.75rem',
+  color: '#431407',
+  fontSize: '0.9rem',
+  lineHeight: 1.5,
+  cursor: 'pointer',
+};
+
+const termsNoticeStyle = {
+  border: '1px solid #fed7aa',
+  background: 'linear-gradient(135deg, #fff7ed 0%, #ffedd5 100%)',
+  borderRadius: '1rem',
+  padding: '1rem',
+  display: 'flex',
+  flexDirection: 'column',
+  gap: '0.85rem',
+};
+
+const termsModalOverlayStyle = {
+  position: 'fixed',
+  inset: 0,
+  background: 'rgba(15, 23, 42, 0.55)',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  padding: '1.5rem',
+  zIndex: 1000,
+};
+
+const termsModalCardStyle = {
+  width: 'min(680px, 100%)',
+  maxHeight: '85vh',
+  background: '#ffffff',
+  borderRadius: '1.25rem',
+  padding: '1.5rem',
+  boxShadow: '0 24px 60px rgba(15, 23, 42, 0.3)',
+  display: 'flex',
+  flexDirection: 'column',
+  gap: '1rem',
+};
+
+const termsModalFooterStyle = {
+  display: 'flex',
+  justifyContent: 'flex-end',
+  gap: '0.75rem',
+  flexWrap: 'wrap',
+};
+
 const Login = () => {
   const navigate = useNavigate();
   const {
@@ -108,6 +195,9 @@ const Login = () => {
   const [regError, setRegError] = useState('');
   const [showRegisterPassword, setShowRegisterPassword] = useState(false);
   const [showRegisterConfirmPassword, setShowRegisterConfirmPassword] = useState(false);
+  const [hasAcceptedTerms, setHasAcceptedTerms] = useState(false);
+  const [isTermsModalOpen, setIsTermsModalOpen] = useState(false);
+  const [submitAfterTermsAcceptance, setSubmitAfterTermsAcceptance] = useState(false);
 
   const [pendingVerification, setPendingVerification] = useState({
     email: '',
@@ -142,6 +232,88 @@ const Login = () => {
     setResetPassword('');
     setResetConfirmPassword('');
     setResetError('');
+  };
+
+  const openTermsModal = (shouldSubmitAfterOpen = false) => {
+    setRegError('');
+    setSubmitAfterTermsAcceptance(shouldSubmitAfterOpen);
+    setIsTermsModalOpen(true);
+  };
+
+  const closeTermsModal = () => {
+    const attemptedSubmit = submitAfterTermsAcceptance;
+    setIsTermsModalOpen(false);
+    setSubmitAfterTermsAcceptance(false);
+
+    if (attemptedSubmit && !hasAcceptedTerms) {
+      setRegError('You must agree to the Terms and Conditions before creating an account.');
+    }
+  };
+
+  const openRegisterFlow = () => {
+    setView('register');
+    openTermsModal(false);
+  };
+
+  const submitRegistration = async () => {
+    const acceptedTermsAt = new Date().toISOString();
+
+    setIsSubmitting(true);
+    const result = await registerCustomer({
+      username: regUsername,
+      email: regEmail,
+      password: regPassword,
+      fullName: '',
+      acceptedTerms: hasAcceptedTerms,
+      acceptedTermsAt,
+      termsVersion: TERMS_VERSION,
+    });
+    setIsSubmitting(false);
+
+    if (!result.success) {
+      setRegError(result.message);
+      return;
+    }
+
+    setRegUsername('');
+    setRegEmail('');
+    setRegPassword('');
+    setRegConfirmPassword('');
+    setHasAcceptedTerms(false);
+
+    if (result.needsVerification) {
+      setPendingVerification({
+        email: result.email || regEmail.trim().toLowerCase(),
+        username: result.username || regUsername.trim().toLowerCase(),
+      });
+      setVerificationCode('');
+      setVerifyError('');
+      setVerifyMessage(`We sent a 6-digit verification code to ${result.email}.`);
+      setView('verify');
+      return;
+    }
+
+    if (result.autoLoggedIn === false) {
+      setCustomerError('');
+      setCustomerMessage(result.message || 'Account created successfully. Please log in with your new account.');
+      setView('customer');
+      return;
+    }
+
+    if (!result.needsVerification) {
+      const welcomeMsg = `Welcome to V&G website ${result.username || regUsername}`;
+      navigate('/', { state: { welcomeMessage: welcomeMsg } });
+    }
+  };
+
+  const handleAcceptTermsModal = async () => {
+    const shouldSubmit = submitAfterTermsAcceptance;
+    setIsTermsModalOpen(false);
+    setSubmitAfterTermsAcceptance(false);
+
+    if (shouldSubmit) {
+      await submitRegistration();
+    }
   };
 
   const handleAdminLogin = async (e) => {
@@ -217,49 +389,12 @@ const Login = () => {
       return;
     }
 
-    setIsSubmitting(true);
-    const result = await registerCustomer({
-      username: regUsername,
-      email: regEmail,
-      password: regPassword,
-      fullName: '',
-    });
-    setIsSubmitting(false);
-
-    if (!result.success) {
-      setRegError(result.message);
+    if (!hasAcceptedTerms) {
+      openTermsModal(true);
       return;
     }
 
-    setRegUsername('');
-    setRegEmail('');
-    setRegPassword('');
-    setRegConfirmPassword('');
-
-    if (result.needsVerification) {
-      setPendingVerification({
-        email: result.email || regEmail.trim().toLowerCase(),
-        username: result.username || regUsername.trim().toLowerCase(),
-      });
-      setVerificationCode('');
-      setVerifyError('');
-      setVerifyMessage(`We sent a 6-digit verification code to ${result.email}.`);
-      setView('verify');
-      return;
-    }
-
-    if (result.autoLoggedIn === false) {
-      setCustomerError('');
-      setCustomerMessage(result.message || 'Account created successfully. Please log in with your new account.');
-      setView('customer');
-      return;
-    }
-
-    if (!result.needsVerification) {
-      const welcomeMsg = `Welcome to V&G website ${result.username || regUsername}`;
-      navigate('/', { state: { welcomeMessage: welcomeMsg } });
-      return;
-    }
+    await submitRegistration();
   };
 
   const handleVerifySignup = async (e) => {
@@ -533,100 +668,200 @@ const Login = () => {
 
   if (activeView === 'register') {
     return (
-      <div style={panelStyle}>
-        <h2 style={{ fontSize: '1.5rem', marginBottom: '2rem', color: '#0f172a' }}>Create Account</h2>
+      <>
+        <div style={panelStyle}>
+          <h2 style={{ fontSize: '1.5rem', marginBottom: '2rem', color: '#0f172a' }}>Create Account</h2>
 
-        <form style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }} onSubmit={handleRegister}>
-          {regError && <div style={{ color: '#ef4444', fontSize: '0.85rem', fontWeight: 600 }}>{regError}</div>}
+          <form style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }} onSubmit={handleRegister}>
+            {regError && <div style={{ color: '#ef4444', fontSize: '0.85rem', fontWeight: 600 }}>{regError}</div>}
 
-          <div>
-            <label style={fieldLabelStyle}>Username</label>
-            <input
-              type="text"
-              placeholder="Choose a username"
-              className="text-input"
-              style={textInputStyle}
-              value={regUsername}
-              onChange={(e) => setRegUsername(e.target.value)}
-            />
-          </div>
-
-          <div>
-            <label style={fieldLabelStyle}>Email Address</label>
-            <input
-              type="email"
-              placeholder="you@example.com"
-              className="text-input"
-              style={textInputStyle}
-              value={regEmail}
-              onChange={(e) => setRegEmail(e.target.value)}
-            />
-          </div>
-
-          <div>
-            <label style={fieldLabelStyle}>Password</label>
-            <div style={{ position: 'relative' }}>
+            <div>
+              <label style={fieldLabelStyle}>Username</label>
               <input
-                type={showRegisterPassword ? 'text' : 'password'}
+                type="text"
+                placeholder="Choose a username"
                 className="text-input"
-                placeholder="Enter password"
-                style={passwordFieldStyle}
-                value={regPassword}
-                onChange={(e) => setRegPassword(e.target.value)}
+                style={textInputStyle}
+                value={regUsername}
+                onChange={(e) => setRegUsername(e.target.value)}
               />
+            </div>
+
+            <div>
+              <label style={fieldLabelStyle}>Email Address</label>
+              <input
+                type="email"
+                placeholder="you@example.com"
+                className="text-input"
+                style={textInputStyle}
+                value={regEmail}
+                onChange={(e) => setRegEmail(e.target.value)}
+              />
+            </div>
+
+            <div>
+              <label style={fieldLabelStyle}>Password</label>
+              <div style={{ position: 'relative' }}>
+                <input
+                  type={showRegisterPassword ? 'text' : 'password'}
+                  className="text-input"
+                  placeholder="Enter password"
+                  style={passwordFieldStyle}
+                  value={regPassword}
+                  onChange={(e) => setRegPassword(e.target.value)}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowRegisterPassword((value) => !value)}
+                  style={passwordToggleStyle}
+                >
+                  {showRegisterPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                </button>
+              </div>
+            </div>
+
+            <div>
+              <label style={fieldLabelStyle}>Confirm Password</label>
+              <div style={{ position: 'relative' }}>
+                <input
+                  type={showRegisterConfirmPassword ? 'text' : 'password'}
+                  className="text-input"
+                  placeholder="Confirm password"
+                  style={passwordFieldStyle}
+                  value={regConfirmPassword}
+                  onChange={(e) => setRegConfirmPassword(e.target.value)}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowRegisterConfirmPassword((value) => !value)}
+                  style={passwordToggleStyle}
+                >
+                  {showRegisterConfirmPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                </button>
+              </div>
+            </div>
+
+            <div style={termsNoticeStyle}>
+              <div>
+                <div style={{ color: '#9a3412', fontSize: '0.98rem', fontWeight: 700 }}>Terms and Conditions</div>
+                <div style={{ color: '#7c2d12', fontSize: '0.82rem', marginTop: '0.2rem', lineHeight: 1.5 }}>
+                  Before we create the account, an alert box will show the full Terms and Conditions for review.
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', flexWrap: 'wrap' }}>
+                <button
+                  type="button"
+                  onClick={() => openTermsModal(false)}
+                  style={{ ...secondaryTextButtonStyle, color: '#c2410c', fontSize: '0.9rem' }}
+                >
+                  View Terms and Conditions
+                </button>
+                <div style={{ color: hasAcceptedTerms ? '#15803d' : '#9a3412', fontSize: '0.82rem', fontWeight: 700 }}>
+                  {hasAcceptedTerms ? 'Terms accepted for this signup' : 'Terms not accepted yet'}
+                </div>
+              </div>
+            </div>
+
+            <button
+              type="submit"
+              className="btn-primary"
+              style={primaryButtonStyle}
+              disabled={isSubmitting}
+            >
+              {isSubmitting ? 'Creating Account...' : 'Create Account'}
+            </button>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '1rem', flexWrap: 'wrap' }}>
               <button
                 type="button"
-                onClick={() => setShowRegisterPassword((value) => !value)}
-                style={passwordToggleStyle}
+                onClick={() => setView('customer')}
+                style={{ ...secondaryTextButtonStyle, color: '#d97706', fontSize: '0.9rem' }}
               >
-                {showRegisterPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                Already have an account? Login
               </button>
-            </div>
-          </div>
-
-          <div>
-            <label style={fieldLabelStyle}>Confirm Password</label>
-            <div style={{ position: 'relative' }}>
-              <input
-                type={showRegisterConfirmPassword ? 'text' : 'password'}
-                className="text-input"
-                placeholder="Confirm password"
-                style={passwordFieldStyle}
-                value={regConfirmPassword}
-                onChange={(e) => setRegConfirmPassword(e.target.value)}
-              />
               <button
                 type="button"
-                onClick={() => setShowRegisterConfirmPassword((value) => !value)}
-                style={passwordToggleStyle}
+                onClick={() => setView('selection')}
+                style={{ ...secondaryTextButtonStyle, color: '#475569', fontSize: '0.9rem' }}
               >
-                {showRegisterConfirmPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                Back
               </button>
             </div>
-          </div>
+          </form>
+        </div>
 
-          <button type="submit" className="btn-primary" style={primaryButtonStyle}>
-            {isSubmitting ? 'Creating Account...' : 'Create Account'}
-          </button>
+        {isTermsModalOpen && (
+          <div style={termsModalOverlayStyle}>
+            <div style={termsModalCardStyle} role="dialog" aria-modal="true" aria-labelledby="terms-modal-title">
+              <div>
+                <h3 id="terms-modal-title" style={{ margin: 0, color: '#0f172a', fontSize: '1.2rem' }}>
+                  Terms and Conditions
+                </h3>
+                <p style={{ margin: '0.45rem 0 0', color: '#64748b', fontSize: '0.9rem', lineHeight: 1.55 }}>
+                  Please read the full Terms and Conditions before creating your account. Last updated {TERMS_LAST_UPDATED_LABEL}.
+                </p>
+              </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '1rem', flexWrap: 'wrap' }}>
-            <button
-              type="button"
-              onClick={() => setView('customer')}
-              style={{ ...secondaryTextButtonStyle, color: '#d97706', fontSize: '0.9rem' }}
-            >
-              Already have an account? Login
-            </button>
-            <button
-              type="button"
-              onClick={() => setView('selection')}
-              style={{ ...secondaryTextButtonStyle, color: '#475569', fontSize: '0.9rem' }}
-            >
-              Back
-            </button>
+              <div style={{ ...termsContainerStyle, padding: '1rem 1rem 0.75rem' }}>
+                <div style={termsScrollStyle}>
+                  {TERMS_SECTIONS.map((section) => (
+                    <div key={section.title}>
+                      <p style={termsSectionTitleStyle}>{section.title}</p>
+                      {section.paragraphs.map((paragraph) => (
+                        <p key={paragraph} style={termsParagraphStyle}>{paragraph}</p>
+                      ))}
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <label style={checkboxLabelStyle}>
+                <input
+                  type="checkbox"
+                  checked={hasAcceptedTerms}
+                  onChange={(e) => setHasAcceptedTerms(e.target.checked)}
+                  style={{ marginTop: '0.2rem', accentColor: '#ea580c' }}
+                />
+                <span>{TERMS_ACCEPTANCE_LABEL}</span>
+              </label>
+
+              <div style={termsModalFooterStyle}>
+                <button
+                  type="button"
+                  onClick={closeTermsModal}
+                  style={{
+                    border: '1px solid #cbd5e1',
+                    background: '#ffffff',
+                    color: '#334155',
+                    padding: '0.75rem 1rem',
+                    borderRadius: '9999px',
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                  }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleAcceptTermsModal}
+                  className="btn-primary"
+                  style={{
+                    ...primaryButtonStyle,
+                    width: 'auto',
+                    marginTop: 0,
+                    opacity: hasAcceptedTerms ? 1 : 0.65,
+                    cursor: hasAcceptedTerms ? 'pointer' : 'not-allowed',
+                  }}
+                  disabled={!hasAcceptedTerms || isSubmitting}
+                >
+                  {submitAfterTermsAcceptance ? 'Agree and Create Account' : 'Agree and Continue'}
+                </button>
+              </div>
+            </div>
           </div>
-        </form>
-      </div>
+        )}
+      </>
     );
   }
 
@@ -746,7 +981,7 @@ const Login = () => {
           <div style={{ textAlign: 'center', marginTop: '0.5rem' }}>
             <button
               type="button"
-              onClick={() => setView('register')}
+              onClick={openRegisterFlow}
               style={{ ...secondaryTextButtonStyle, color: '#d97706', fontSize: '0.95rem' }}
             >
               Do not have an account? Create one

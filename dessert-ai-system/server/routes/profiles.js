@@ -28,6 +28,9 @@ const mapProfile = (row, authUser = null) => ({
   address: row.address,
   phoneNumber: row.phone_number,
   avatarUrl: getProfileAvatarUrl(authUser),
+  termsAccepted: Boolean(row.terms_accepted ?? authUser?.user_metadata?.terms_accepted),
+  termsAcceptedAt: row.terms_accepted_at || authUser?.user_metadata?.terms_accepted_at || null,
+  termsVersion: row.terms_version || authUser?.user_metadata?.terms_version || null,
   createdAt: row.created_at,
 });
 
@@ -87,6 +90,9 @@ router.get("/me", requireAuth, async (req, res, next) => {
           role: "customer",
           address: null,
           phone_number: null,
+          terms_accepted: Boolean(req.authUser.user_metadata?.terms_accepted),
+          terms_accepted_at: req.authUser.user_metadata?.terms_accepted_at || null,
+          terms_version: req.authUser.user_metadata?.terms_version || null,
         })
         .select("*")
         .single();

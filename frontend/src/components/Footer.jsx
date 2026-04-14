@@ -11,7 +11,7 @@ const Footer = () => {
         <div className="footer-column">
           <div className="footer-brand-title">
             <span role="img" aria-label="dessert"></span>
-            V&G LECHEFLAN
+          V&G LECHEFLAN
           </div>
           <p className="footer-description">
             Authentic Filipino desserts made with love, tradition, and the freshest local ingredients.

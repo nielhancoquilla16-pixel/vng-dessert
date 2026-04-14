@@ -4,6 +4,16 @@ import { getSupabaseAdmin } from '../lib/supabaseAdmin.js';
 const router = express.Router();
 
 const normalizeIdentifier = (value = '') => value.trim().toLowerCase();
+const normalizeOptionalText = (value = '') => {
+  const trimmed = String(value || '').trim();
+  return trimmed || null;
+};
+const normalizeAcceptedTermsAt = (value) => {
+  const parsedValue = value ? new Date(value) : new Date();
+  return Number.isNaN(parsedValue.getTime())
+    ? new Date().toISOString()
+    : parsedValue.toISOString();
+};
 
 const listAuthUsers = async (supabase) => {
   const users = [];
@@ -160,14 +170,23 @@ router.post('/register', async (req, res, next) => {
       full_name = '',
       address = '',
       phone_number = '',
+      terms_accepted = false,
+      terms_accepted_at = null,
+      terms_version = '',
     } = req.body || {};
 
     if (!email || !password || !username) {
       return res.status(400).json({ error: 'email, password, and username are required.' });
     }
 
+    if (!terms_accepted) {
+      return res.status(400).json({ error: 'You must agree to the Terms and Conditions before creating an account.' });
+    }
+
     const normalizedEmail = normalizeIdentifier(email);
     const normalizedUsername = normalizeIdentifier(username);
+    const normalizedTermsVersion = normalizeOptionalText(terms_version);
+    const normalizedTermsAcceptedAt = normalizeAcceptedTermsAt(terms_accepted_at);
     const supabase = getSupabaseAdmin();
     const conflicts = await getRegistrationConflicts(supabase, normalizedEmail, normalizedUsername);
 
@@ -185,6 +204,9 @@ router.post('/register', async (req, res, next) => {
       user_metadata: {
         username: normalizedUsername,
         full_name,
+        terms_accepted: true,
+        terms_accepted_at: normalizedTermsAcceptedAt,
+        terms_version: normalizedTermsVersion,
       },
     });
 
@@ -202,6 +224,9 @@ router.post('/register', async (req, res, next) => {
         role: 'customer',
         address: address || null,
         phone_number: phone_number || null,
+        terms_accepted: true,
+        terms_accepted_at: normalizedTermsAcceptedAt,
+        terms_version: normalizedTermsVersion,
       })
       .select('*')
       .single();

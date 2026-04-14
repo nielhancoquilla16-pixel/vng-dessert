@@ -53,7 +53,14 @@ const ReceiptSlip = ({
   paymentStatus = '',
   paidAt = '',
   companyName = 'V&G Dessert',
+  variant = 'default',
+  documentTitle = '',
+  documentSubtitle = '',
+  statusLabel = '',
+  paymentMethodLabel: paymentMethodLabelOverride = '',
+  paymentSummary = null,
 }) => {
+  const receiptVariant = variant === 'thermal' ? 'thermal' : 'default';
   const lineItems = Array.isArray(order?.lineItems) ? order.lineItems : [];
   const grossTotal = Number(order?.totalAmount ?? order?.totalPrice ?? 0) || 0;
   const subtotal = grossTotal > 0 ? grossTotal / (1 + RECEIPT_TAX_RATE) : 0;
@@ -63,24 +70,41 @@ const ReceiptSlip = ({
     || order?.paymentReceiptNumber
     || order?.paymentCheckoutReferenceNumber
     || orderId;
-  const paymentStatusLabel = getPaymentStatusLabel({
+  const paymentStatusLabel = statusLabel || getPaymentStatusLabel({
     ...order,
     paymentCheckoutStatus: paymentStatus || order?.paymentCheckoutStatus || '',
   });
-  const paymentMethodLabel = getPaymentMethodLabel(order);
+  const paymentMethodLabel = paymentMethodLabelOverride || getPaymentMethodLabel(order);
   const isPendingOnlineReference = paymentMethodLabel === 'Online Payment'
     && /^waiting for online payment$/i.test(paymentStatusLabel);
-  const documentTitle = isPendingOnlineReference ? 'Order Reference Slip' : 'Official Receipt';
-  const documentSubtitle = isPendingOnlineReference
+  const resolvedDocumentTitle = documentTitle || (isPendingOnlineReference ? 'Order Reference Slip' : 'Official Receipt');
+  const resolvedDocumentSubtitle = documentSubtitle || (isPendingOnlineReference
     ? 'Reference slip before online payment'
     : String(order?.deliveryMethod || '').toLowerCase() === 'delivery'
       ? 'Delivery order receipt'
-      : 'Pickup order receipt';
+      : 'Pickup order receipt');
   const qrImage = useMemo(() => (
     order?.verificationRequired && order?.qrPayload && !order?.qrUsedAt
       ? generateQrDataUrl(order.qrPayload, 180)
       : ''
   ), [order?.verificationRequired, order?.qrPayload, order?.qrUsedAt]);
+  const showQrPanel = receiptVariant !== 'thermal' || Boolean(qrImage) || Boolean(order?.verificationRequired);
+  const showPaymentReceived = Boolean(
+    paymentSummary
+    && paymentSummary.receivedAmount !== undefined
+    && paymentSummary.receivedAmount !== null
+    && paymentSummary.receivedAmount !== ''
+  );
+  const showChangeAmount = Boolean(
+    paymentSummary
+    && paymentSummary.changeAmount !== undefined
+    && paymentSummary.changeAmount !== null
+    && paymentSummary.changeAmount !== ''
+  );
+  const paymentReceivedAmount = showPaymentReceived ? Number(paymentSummary.receivedAmount) || 0 : 0;
+  const changeAmount = showChangeAmount ? Number(paymentSummary.changeAmount) || 0 : 0;
+  const paymentReceivedLabel = paymentSummary?.receivedLabel || 'Payment received';
+  const changeLabel = paymentSummary?.changeLabel || 'Change';
 
   const receiptDate = paidAt
     || order?.paymentCheckoutPaidAt
@@ -89,15 +113,18 @@ const ReceiptSlip = ({
     || new Date().toISOString();
 
   return (
-    <section className="receipt-shell" aria-label="Printable receipt">
-      <div className="receipt-card">
+    <section
+      className={`receipt-shell${receiptVariant === 'thermal' ? ' receipt-shell--thermal' : ''}`}
+      aria-label="Printable receipt"
+    >
+      <div className={`receipt-card${receiptVariant === 'thermal' ? ' receipt-card--thermal' : ''}`}>
         <header className="receipt-header">
           <div className="receipt-brand">
             <img src={logoSrc} alt={`${companyName} logo`} className="receipt-logo" />
             <div className="receipt-brand-copy">
-              <p className="receipt-kicker">{documentTitle}</p>
+              <p className="receipt-kicker">{resolvedDocumentTitle}</p>
               <h2>{companyName}</h2>
-              <p>{documentSubtitle}</p>
+              <p>{resolvedDocumentSubtitle}</p>
             </div>
           </div>
 
@@ -112,7 +139,7 @@ const ReceiptSlip = ({
           </div>
         </header>
 
-        <div className="receipt-meta-grid">
+        <div className={`receipt-meta-grid${receiptVariant === 'thermal' ? ' receipt-meta-grid--thermal' : ''}`}>
           <article className="receipt-meta-card">
             <span>Receipt No.</span>
             <strong>{paymentReference}</strong>
@@ -131,7 +158,7 @@ const ReceiptSlip = ({
           </article>
         </div>
 
-        <div className="receipt-customer-grid">
+        <div className={`receipt-customer-grid${receiptVariant === 'thermal' ? ' receipt-customer-grid--thermal' : ''}`}>
           <article className="receipt-info-card">
             <span>Customer</span>
             <strong>{order?.customer || 'Customer'}</strong>
@@ -146,7 +173,7 @@ const ReceiptSlip = ({
           </article>
         </div>
 
-        <div className="receipt-body-grid">
+        <div className={`receipt-body-grid${receiptVariant === 'thermal' ? ' receipt-body-grid--thermal' : ''}${showQrPanel ? '' : ' receipt-body-grid--no-qr'}`}>
           <div className="receipt-items-panel">
             <div className="receipt-section-title">
               <ReceiptText size={16} />
@@ -177,36 +204,38 @@ const ReceiptSlip = ({
             </div>
           </div>
 
-          <aside className="receipt-qr-panel">
-            <div className="receipt-section-title">
-              <QrCode size={16} />
-              <span>Order QR</span>
-            </div>
-
-            {qrImage ? (
-              <img
-                src={qrImage}
-                alt={`QR for order ${orderId}`}
-                className="receipt-qr-image"
-              />
-            ) : (
-              <div className="receipt-qr-image receipt-qr-image--fallback">
-                QR unavailable
+          {showQrPanel && (
+            <aside className="receipt-qr-panel">
+              <div className="receipt-section-title">
+                <QrCode size={16} />
+                <span>Order QR</span>
               </div>
-            )}
 
-            <p className="receipt-note">
-              {isPendingOnlineReference
-                ? 'Use this QR code or Order ID as your reference while completing the online payment.'
-                : 'Present this receipt with the QR code or Order ID when claiming the order.'}
-              {order?.verificationRequired
-                ? ' QR codes are one-time use only.'
-                : ' Staff can process this order manually if needed.'}
-            </p>
-          </aside>
+              {qrImage ? (
+                <img
+                  src={qrImage}
+                  alt={`QR for order ${orderId}`}
+                  className="receipt-qr-image"
+                />
+              ) : (
+                <div className="receipt-qr-image receipt-qr-image--fallback">
+                  QR unavailable
+                </div>
+              )}
+
+              <p className="receipt-note">
+                {isPendingOnlineReference
+                  ? 'Use this QR code or Order ID as your reference while completing the online payment.'
+                  : 'Present this receipt with the QR code or Order ID when claiming the order.'}
+                {order?.verificationRequired
+                  ? ' QR codes are one-time use only.'
+                  : ' Staff can process this order manually if needed.'}
+              </p>
+            </aside>
+          )}
         </div>
 
-        <div className="receipt-summary">
+        <div className={`receipt-summary${receiptVariant === 'thermal' ? ' receipt-summary--thermal' : ''}`}>
           <div className="receipt-summary-row">
             <span>Subtotal</span>
             <strong>{formatCurrency(subtotal)}</strong>
@@ -215,13 +244,25 @@ const ReceiptSlip = ({
             <span>Tax (12%)</span>
             <strong>{formatCurrency(taxAmount)}</strong>
           </div>
+          {showPaymentReceived && (
+            <div className="receipt-summary-row">
+              <span>{paymentReceivedLabel}</span>
+              <strong>{formatCurrency(paymentReceivedAmount)}</strong>
+            </div>
+          )}
+          {showChangeAmount && (
+            <div className="receipt-summary-row">
+              <span>{changeLabel}</span>
+              <strong>{formatCurrency(changeAmount)}</strong>
+            </div>
+          )}
           <div className="receipt-summary-row receipt-summary-row--total">
             <span>Total</span>
             <strong>{formatCurrency(grossTotal)}</strong>
           </div>
         </div>
 
-        <footer className="receipt-footer">
+        <footer className={`receipt-footer${receiptVariant === 'thermal' ? ' receipt-footer--thermal' : ''}`}>
           <p>
             {isPendingOnlineReference
               ? `Keep this reference slip for ${companyName}. It confirms that your Order ID and QR were generated before payment confirmation.`

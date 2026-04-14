@@ -28,6 +28,9 @@ create table if not exists public.profiles (
   role text not null default 'customern' check (role in ('customer', 'admin', 'staff')),
   address text,
   phone_number text,
+  terms_accepted boolean not null default false,
+  terms_accepted_at timestamptz,
+  terms_version text,
   created_at timestamptz not null default timezone('utc', now())
 );
 
@@ -157,7 +160,10 @@ create table if not exists public.cart_items (
 
 alter table if exists public.profiles
   add column if not exists username text,
-  add column if not exists email text;
+  add column if not exists email text,
+  add column if not exists terms_accepted boolean not null default false,
+  add column if not exists terms_accepted_at timestamptz,
+  add column if not exists terms_version text;
 
 alter table if exists public.products
   add column if not exists stock_quantity integer not null default 0;

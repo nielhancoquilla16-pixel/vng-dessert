@@ -1,9 +1,23 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { Search, Plus, Minus, Trash2 } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import { Search, Plus, Minus, Trash2, Printer } from 'lucide-react';
 import { useProducts } from '../context/ProductContext';
 import { useOrders } from '../context/OrderContext';
-import { generateQrDataUrl } from '../utils/qrCode';
+import ReceiptSlip from '../components/ReceiptSlip';
 import './AdminPOS.css';
+
+const POS_AUTO_PRINT_STORAGE_KEY = 'vng-pos-auto-print';
+
+const getInitialAutoPrintPreference = () => {
+  if (typeof window === 'undefined') {
+    return false;
+  }
+
+  try {
+    return window.localStorage.getItem(POS_AUTO_PRINT_STORAGE_KEY) === 'true';
+  } catch {
+    return false;
+  }
+};
 
 const AdminPOS = () => {
   const { products, validateStockAvailability, refreshProducts } = useProducts();
@@ -18,21 +32,50 @@ const AdminPOS = () => {
   const [saleError, setSaleError] = useState('');
   const [saleReceipt, setSaleReceipt] = useState(null);
   const [activeSaleOrderId, setActiveSaleOrderId] = useState(null);
+  const [autoPrintEnabled, setAutoPrintEnabled] = useState(getInitialAutoPrintPreference);
+  const autoPrintedReceiptKeyRef = useRef('');
 
   const categories = ['All', 'Leche Flan', 'Cakes', 'Special Desserts', 'Pastries', 'Cringkles'];
 
   const total = posCart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
-  const saleReceiptQrImage = useMemo(() => (
-    saleReceipt?.verificationRequired && saleReceipt?.qrPayload && !saleReceipt?.qrUsedAt
-      ? generateQrDataUrl(saleReceipt.qrPayload, 180)
-      : ''
-  ), [saleReceipt]);
 
   useEffect(() => {
     if (saleReceipt) {
       setSaleReceipt(null);
     }
   }, [posCart]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    try {
+      window.localStorage.setItem(POS_AUTO_PRINT_STORAGE_KEY, String(autoPrintEnabled));
+    } catch {
+      // Ignore localStorage write failures in restricted browser modes.
+    }
+  }, [autoPrintEnabled]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !saleReceipt?.autoPrintRequested) {
+      return undefined;
+    }
+
+    const receiptPrintKey = `${saleReceipt.orderCode || saleReceipt.orderId || 'walk-in-sale'}:${saleReceipt.completedAt || ''}`;
+    if (autoPrintedReceiptKeyRef.current === receiptPrintKey) {
+      return undefined;
+    }
+
+    autoPrintedReceiptKeyRef.current = receiptPrintKey;
+    const timer = window.setTimeout(() => {
+      window.print();
+    }, 250);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [saleReceipt]);
 
   const handleKeypadPress = (val) => {
     if (val === 'C') {
@@ -63,6 +106,12 @@ const AdminPOS = () => {
     resetPaymentFlow();
     setCustomerName('');
     setSubmittedName('Customer');
+  };
+
+  const handlePrintReceipt = () => {
+    if (typeof window !== 'undefined') {
+      window.print();
+    }
   };
 
   const handleCompleteSale = async () => {
@@ -135,19 +184,34 @@ const AdminPOS = () => {
       const changeDue = isCashSale
         ? Number((cashTendered - total).toFixed(2))
         : 0;
+      const completedAt = savedOrder?.updatedAt || new Date().toISOString();
+      const receiptOrderCode = savedOrder?.orderCode || savedOrder?.displayId || savedOrder?.orderId || savedOrder?.id || nextOrderId || 'POS order';
+      const receiptOrder = {
+        ...savedOrder,
+        customer: savedOrder?.customer || savedOrder?.customerName || submittedName,
+        lineItems: Array.isArray(savedOrder?.lineItems) && savedOrder.lineItems.length > 0 ? savedOrder.lineItems : lineItems,
+        totalAmount: Number(savedOrder?.totalAmount ?? total) || total,
+        total: savedOrder?.total || `PHP ${total.toFixed(2)}`,
+        paymentMethod: savedOrder?.paymentMethod || paymentMode,
+        deliveryMethod: savedOrder?.deliveryMethod || 'pickup',
+        status: savedOrder?.status || 'confirmed',
+        orderCode: receiptOrderCode,
+        orderId: savedOrder?.orderId || nextOrderId || receiptOrderCode,
+        paymentReceiptNumber: savedOrder?.paymentReceiptNumber || receiptOrderCode,
+        createdAt: savedOrder?.createdAt || completedAt,
+        updatedAt: completedAt,
+      };
 
       setSaleReceipt({
-        orderId: nextOrderId,
-        orderCode: savedOrder?.orderCode || savedOrder?.displayId || savedOrder?.id || nextOrderId || 'POS order',
-        customerName: submittedName,
+        order: receiptOrder,
+        orderId: receiptOrder.orderId,
+        orderCode: receiptOrder.orderCode,
         paymentMode,
-        total,
+        total: receiptOrder.totalAmount,
         cashReceived: cashTendered,
         changeDue,
-        verificationRequired: Boolean(savedOrder?.verificationRequired ?? savedOrder?.verification_required ?? false),
-        qrPayload: savedOrder?.qrPayload || savedOrder?.qr_payload || '',
-        qrUsedAt: savedOrder?.qrUsedAt || savedOrder?.qr_used_at || null,
-        completedAt: new Date().toISOString(),
+        completedAt,
+        autoPrintRequested: autoPrintEnabled,
       });
 
       resetPaymentFlow();
@@ -328,12 +392,26 @@ const AdminPOS = () => {
           <span className="pos-total-price-large">PHP {total.toFixed(2)}</span>
         </div>
 
+        <div className="pos-print-settings-card">
+          <label className="pos-auto-print-toggle">
+            <input
+              type="checkbox"
+              checked={autoPrintEnabled}
+              onChange={(event) => setAutoPrintEnabled(event.target.checked)}
+            />
+            <span className="pos-auto-print-copy">
+              <strong>Auto-print receipt</strong>
+              <small>Open the print dialog right after the order is completed.</small>
+            </span>
+          </label>
+        </div>
+
         {saleReceipt ? (
           <div className="pos-completion-card">
             <div className="pos-completion-badge">Sale completed</div>
             <h3 style={{ margin: '0.75rem 0 0.5rem' }}>Order {saleReceipt.orderCode}</h3>
             <p className="pos-completion-copy">
-              The current order stays editable. Use Add More Order if you want to keep adding items before starting a new sale.
+              Receipt preview is ready below. Print it now, or choose Add More Order if the customer still wants to keep this sale editable before starting a new one.
             </p>
 
             <div className="pos-completion-grid">
@@ -345,44 +423,48 @@ const AdminPOS = () => {
                 <span>Payment received</span>
                 <strong>PHP {saleReceipt.cashReceived.toFixed(2)}</strong>
               </div>
-              {saleReceipt.paymentMode === 'cash' && (
-                <div className="pos-completion-metric pos-completion-change">
-                  <span>Change</span>
-                  <strong>PHP {saleReceipt.changeDue.toFixed(2)}</strong>
-                </div>
-              )}
+              <div className="pos-completion-metric pos-completion-change">
+                <span>Change</span>
+                <strong>PHP {saleReceipt.changeDue.toFixed(2)}</strong>
+              </div>
             </div>
 
-            {saleReceipt.verificationRequired && (
-              <div className="pos-receipt-qr-panel">
-                <div className="pos-receipt-qr-header">
-                  <div>
-                    <p className="pos-receipt-qr-label">Order ID</p>
-                    <strong>{saleReceipt.orderCode}</strong>
-                  </div>
-                </div>
-                <div className="pos-receipt-qr-body">
-                  {saleReceiptQrImage ? (
-                    <img
-                      src={saleReceiptQrImage}
-                      alt={`Order QR ${saleReceipt.orderCode}`}
-                      className="pos-receipt-qr-image"
-                    />
-                  ) : (
-                    <div className="pos-receipt-qr-image pos-receipt-qr-image--fallback">
-                      QR Unavailable
-                    </div>
-                  )}
-                  <p className="pos-receipt-qr-note">
-                    Present this QR or Order ID during pickup verification. QR is one-time use only.
-                  </p>
-                </div>
-              </div>
-            )}
-
-            <div className="pos-completion-actions">
+            <div className="pos-completion-actions pos-completion-actions--receipt">
+              <button className="btn-pos-primary" onClick={handlePrintReceipt}>
+                <Printer size={18} />
+                Print Receipt
+              </button>
               <button className="btn-pos-secondary" onClick={handleAddMoreOrder}>Add More Order</button>
               <button className="btn-pos-clear" onClick={handleClearCart}>Clear Cart</button>
+            </div>
+
+            <div className="pos-completion-preview">
+              <div className="pos-completion-preview-header">
+                <div>
+                  <h4>Receipt Preview</h4>
+                  <p>Use Print Receipt to print now or choose Save as PDF from the browser dialog.</p>
+                </div>
+                {saleReceipt.autoPrintRequested && (
+                  <span className="pos-auto-print-badge">Auto print enabled</span>
+                )}
+              </div>
+
+              <div className="pos-print-area">
+                <ReceiptSlip
+                  order={saleReceipt.order}
+                  receiptNumber={saleReceipt.order.paymentReceiptNumber || saleReceipt.orderCode}
+                  paidAt={saleReceipt.completedAt}
+                  variant="thermal"
+                  documentTitle="Walk-in Receipt"
+                  documentSubtitle="POS order receipt"
+                  statusLabel="Paid"
+                  paymentMethodLabel={saleReceipt.paymentMode === 'gcash' ? 'GCash' : 'Cash'}
+                  paymentSummary={{
+                    receivedAmount: saleReceipt.cashReceived,
+                    changeAmount: saleReceipt.changeDue,
+                  }}
+                />
+              </div>
             </div>
           </div>
         ) : !paymentMode ? (
@@ -424,7 +506,7 @@ const AdminPOS = () => {
                   ))}
                 </div>
 
-                <button className="btn-complete-cash" onClick={handleCompleteSale}>Complete Cash Sale</button>
+                <button className="btn-complete-cash" onClick={handleCompleteSale}>Complete Order</button>
                 <button className="btn-pos-cancel" onClick={resetPaymentFlow}>Cancel</button>
               </div>
             ) : (
@@ -442,7 +524,7 @@ const AdminPOS = () => {
                   <p style={{ fontSize: '0.75rem', color: '#94a3b8', textAlign: 'center' }}>If you changed the cart/total, re-open GCash to refresh the QR.</p>
                 </div>
 
-                <button className="btn-complete-gcash" onClick={handleCompleteSale}>Complete GCash Sale</button>
+                <button className="btn-complete-gcash" onClick={handleCompleteSale}>Complete Order</button>
                 <button className="btn-pos-cancel" onClick={resetPaymentFlow}>Cancel</button>
               </div>
             )}

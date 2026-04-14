@@ -1,0 +1,5 @@
+@layer theme, base, components, utilities;
+
+/* Preflight is intentionally omitted so the existing UI keeps its current base styling. */
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);

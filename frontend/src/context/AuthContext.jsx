@@ -1,6 +1,7 @@
 /* eslint-disable react-refresh/only-export-components */
 import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
 import { apiRequest, ApiError, isBackendIssueError } from '../lib/api';
+import { TERMS_VERSION } from '../content/termsAndConditions';
 import { supabase, isSupabaseConfigured, clearSupabaseSessionStorage } from '../lib/supabase';
 import { appUrl } from '../lib/appUrl';
 
@@ -45,6 +46,13 @@ const normalizeProfile = (profile, authUser = null) => ({
   address: profile?.address || '',
   phoneNumber: profile?.phoneNumber || profile?.phone_number || '',
   avatarUrl: profile?.avatarUrl || profile?.avatar_url || authUser?.user_metadata?.avatar_url || '',
+  termsAccepted: Boolean(
+    profile?.termsAccepted
+    ?? profile?.terms_accepted
+    ?? authUser?.user_metadata?.terms_accepted
+  ),
+  termsAcceptedAt: profile?.termsAcceptedAt || profile?.terms_accepted_at || authUser?.user_metadata?.terms_accepted_at || '',
+  termsVersion: profile?.termsVersion || profile?.terms_version || authUser?.user_metadata?.terms_version || '',
   createdAt: profile?.createdAt || profile?.created_at || authUser?.created_at || '',
 });
 
@@ -315,14 +323,33 @@ export const AuthProvider = ({ children }) => {
     signInWithRole(identifier, password, ['customer'])
   ), [signInWithRole]);
 
-  const registerCustomer = useCallback(async ({ username, email, password, fullName = '', address = '', phoneNumber = '' }) => {
+  const registerCustomer = useCallback(async ({
+    username,
+    email,
+    password,
+    fullName = '',
+    address = '',
+    phoneNumber = '',
+    acceptedTerms = false,
+    acceptedTermsAt = '',
+    termsVersion = TERMS_VERSION,
+  }) => {
     if (!isSupabaseConfigured || !supabase) {
       return { success: false, message: 'Supabase is not configured yet. Add your frontend env keys first.' };
+    }
+
+    if (!acceptedTerms) {
+      return { success: false, message: 'You must agree to the Terms and Conditions before creating an account.' };
     }
 
     try {
       const normalizedEmail = String(email || '').trim().toLowerCase();
       const normalizedUsername = String(username || '').trim().toLowerCase();
+      const parsedAcceptedTermsAt = acceptedTermsAt ? new Date(acceptedTermsAt) : new Date();
+      const normalizedAcceptedTermsAt = Number.isNaN(parsedAcceptedTermsAt.getTime())
+        ? new Date().toISOString()
+        : parsedAcceptedTermsAt.toISOString();
+      const normalizedTermsVersion = String(termsVersion || TERMS_VERSION).trim() || TERMS_VERSION;
 
       try {
         await apiRequest('/api/auth/register/check', {
@@ -346,6 +373,9 @@ export const AuthProvider = ({ children }) => {
             full_name: fullName,
             address,
             phone_number: phoneNumber,
+            terms_accepted: true,
+            terms_accepted_at: normalizedAcceptedTermsAt,
+            terms_version: normalizedTermsVersion,
           }),
         });
 
@@ -393,6 +423,9 @@ export const AuthProvider = ({ children }) => {
             full_name: fullName,
             address,
             phone_number: phoneNumber,
+            terms_accepted: true,
+            terms_accepted_at: normalizedAcceptedTermsAt,
+            terms_version: normalizedTermsVersion,
           },
         },
       });

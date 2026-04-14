@@ -214,9 +214,6 @@ const Home = () => {
 
                 {hasLiveBestSellers ? (
                   <>
-                    <p className="spotlight-note">
-                      Synced to total customer orders
-                    </p>
 
                     <p className="spotlight-summary">
                       {`${featuredProduct.soldCount} total units sold across ${featuredProduct.orderCount} customer orders.`}

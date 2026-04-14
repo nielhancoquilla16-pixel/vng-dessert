@@ -180,10 +180,7 @@ const CustomerProfile = () => {
       <section className="customer-profile-hero">
         <div>
           <p className="customer-profile-eyebrow">My Account</p>
-          <h1>Customer Profile</h1>
-          <p className="customer-profile-subtitle">
-            Update your nickname, contact details, delivery address, and profile picture anytime.
-          </p>
+          <h1>Your Profile</h1>
         </div>
         <div className="customer-profile-summary-chip">
           <span>Joined</span>
