@@ -83,23 +83,6 @@ const getDefaultFilters = () => ({
   staffId: 'all',
 });
 
-const SALES_REPORT_BASELINE_KEY = 'vng-sales-report-baseline-at';
-
-const getInitialReportBaseline = () => {
-  if (typeof window === 'undefined') {
-    return '';
-  }
-
-  const existingBaseline = window.localStorage.getItem(SALES_REPORT_BASELINE_KEY);
-  if (existingBaseline) {
-    return existingBaseline;
-  }
-
-  const baseline = new Date().toISOString();
-  window.localStorage.setItem(SALES_REPORT_BASELINE_KEY, baseline);
-  return baseline;
-};
-
 const getStaffDisplayName = (report = {}) => (
   report.staff?.fullName
   || report.staff?.username
@@ -279,7 +262,6 @@ const AdminReports = () => {
   const [generatedAt, setGeneratedAt] = useState(() => new Date().toISOString());
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [itemSearch, setItemSearch] = useState('');
-  const [reportBaselineAt, setReportBaselineAt] = useState(() => getInitialReportBaseline());
 
   const staffOptions = useMemo(
     () => getStaffOptions(staffAccounts, salesReports, userRole, profile),
@@ -287,22 +269,14 @@ const AdminReports = () => {
   );
 
   const filteredReports = useMemo(() => {
-    const baselineTime = reportBaselineAt ? new Date(reportBaselineAt).getTime() : 0;
     return filterSalesReports(salesReports, {
       month: '',
       staffId: userRole === 'admin' ? appliedFilters.staffId : 'all',
       paymentType: 'all',
       dateFrom: appliedFilters.startDate,
       dateTo: appliedFilters.endDate,
-    }).filter((report) => {
-      if (!baselineTime) {
-        return true;
-      }
-
-      const reportTime = new Date(report.submittedAt || report.updatedAt || report.createdAt || report.reportDate || '').getTime();
-      return Number.isFinite(reportTime) && reportTime >= baselineTime;
     });
-  }, [appliedFilters, reportBaselineAt, salesReports, userRole]);
+  }, [appliedFilters, salesReports, userRole]);
 
   const summaryRows = useMemo(() => aggregateSalesReportItems(filteredReports), [filteredReports]);
   const normalizedSearch = itemSearch.trim().toLowerCase();
@@ -316,17 +290,10 @@ const AdminReports = () => {
       ...row,
       rank: index + 1,
     }));
-  const returnHistory = useMemo(() => {
-    const baselineTime = reportBaselineAt ? new Date(reportBaselineAt).getTime() : 0;
-    return buildReturnHistory(orders, appliedFilters).filter((report) => {
-      if (!baselineTime) {
-        return true;
-      }
-
-      const reportTime = new Date(report.reviewedAt || report.detectionDate || report.createdAt || report.date || '').getTime();
-      return Number.isFinite(reportTime) && reportTime >= baselineTime;
-    });
-  }, [appliedFilters, orders, reportBaselineAt]);
+  const returnHistory = useMemo(
+    () => buildReturnHistory(orders, appliedFilters),
+    [appliedFilters, orders],
+  );
   const totalReturns = returnHistory.reduce((sum, report) => sum + getReturnQuantity(report), 0);
   const exportReturnRows = returnHistory.map((report) => ({
     date: formatShortDate(report.date),
@@ -363,13 +330,13 @@ const AdminReports = () => {
     }
   };
 
-  const handleResetDisplayedTotals = () => {
-    const baseline = new Date().toISOString();
-    window.localStorage.setItem(SALES_REPORT_BASELINE_KEY, baseline);
-    setReportBaselineAt(baseline);
-    setGeneratedAt(baseline);
+  const handleResetFilters = () => {
+    const defaultFilters = getDefaultFilters();
+    setDraftFilters(defaultFilters);
+    setAppliedFilters(defaultFilters);
+    setGeneratedAt(new Date().toISOString());
     setPageError('');
-    setPageNotice('Sales report totals reset for testing. New completed orders will be counted from now.');
+    setPageNotice('Sales report filters reset.');
   };
 
   const handlePeriodChange = (period) => {
@@ -481,10 +448,10 @@ const AdminReports = () => {
           <button
             type="button"
             className="report-secondary-button"
-            onClick={handleResetDisplayedTotals}
+            onClick={handleResetFilters}
           >
             <RotateCcw size={16} />
-            Reset Totals
+            Reset Filters
           </button>
           <button
             type="button"

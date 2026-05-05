@@ -196,7 +196,6 @@ const mapOrderToSalesReport = (order = {}) => {
 
 const buildOrderDerivedSalesReportQuery = (supabase, req) => {
   const currentRole = String(req.profile?.role || '').toLowerCase();
-  const currentUserId = req.authUser?.id || '';
 
   let query = supabase
     .from('orders')
@@ -204,8 +203,8 @@ const buildOrderDerivedSalesReportQuery = (supabase, req) => {
     .eq('order_status', 'completed')
     .order('updated_at', { ascending: false });
 
-  if (currentRole !== 'admin') {
-    query = query.eq('user_id', currentUserId);
+  if (!['admin', 'staff'].includes(currentRole)) {
+    query = query.eq('user_id', req.authUser?.id || '');
   }
 
   return query;
