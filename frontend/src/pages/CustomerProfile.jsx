@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Camera, Mail, MapPin, Phone, Save, UserRound, X } from 'lucide-react';
+import LoadingButton from '../components/LoadingButton';
 import { useAuth } from '../context/AuthContext';
 import './CustomerProfile.css';
 
@@ -357,13 +358,14 @@ const CustomerProfile = () => {
               >
                 Reset Changes
               </button>
-              <button
+              <LoadingButton
                 type="submit"
                 className="customer-profile-primary-button"
-                disabled={isSaving || !hasChanges}
+                disabled={!hasChanges}
+                isLoading={isSaving}
               >
-                <Save size={16} /> {isSaving ? 'Saving...' : 'Save Profile'}
-              </button>
+                <Save size={16} /> Save Profile
+              </LoadingButton>
             </div>
           </form>
         </section>

@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Search, Plus, Edit, Trash2, X } from 'lucide-react';
+import LoadingButton from '../components/LoadingButton';
 import { useProducts } from '../context/ProductContext';
 import './AdminProducts.css';
 
@@ -9,6 +10,7 @@ const AdminProducts = () => {
   const [selectedCategory, setSelectedCategory] = useState('All');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [currentProduct, setCurrentProduct] = useState(null);
+  const [isSavingProduct, setIsSavingProduct] = useState(false);
 
   const productCategories = Array.from(new Set(
     products
@@ -27,22 +29,46 @@ const AdminProducts = () => {
     return isProduct && matchesSearch && matchesCategory;
   });
 
+  const getTodayInputValue = () => {
+    const date = new Date();
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
+
+  const getDefaultExpiryDate = () => {
+    const date = new Date();
+    date.setDate(date.getDate() + 30); // 30 days from now
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
+
   const handleOpenModal = (product = null) => {
-    setCurrentProduct(product || { name: '', price: '', stock: '', category: 'Puddings', description: '', image: '', status: 'active', type: 'product' });
+    setCurrentProduct(product || { name: '', price: '', stock: '', category: 'Puddings', description: '', image: '', status: 'active', type: 'product', dateCreated: getTodayInputValue(), expirationDate: '' });
     setIsModalOpen(true);
   };
 
   const handleSave = async (e) => {
     e.preventDefault();
+    setIsSavingProduct(true);
     const stock = parseInt(currentProduct.stock) || 0;
     const liveStatus = stock === 0 ? 'out' : stock <= 10 ? 'low' : 'active';
     const productToSave = { ...currentProduct, stock, status: liveStatus };
-    if (currentProduct.id) {
-      await editProduct(productToSave);
-    } else {
-      await addProduct(productToSave);
+    try {
+      if (currentProduct.id) {
+        await editProduct(productToSave);
+      } else {
+        await addProduct(productToSave);
+      }
+      setIsModalOpen(false);
+    } catch (error) {
+      window.alert(error.message || 'Unable to save this product right now.');
+    } finally {
+      setIsSavingProduct(false);
     }
-    setIsModalOpen(false);
   };
 
   return (
@@ -122,7 +148,7 @@ const AdminProducts = () => {
           <div className="modal-content">
             <div className="admin-products-header" style={{ marginBottom: '1.5rem' }}>
               <h2>{currentProduct.id ? 'Edit Product' : 'Add New Product'}</h2>
-              <button onClick={() => setIsModalOpen(false)} style={{ background: 'none', border: 'none', color: '#64748b' }}>
+              <button onClick={() => setIsModalOpen(false)} style={{ background: 'none', border: 'none', color: '#64748b' }} disabled={isSavingProduct}>
                 <X size={24} />
               </button>
             </div>
@@ -197,9 +223,37 @@ const AdminProducts = () => {
                 ></textarea>
               </div>
 
-              <button type="submit" className="btn-add-item" style={{ width: '100%', justifyContent: 'center', marginTop: '1rem' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                <div className="modal-form-group">
+                  <label>Date Created</label>
+                  <input 
+                    type="date" 
+                    className="modal-input" 
+                    value={currentProduct.dateCreated || ''}
+                    onChange={(e) => setCurrentProduct({...currentProduct, dateCreated: e.target.value})}
+                    required
+                  />
+                </div>
+                <div className="modal-form-group">
+                  <label>Expiry Date</label>
+                  <input 
+                    type="date" 
+                    className="modal-input" 
+                    value={currentProduct.expirationDate || ''}
+                    onChange={(e) => setCurrentProduct({...currentProduct, expirationDate: e.target.value})}
+                    required
+                  />
+                </div>
+              </div>
+
+              <LoadingButton
+                type="submit"
+                className="btn-add-item"
+                style={{ width: '100%', justifyContent: 'center', marginTop: '1rem' }}
+                isLoading={isSavingProduct}
+              >
                 {currentProduct.id ? 'Save Changes' : 'Add Product'}
-              </button>
+              </LoadingButton>
             </form>
           </div>
         </div>

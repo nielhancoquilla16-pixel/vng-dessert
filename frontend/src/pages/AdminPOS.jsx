@@ -25,7 +25,7 @@ const AdminPOS = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('All');
   const [customerName, setCustomerName] = useState('');
-  const [submittedName, setSubmittedName] = useState('Customer');
+  const [submittedName, setSubmittedName] = useState('Walk-in Customer');
   const [posCart, setPosCart] = useState([]);
   const [paymentMode, setPaymentMode] = useState(null);
   const [cashAmount, setCashAmount] = useState('');
@@ -38,12 +38,6 @@ const AdminPOS = () => {
   const categories = ['All', 'Leche Flan', 'Cakes', 'Special Desserts', 'Pastries', 'Cringkles'];
 
   const total = posCart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
-
-  useEffect(() => {
-    if (saleReceipt) {
-      setSaleReceipt(null);
-    }
-  }, [posCart]);
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -91,7 +85,6 @@ const AdminPOS = () => {
     setPaymentMode(null);
     setCashAmount('');
     setSaleError('');
-    setShowNameWarning(false);
   };
 
   const handleAddMoreOrder = () => {
@@ -105,7 +98,7 @@ const AdminPOS = () => {
     setSaleReceipt(null);
     resetPaymentFlow();
     setCustomerName('');
-    setSubmittedName('Customer');
+    setSubmittedName('Walk-in Customer');
   };
 
   const handlePrintReceipt = () => {
@@ -157,7 +150,7 @@ const AdminPOS = () => {
         total: `PHP ${total.toFixed(2)}`,
         paymentMethod: paymentMode,
         deliveryMethod: 'pickup',
-        status: 'confirmed',
+        status: 'preparing',
         subtext: `Walk-in / ${paymentMode === 'gcash' ? 'GCash' : 'Pay at Store'}`,
       };
 
@@ -194,7 +187,7 @@ const AdminPOS = () => {
         total: savedOrder?.total || `PHP ${total.toFixed(2)}`,
         paymentMethod: savedOrder?.paymentMethod || paymentMode,
         deliveryMethod: savedOrder?.deliveryMethod || 'pickup',
-        status: savedOrder?.status || 'confirmed',
+        status: savedOrder?.status || 'preparing',
         orderCode: receiptOrderCode,
         orderId: savedOrder?.orderId || nextOrderId || receiptOrderCode,
         paymentReceiptNumber: savedOrder?.paymentReceiptNumber || receiptOrderCode,
@@ -235,14 +228,7 @@ const AdminPOS = () => {
     return isProduct && matchesSearch && matchesCategory;
   });
 
-  const [showNameWarning, setShowNameWarning] = useState(false);
-
   const addToPOSCart = (product) => {
-    if (submittedName === 'Customer') {
-      setShowNameWarning(true);
-      return;
-    }
-
     const currentQuantity = posCart.find((item) => item.id === product.id)?.quantity || 0;
     const availableStock = Math.max(0, Number(product.stock) || 0);
 
@@ -252,6 +238,7 @@ const AdminPOS = () => {
     }
 
     setSaleError('');
+    setSaleReceipt(null);
     setPosCart((prev) => {
       const existing = prev.find((item) => item.id === product.id);
       if (existing) {
@@ -262,11 +249,13 @@ const AdminPOS = () => {
   };
 
   const removeFromPOSCart = (id) => {
+    setSaleReceipt(null);
     setPosCart((prev) => prev.filter((item) => item.id !== id));
   };
 
   const updateQuantity = (id, delta) => {
     setSaleError('');
+    setSaleReceipt(null);
     setPosCart((prev) => prev.map((item) => {
       if (item.id === id) {
         const maxStock = Math.max(1, Number(item.stock) || item.quantity);
@@ -280,43 +269,48 @@ const AdminPOS = () => {
   return (
     <div className="pos-container">
       <div className="pos-left">
-        <div className="pos-header-pill">POS System</div>
+        <div className="pos-left-content">
+          <p className="pos-hero-kicker">POS Management</p>
+          <h1 className="pos-section-title">POS System</h1>
+          <h2 className="pos-section-subtitle">Select Desserts</h2>
+          <div className="pos-category-row">
+            {categories.map((cat) => (
+              <button
+                key={cat}
+                type="button"
+                className={`pos-category-pill ${selectedCategory === cat ? 'is-active' : ''}`}
+                onClick={() => setSelectedCategory(cat)}
+              >
+                {cat}
+              </button>
+            ))}
+          </div>
 
-        <h2>Select Desserts</h2>
-        <div className="admin-filters" style={{ margin: '1rem 0' }}>
-          {categories.map((cat) => (
-            <button
-              key={cat}
-              className={`filter-pill ${selectedCategory === cat ? 'active' : ''}`}
-              onClick={() => setSelectedCategory(cat)}
-            >
-              {cat}
-            </button>
-          ))}
+          <div className="pos-search-wrap" style={{ position: 'relative' }}>
+            <Search size={16} style={{ position: 'absolute', left: '0.9rem', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }} />
+            <input
+              type="text"
+              placeholder="Search Dessert..."
+              className="admin-search-input"
+              style={{ width: '100%', maxWidth: 'none' }}
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+            />
+          </div>
         </div>
 
-        <div style={{ position: 'relative' }}>
-          <Search size={18} style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }} />
-          <input
-            type="text"
-            placeholder="Search Dessert..."
-            className="admin-search-input"
-            style={{ width: '100%', maxWidth: 'none' }}
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-          />
-        </div>
-
-        <div className="pos-card-grid">
-          {filteredProducts.map((product) => (
-            <div key={product.id} className="pos-item-card" onClick={() => addToPOSCart(product)}>
-              <img src={product.image} alt={product.name} className="pos-item-img" />
-              <div className="pos-item-info">
-                <div className="pos-item-name">{product.name}</div>
-                <div className="pos-item-price">PHP {Number(product.price).toFixed(2)}</div>
+        <div className="pos-products-panel">
+          <div className="pos-card-grid">
+            {filteredProducts.map((product) => (
+              <div key={product.id} className="pos-item-card" onClick={() => addToPOSCart(product)}>
+                <img src={product.image} alt={product.name} className="pos-item-img" />
+                <div className="pos-item-info">
+                  <div className="pos-item-name">{product.name}</div>
+                  <div className="pos-item-price">PHP {Number(product.price).toFixed(2)}</div>
+                </div>
               </div>
-            </div>
-          ))}
+            ))}
+          </div>
         </div>
       </div>
 
@@ -334,10 +328,7 @@ const AdminPOS = () => {
             <button
               className="btn-pos-enter"
               onClick={() => {
-                if (customerName.trim()) {
-                  setSubmittedName(customerName);
-                  setShowNameWarning(false);
-                }
+                setSubmittedName(customerName.trim() || 'Walk-in Customer');
               }}
             >
               Enter
@@ -348,12 +339,6 @@ const AdminPOS = () => {
         <h2 style={{ fontSize: '1.75rem', margin: '1rem 0' }}>
           Shopping Cart for: <span style={{ color: '#ea580c', textDecoration: 'underline' }}>{submittedName}</span>
         </h2>
-
-        {showNameWarning && (
-          <div className="pos-warning-alert">
-            Enter a customer name before adding items.
-          </div>
-        )}
 
         {saleError && (
           <div className="pos-warning-alert" style={{ background: '#fef2f2', color: '#b91c1c', borderColor: '#fecaca' }}>

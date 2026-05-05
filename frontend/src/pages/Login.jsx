@@ -8,7 +8,7 @@ import {
   TERMS_SECTIONS,
   TERMS_VERSION,
 } from '../content/termsAndConditions';
-import { passwordRecoveryMode } from '../lib/supabase';
+import { getRememberMePreference, passwordRecoveryMode } from '../lib/supabase';
 import './Login.css';
 
 const panelStyle = {
@@ -160,6 +160,65 @@ const termsModalFooterStyle = {
   flexWrap: 'wrap',
 };
 
+const authLoadingOverlayStyle = {
+  position: 'fixed',
+  inset: 0,
+  background: 'rgba(255, 247, 237, 0.86)',
+  backdropFilter: 'blur(10px)',
+  WebkitBackdropFilter: 'blur(10px)',
+  zIndex: 1500,
+};
+
+const authLoadingContentStyle = {
+  position: 'fixed',
+  top: '50%',
+  left: '50%',
+  transform: 'translate(-50%, -50%)',
+  display: 'flex',
+  flexDirection: 'column',
+  alignItems: 'center',
+  justifyContent: 'center',
+  gap: '1.25rem',
+  width: 'min(24rem, calc(100vw - 3rem))',
+  textAlign: 'center',
+};
+
+const authLoadingTitleStyle = {
+  margin: 0,
+  color: '#7c2d12',
+  fontSize: '1.15rem',
+  fontWeight: 700,
+  textAlign: 'center',
+};
+
+const authLoadingHintStyle = {
+  margin: 0,
+  color: '#9a3412',
+  fontSize: '0.92rem',
+  textAlign: 'center',
+  maxWidth: '20rem',
+  lineHeight: 1.5,
+};
+
+const AuthLoadingOverlay = ({ title, hint }) => (
+  <div style={authLoadingOverlayStyle} role="status" aria-live="polite" aria-label={title}>
+    <div style={authLoadingContentStyle}>
+      <div
+        className="w-32 aspect-square rounded-full relative flex justify-center items-center animate-[spin_3s_linear_infinite] z-40 bg-[conic-gradient(#fde047_0deg,#fb923c_150deg,#ef4444_300deg,transparent_360deg)] before:content-[''] before:animate-[spin_2s_linear_infinite] before:absolute before:w-[60%] before:aspect-square before:rounded-full before:z-[80] before:bg-[conic-gradient(#fde047_0deg,#fb923c_180deg,transparent_360deg)] after:content-[''] after:absolute after:w-3/4 after:aspect-square after:rounded-full after:z-[60] after:animate-[spin_3s_linear_infinite] after:bg-[conic-gradient(#fb923c_0deg,#ef4444_200deg,transparent_360deg)]"
+        aria-hidden="true"
+      >
+        <span
+          className="absolute w-[85%] aspect-square rounded-full z-[60] animate-[spin_5s_linear_infinite] bg-[conic-gradient(#fde047_0deg,#fb923c_180deg,#ef4444_360deg)]"
+        />
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', alignItems: 'center' }}>
+        <p style={authLoadingTitleStyle}>{title}</p>
+        <p style={authLoadingHintStyle}>{hint}</p>
+      </div>
+    </div>
+  </div>
+);
+
 const Login = () => {
   const navigate = useNavigate();
   const {
@@ -169,6 +228,8 @@ const Login = () => {
     verifyCustomerSignupCode,
     resendCustomerSignupCode,
     requestPasswordReset,
+    verifyAdminResetCode,
+    resetAdminPasswordWithCode,
     verifyPasswordRecoveryCode,
     completePasswordRecovery,
     isPasswordRecovery,
@@ -180,13 +241,24 @@ const Login = () => {
   const [adminUser, setAdminUser] = useState('');
   const [adminPass, setAdminPass] = useState('');
   const [adminError, setAdminError] = useState('');
+  const [adminMessage, setAdminMessage] = useState('');
   const [showAdminPassword, setShowAdminPassword] = useState(false);
+  const [adminResetIdentifier, setAdminResetIdentifier] = useState('');
+  const [adminResetCode, setAdminResetCode] = useState('');
+  const [adminResetPassword, setAdminResetPassword] = useState('');
+  const [adminResetConfirmPassword, setAdminResetConfirmPassword] = useState('');
+  const [adminResetError, setAdminResetError] = useState('');
+  const [adminResetMessage, setAdminResetMessage] = useState('');
+  const [isAdminResetVerified, setIsAdminResetVerified] = useState(false);
+  const [showAdminResetPassword, setShowAdminResetPassword] = useState(false);
+  const [showAdminResetConfirmPassword, setShowAdminResetConfirmPassword] = useState(false);
 
   const [customerUsername, setCustomerUsername] = useState('');
   const [customerPassword, setCustomerPassword] = useState('');
   const [customerError, setCustomerError] = useState('');
   const [customerMessage, setCustomerMessage] = useState('');
   const [showCustomerPassword, setShowCustomerPassword] = useState(false);
+  const [rememberCustomer, setRememberCustomer] = useState(() => getRememberMePreference());
 
   const [regUsername, setRegUsername] = useState('');
   const [regEmail, setRegEmail] = useState('');
@@ -221,17 +293,66 @@ const Login = () => {
   const [showResetConfirmPassword, setShowResetConfirmPassword] = useState(false);
   const isRecoveryCodeMode = passwordRecoveryMode === 'code';
   const activeView = isPasswordRecovery ? 'reset' : view;
+  const showAuthLoadingOverlay = isSubmitting && ['admin', 'customer', 'register'].includes(activeView);
+  const authLoadingCopy = activeView === 'register'
+    ? {
+      title: 'Creating your account...',
+      hint: 'We are setting up your signup details and preparing your first login.',
+    }
+    : {
+      title: 'Logging you in...',
+      hint: 'We are checking your account details and opening your dashboard.',
+    };
+
+  const renderWithAuthLoading = (content) => (
+    <>
+      {content}
+      {showAuthLoadingOverlay && (
+        <AuthLoadingOverlay
+          title={authLoadingCopy.title}
+          hint={authLoadingCopy.hint}
+        />
+      )}
+    </>
+  );
 
   const resetForgotPasswordFlow = () => {
     setForgotIdentifier('');
     setForgotStep('request');
-    setPendingRecoveryEmail('');
+    setPendingRecoveryEmail('check your email for the reset code');
     setRecoveryCode('');
     setForgotMessage('');
     setForgotMessageType('');
     setResetPassword('');
     setResetConfirmPassword('');
     setResetError('');
+  };
+
+  const resetAdminResetFlow = () => {
+    setAdminResetIdentifier('');
+    setAdminResetCode('');
+    setAdminResetPassword('');
+    setAdminResetConfirmPassword('');
+    setAdminResetError('');
+    setAdminResetMessage('');
+    setIsAdminResetVerified(false);
+    setShowAdminResetPassword(false);
+    setShowAdminResetConfirmPassword(false);
+  };
+
+  const openAdminPasswordHelp = () => {
+    setAdminError('');
+    setAdminMessage('');
+    setAdminResetIdentifier(adminUser.trim());
+    setAdminResetCode('');
+    setAdminResetPassword('');
+    setAdminResetConfirmPassword('');
+    setAdminResetError('');
+    setAdminResetMessage('');
+    setIsAdminResetVerified(false);
+    setShowAdminResetPassword(false);
+    setShowAdminResetConfirmPassword(false);
+    setView('admin-help');
   };
 
   const openTermsModal = (shouldSubmitAfterOpen = false) => {
@@ -319,6 +440,7 @@ const Login = () => {
   const handleAdminLogin = async (e) => {
     e.preventDefault();
     setAdminError('');
+    setAdminMessage('');
     setIsSubmitting(true);
     const result = await loginAdmin(adminUser, adminPass);
     setIsSubmitting(false);
@@ -329,6 +451,87 @@ const Login = () => {
     }
 
     setAdminError(result.message);
+  };
+
+  const handleVerifyAdminResetStep = async (e) => {
+    e.preventDefault();
+    setAdminResetError('');
+    setAdminResetMessage('');
+
+    if (!adminResetIdentifier.trim() || !adminResetCode.trim()) {
+      setAdminResetError('Enter your admin username or email and the 6-digit code.');
+      return;
+    }
+
+    if (!/^\d{6}$/.test(adminResetCode.trim())) {
+      setAdminResetError('Enter the 6-digit admin reset code.');
+      return;
+    }
+
+    setIsSubmitting(true);
+    const result = await verifyAdminResetCode({
+      identifier: adminResetIdentifier,
+      code: adminResetCode,
+    });
+    setIsSubmitting(false);
+
+    if (!result.success) {
+      setAdminResetError(result.message);
+      setIsAdminResetVerified(false);
+      return;
+    }
+
+    setAdminResetIdentifier(result.email || adminResetIdentifier.trim().toLowerCase());
+    setIsAdminResetVerified(true);
+    setAdminResetMessage('Admin verification successful. You can now create a new password.');
+  };
+
+  const handleAdminPasswordReset = async (e) => {
+    e.preventDefault();
+    setAdminResetError('');
+    setAdminResetMessage('');
+    setAdminError('');
+    setAdminMessage('');
+
+    if (!isAdminResetVerified) {
+      setAdminResetError('Verify the 6-digit admin code first.');
+      return;
+    }
+
+    if (!adminResetPassword.trim() || !adminResetConfirmPassword.trim()) {
+      setAdminResetError('Please fill in all password fields.');
+      return;
+    }
+
+    if (adminResetPassword.length < 6) {
+      setAdminResetError('Password must be at least 6 characters.');
+      return;
+    }
+
+    if (adminResetPassword !== adminResetConfirmPassword) {
+      setAdminResetError('Passwords do not match.');
+      return;
+    }
+
+    setIsSubmitting(true);
+    const result = await resetAdminPasswordWithCode({
+      identifier: adminResetIdentifier,
+      code: adminResetCode,
+      password: adminResetPassword,
+    });
+    setIsSubmitting(false);
+
+    if (!result.success) {
+      setAdminResetError(result.message);
+      return;
+    }
+
+    const resolvedEmail = result.email || adminResetIdentifier.trim().toLowerCase();
+    setAdminUser(resolvedEmail);
+    setAdminPass('');
+    resetAdminResetFlow();
+    setAdminMessage(`Password updated for ${resolvedEmail}. Sign in with the new password.`);
+    setView('admin');
   };
 
   const handleCustomerLogin = async (e) => {
@@ -347,7 +550,9 @@ const Login = () => {
     }
 
     setIsSubmitting(true);
-    const result = await loginCustomer(customerUsername, customerPassword);
+    const result = await loginCustomer(customerUsername, customerPassword, {
+      rememberMe: rememberCustomer,
+    });
     setIsSubmitting(false);
 
     if (result.success) {
@@ -512,7 +717,7 @@ const Login = () => {
     setForgotMessageType('success');
   };
 
-  const handleResetPasswordWithCode = async (e) => {
+  const handleVerifyRecoveryCode = async (e) => {
     e.preventDefault();
     setResetError('');
     setForgotMessage('');
@@ -528,42 +733,13 @@ const Login = () => {
       return;
     }
 
-    if (!resetPassword.trim() || !resetConfirmPassword.trim()) {
-      setResetError('Please fill in all fields');
-      return;
-    }
-
-    if (resetPassword.length < 6) {
-      setResetError('Password must be at least 6 characters');
-      return;
-    }
-
-    if (resetPassword !== resetConfirmPassword) {
-      setResetError('Passwords do not match');
-      return;
-    }
-
     setIsSubmitting(true);
     const verifyResult = await verifyPasswordRecoveryCode(pendingRecoveryEmail, recoveryCode);
-
-    if (!verifyResult.success) {
-      setIsSubmitting(false);
-      setResetError(verifyResult.message);
-      return;
-    }
-
-    const updateResult = await completePasswordRecovery(resetPassword);
     setIsSubmitting(false);
 
-    if (!updateResult.success) {
-      setResetError(updateResult.message);
-      return;
+    if (!verifyResult.success) {
+      setResetError(verifyResult.message);
     }
-
-    const recoveredEmail = pendingRecoveryEmail;
-    resetForgotPasswordFlow();
-    setCustomerMessage(`Password updated for ${recoveredEmail}. Please log in with your new password.`);
-    setView('customer');
   };
 
   const handleResetPassword = async (e) => {
@@ -602,12 +778,13 @@ const Login = () => {
   };
 
   if (activeView === 'admin') {
-    return (
+    return renderWithAuthLoading(
       <div style={panelStyle}>
         <h2 style={{ fontSize: '1.5rem', marginBottom: '2rem', color: '#0f172a' }}>Admin/Staff Login</h2>
 
         <form style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }} onSubmit={handleAdminLogin}>
           {adminError && <div style={{ color: '#ef4444', fontSize: '0.85rem', fontWeight: 600 }}>{adminError}</div>}
+          {adminMessage && <div style={{ color: '#15803d', fontSize: '0.85rem', fontWeight: 600 }}>{adminMessage}</div>}
 
           <div>
             <label style={fieldLabelStyle}>Username or Email</label>
@@ -615,7 +792,7 @@ const Login = () => {
               <Mail size={18} style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }} />
               <input
                 type="text"
-                placeholder="Enter username or email"
+                placeholder="Enter Username or Email"
                 className="text-input"
                 style={iconPasswordFieldStyle}
                 value={adminUser}
@@ -648,9 +825,19 @@ const Login = () => {
             </div>
           </div>
 
-          <button type="submit" className="btn-primary" style={{ ...primaryButtonStyle, marginTop: '1rem' }}>
+          <button type="submit" className="btn-primary" style={{ ...primaryButtonStyle, marginTop: '1rem' }} disabled={isSubmitting}>
             {isSubmitting ? 'Logging in...' : 'Login'}
           </button>
+
+          <div style={{ textAlign: 'center', marginTop: '0.25rem' }}>
+            <button
+              type="button"
+              onClick={openAdminPasswordHelp}
+              style={{ ...secondaryTextButtonStyle, color: '#475569', fontSize: '0.95rem' }}
+            >
+              Forgot Password?
+            </button>
+          </div>
 
           <div style={{ marginTop: '1.5rem' }}>
             <button
@@ -666,8 +853,172 @@ const Login = () => {
     );
   }
 
-  if (activeView === 'register') {
+  if (activeView === 'admin-help') {
     return (
+      <div style={panelStyle}>
+        <h2 style={{ fontSize: '1.5rem', marginBottom: '1rem', color: '#0f172a' }}>Admin Password Reset</h2>
+        
+        {!isAdminResetVerified ? (
+          <form
+            style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem', marginTop: '1.5rem' }}
+            onSubmit={handleVerifyAdminResetStep}
+          >
+            {adminResetError && <div style={{ color: '#ef4444', fontSize: '0.85rem', fontWeight: 600 }}>{adminResetError}</div>}
+            {adminResetMessage && <div style={{ color: '#15803d', fontSize: '0.85rem', fontWeight: 600 }}>{adminResetMessage}</div>}
+
+            <div>
+              <label style={fieldLabelStyle}>Admin Valid Email</label>
+              <div style={{ position: 'relative' }}>
+                <Mail size={18} style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }} />
+                <input
+                  type="text"
+                  placeholder="Enter your admin email"
+                  className="text-input"
+                  style={iconPasswordFieldStyle}
+                  value={adminResetIdentifier}
+                  onChange={(e) => setAdminResetIdentifier(e.target.value)}
+                  required
+                />
+              </div>
+            </div>
+
+            <div>
+              <label style={fieldLabelStyle}>Secure 6-Digit Admin Code</label>
+              <input
+                type="text"
+                inputMode="numeric"
+                maxLength={6}
+                placeholder="123456"
+                className="text-input"
+                style={{ ...textInputStyle, letterSpacing: '0.35em', textAlign: 'center', fontSize: '1.05rem' }}
+                value={adminResetCode}
+                onChange={(e) => setAdminResetCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                required
+              />
+            </div>
+
+            <button type="submit" className="btn-primary" style={primaryButtonStyle}>
+              {isSubmitting ? 'Verifying Code...' : 'Verify Admin Code'}
+            </button>
+          </form>
+        ) : (
+          <form
+            style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem', marginTop: '1.5rem' }}
+            onSubmit={handleAdminPasswordReset}
+          >
+            {adminResetError && <div style={{ color: '#ef4444', fontSize: '0.85rem', fontWeight: 600 }}>{adminResetError}</div>}
+            {adminResetMessage && <div style={{ color: '#15803d', fontSize: '0.85rem', fontWeight: 600 }}>{adminResetMessage}</div>}
+
+            <div>
+              <label style={fieldLabelStyle}>Verified Admin Account</label>
+              <input
+                type="text"
+                className="text-input"
+                style={textInputStyle}
+                value={adminResetIdentifier}
+                readOnly
+              />
+            </div>
+
+            <div>
+              <label style={fieldLabelStyle}>New Password</label>
+              <div style={{ position: 'relative' }}>
+                <input
+                  type={showAdminResetPassword ? 'text' : 'password'}
+                  className="text-input"
+                  placeholder="Enter new password"
+                  style={passwordFieldStyle}
+                  value={adminResetPassword}
+                  onChange={(e) => setAdminResetPassword(e.target.value)}
+                  required
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowAdminResetPassword((value) => !value)}
+                  style={passwordToggleStyle}
+                >
+                  {showAdminResetPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                </button>
+              </div>
+            </div>
+
+            <div>
+              <label style={fieldLabelStyle}>Confirm New Password</label>
+              <div style={{ position: 'relative' }}>
+                <input
+                  type={showAdminResetConfirmPassword ? 'text' : 'password'}
+                  className="text-input"
+                  placeholder="Confirm new password"
+                  style={passwordFieldStyle}
+                  value={adminResetConfirmPassword}
+                  onChange={(e) => setAdminResetConfirmPassword(e.target.value)}
+                  required
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowAdminResetConfirmPassword((value) => !value)}
+                  style={passwordToggleStyle}
+                >
+                  {showAdminResetConfirmPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                </button>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+              <button type="submit" className="btn-primary" style={{ ...primaryButtonStyle, marginTop: 0, flex: 1 }}>
+                {isSubmitting ? 'Resetting Password...' : 'Reset Password'}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsAdminResetVerified(false);
+                  setAdminResetPassword('');
+                  setAdminResetConfirmPassword('');
+                  setAdminResetError('');
+                  setAdminResetMessage('');
+                }}
+                style={{ ...secondaryTextButtonStyle, color: '#475569', fontSize: '0.95rem', padding: '0.75rem 0.25rem' }}
+              >
+                Change Code
+              </button>
+            </div>
+          </form>
+        )}
+
+        <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', marginTop: '1.5rem' }}>
+          <button
+            type="button"
+            className="btn-primary"
+            style={{ ...primaryButtonStyle, marginTop: 0, flex: 1 }}
+            onClick={() => {
+              resetAdminResetFlow();
+              setView('admin');
+            }}
+          >
+            Back to Admin Login
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              resetAdminResetFlow();
+              setView('selection');
+            }}
+            style={{
+              ...secondaryTextButtonStyle,
+              color: '#475569',
+              fontSize: '0.95rem',
+              padding: '0.75rem 1rem',
+            }}
+          >
+            Back
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (activeView === 'register') {
+    return renderWithAuthLoading(
       <>
         <div style={panelStyle}>
           <h2 style={{ fontSize: '1.5rem', marginBottom: '2rem', color: '#0f172a' }}>Create Account</h2>
@@ -931,7 +1282,7 @@ const Login = () => {
   }
 
   if (activeView === 'customer') {
-    return (
+    return renderWithAuthLoading(
       <div style={panelStyle}>
         <h2 style={{ fontSize: '1.5rem', marginBottom: '2rem', color: '#0f172a' }}>Customer Login</h2>
 
@@ -974,7 +1325,37 @@ const Login = () => {
             </div>
           </div>
 
-          <button type="submit" className="btn-primary" style={primaryButtonStyle}>
+          <div
+            className="dark:bg-black/10"
+            style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', flexWrap: 'wrap' }}
+          >
+            <label
+              className="dark:text-white"
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.75rem',
+                color: '#475569',
+                fontSize: '0.95rem',
+                fontWeight: 600,
+                cursor: 'pointer',
+              }}
+            >
+              <input
+                className="h-5 w-5 rounded border-orange-200 accent-orange-500 transition-all duration-500 ease-in-out hover:scale-110 dark:border-white/20 dark:scale-100 dark:hover:scale-110 dark:checked:scale-100"
+                type="checkbox"
+                checked={rememberCustomer}
+                onChange={(e) => setRememberCustomer(e.target.checked)}
+                disabled={isSubmitting}
+              />
+              <span>Remember me</span>
+            </label>
+            <span style={{ color: '#94a3b8', fontSize: '0.8rem' }}>
+              Stay signed in on this device
+            </span>
+          </div>
+
+          <button type="submit" className="btn-primary" style={primaryButtonStyle} disabled={isSubmitting}>
             {isSubmitting ? 'Logging in...' : 'Login'}
           </button>
 
@@ -1018,16 +1399,15 @@ const Login = () => {
   if (activeView === 'forgot') {
     return (
       <div style={panelStyle}>
-        <h2 style={{ fontSize: '1.5rem', marginBottom: '1.5rem', color: '#0f172a' }}>Forgot Password</h2>
-        <p style={{ color: '#64748b', marginBottom: '2rem', fontSize: '0.95rem' }}>
-          {isRecoveryCodeMode
-            ? 'Enter your username or email, send the 6-digit code to Gmail, then enter the code below and choose your new password.'
-            : 'Enter your username or email and we will send a password reset email. Open the reset link in that email, then return here to set your new password.'}
-        </p>
+        <h2 style={{ fontSize: '1.5rem', marginBottom: '1.5rem', color: '#0f172a' }}>Forgot Password?</h2>
 
         <form
           style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}
-          onSubmit={isRecoveryCodeMode ? handleResetPasswordWithCode : handleForgotPassword}
+          onSubmit={
+            isRecoveryCodeMode
+              ? (forgotStep === 'verify' ? handleVerifyRecoveryCode : handleForgotPassword)
+              : handleForgotPassword
+          }
         >
           {forgotMessage && (
             <div style={{ color: forgotMessageType === 'success' ? '#15803d' : '#b91c1c', fontSize: '0.85rem', fontWeight: 600 }}>
@@ -1041,10 +1421,10 @@ const Login = () => {
           )}
 
           <div>
-            <label style={fieldLabelStyle}>Username or Email</label>
+            <label style={fieldLabelStyle}>Use valid Email</label>
             <input
               type="text"
-              placeholder="Enter your username or email"
+              placeholder="Enter your valid email"
               className="text-input"
               style={textInputStyle}
               value={forgotIdentifier}
@@ -1053,7 +1433,7 @@ const Login = () => {
             />
           </div>
 
-          {isRecoveryCodeMode && (
+          {isRecoveryCodeMode && forgotStep === 'verify' && (
             <div>
               <label style={fieldLabelStyle}>6-Digit Verification Code</label>
               <input
@@ -1065,53 +1445,8 @@ const Login = () => {
                 style={{ ...textInputStyle, letterSpacing: '0.35em', textAlign: 'center', fontSize: '1.05rem' }}
                 value={recoveryCode}
                 onChange={(e) => setRecoveryCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                required
               />
-            </div>
-          )}
-
-          {isRecoveryCodeMode && (
-            <div>
-              <label style={fieldLabelStyle}>New Password</label>
-              <div style={{ position: 'relative' }}>
-                <input
-                  type={showResetPassword ? 'text' : 'password'}
-                  className="text-input"
-                  placeholder="Enter new password"
-                  style={passwordFieldStyle}
-                  value={resetPassword}
-                  onChange={(e) => setResetPassword(e.target.value)}
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowResetPassword((value) => !value)}
-                  style={passwordToggleStyle}
-                >
-                  {showResetPassword ? <EyeOff size={18} /> : <Eye size={18} />}
-                </button>
-              </div>
-            </div>
-          )}
-
-          {isRecoveryCodeMode && (
-            <div>
-              <label style={fieldLabelStyle}>Confirm New Password</label>
-              <div style={{ position: 'relative' }}>
-                <input
-                  type={showResetConfirmPassword ? 'text' : 'password'}
-                  className="text-input"
-                  placeholder="Confirm new password"
-                  style={passwordFieldStyle}
-                  value={resetConfirmPassword}
-                  onChange={(e) => setResetConfirmPassword(e.target.value)}
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowResetConfirmPassword((value) => !value)}
-                  style={passwordToggleStyle}
-                >
-                  {showResetConfirmPassword ? <EyeOff size={18} /> : <Eye size={18} />}
-                </button>
-              </div>
             </div>
           )}
 
@@ -1119,9 +1454,9 @@ const Login = () => {
             {isSubmitting ? 'Working...' : (isRecoveryCodeMode ? 'Send Reset Code' : 'Send Reset Email')}
           </button>
 
-          {isRecoveryCodeMode && (
+          {isRecoveryCodeMode && forgotStep === 'verify' && (
             <button type="submit" className="btn-primary" style={primaryButtonStyle}>
-              {isSubmitting ? 'Working...' : 'Verify Code and Reset Password'}
+              {isSubmitting ? 'Verifying...' : 'Verify Reset Code'}
             </button>
           )}
 

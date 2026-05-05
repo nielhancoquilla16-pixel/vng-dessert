@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { useContent } from '../context/ContentContext';
 import { Save, RefreshCw, PenTool, PlayCircle } from 'lucide-react';
+import LoadingButton from '../components/LoadingButton';
 import MediaEmbed from '../components/MediaEmbed';
 
 const AdminContent = () => {
@@ -99,10 +100,11 @@ const AdminContent = () => {
                 ? `Last synced: ${new Date(lastSyncedAt).toLocaleString()}`
                 : (isLoadingFromDB ? 'Syncing from cloud...' : 'Cloud sync ready.'))}
           </span>
-          <button
+          <LoadingButton
             type="button"
             onClick={handleSyncRefresh}
-            disabled={isRefreshing || isLoadingFromDB}
+            disabled={isLoadingFromDB}
+            isLoading={isRefreshing}
             style={{
               background: '#0f172a',
               color: 'white',
@@ -114,8 +116,8 @@ const AdminContent = () => {
               fontSize: '0.85rem',
             }}
           >
-            {isRefreshing ? 'Refreshing...' : 'Refresh Content'}
-          </button>
+            Refresh Content
+          </LoadingButton>
         </div>
       </div>
 
@@ -190,13 +192,14 @@ const AdminContent = () => {
                 </div>
                 
                 <div style={{ display: 'flex', gap: '1rem', marginTop: '0.5rem' }}>
-                  <button 
+                  <LoadingButton
+                    type="button"
                     onClick={() => handleSave(video?.id)}
-                    disabled={savingId === video?.id}
+                    isLoading={savingId === video?.id}
                     style={{ flex: 1, background: '#10b981', color: 'white', border: 'none', padding: '0.75rem', borderRadius: '0.5rem', fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', cursor: 'pointer' }}
                   >
-                    <Save size={18} /> {savingId === video?.id ? 'Saving...' : 'Save Changes'}
-                  </button>
+                    <Save size={18} /> Save Changes
+                  </LoadingButton>
                   <button 
                     onClick={() => setEditingId(null)}
                     disabled={savingId === video?.id}
@@ -211,13 +214,14 @@ const AdminContent = () => {
                 <h4 style={{ fontSize: '1.25rem', marginBottom: '0.5rem', color: '#1e293b' }}>{video?.title || `Section ${video?.id}`}</h4>
                 <p style={{ color: '#64748b', fontSize: '0.95rem', lineHeight: 1.5, marginBottom: '1.5rem' }}>{video?.text || 'No description provided yet.'}</p>
                 
-                <button 
+                <LoadingButton
+                  type="button"
                   onClick={() => handleReset(video?.id)}
-                  disabled={savingId === video?.id}
+                  isLoading={savingId === video?.id}
                   style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'none', border: 'none', color: '#f97316', fontSize: '0.85rem', cursor: 'pointer', padding: 0 }}
                 >
-                  <RefreshCw size={14} /> {savingId === video?.id ? 'Saving...' : 'Restore Default Video'}
-                </button>
+                  <RefreshCw size={14} /> Restore Default Video
+                </LoadingButton>
               </div>
             )}
 

@@ -2,7 +2,8 @@
 import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
 import { apiRequest, ApiError, isBackendIssueError } from '../lib/api';
 import { TERMS_VERSION } from '../content/termsAndConditions';
-import { supabase, isSupabaseConfigured, clearSupabaseSessionStorage } from '../lib/supabase';
+import {supabase, isSupabaseConfigured, clearSupabaseSessionStorage, setRememberMePreference,
+} from '../lib/supabase';
 import { appUrl } from '../lib/appUrl';
 
 const AuthContext = createContext();
@@ -55,14 +56,6 @@ const normalizeProfile = (profile, authUser = null) => ({
   termsVersion: profile?.termsVersion || profile?.terms_version || authUser?.user_metadata?.terms_version || '',
   createdAt: profile?.createdAt || profile?.created_at || authUser?.created_at || '',
 });
-
-const isMissingRegisterCheckRouteError = (error) => (
-  error instanceof ApiError
-  && error.status === 404
-  && /Cannot POST \/api\/auth\/register\/check/i.test(
-    `${error.message || ''} ${typeof error.details === 'string' ? error.details : ''}`
-  )
-);
 
 export const useAuth = () => {
   const context = useContext(AuthContext);
@@ -262,22 +255,27 @@ export const AuthProvider = ({ children }) => {
     };
   }, [fetchStaffAccounts, refreshProfile]);
 
-  const resolveLoginEmail = useCallback(async (identifier) => {
+  const resolveLoginEmail = useCallback(async (identifier, allowedRoles = []) => {
     const response = await apiRequest('/api/auth/resolve-login', {
       method: 'POST',
-      body: JSON.stringify({ identifier }),
+      body: JSON.stringify({
+        identifier,
+        ...(allowedRoles.length ? { allowed_roles: allowedRoles } : {}),
+      }),
     });
 
     return response.email;
   }, []);
 
-  const signInWithRole = useCallback(async (identifier, password, allowedRoles) => {
+  const signInWithRole = useCallback(async (identifier, password, allowedRoles, options = {}) => {
     if (!isSupabaseConfigured || !supabase) {
       return { success: false, message: 'Supabase is not configured yet. Add your frontend env keys first.' };
     }
 
     try {
-      const email = await resolveLoginEmail(identifier);
+      const rememberMe = options.rememberMe ?? true;
+      const email = await resolveLoginEmail(identifier, allowedRoles);
+      setRememberMePreference(rememberMe);
       const { data, error } = await supabase.auth.signInWithPassword({
         email,
         password,
@@ -316,11 +314,11 @@ export const AuthProvider = ({ children }) => {
   }, [fetchStaffAccounts, refreshProfile, resolveLoginEmail]);
 
   const loginAdmin = useCallback((identifier, password) => (
-    signInWithRole(identifier, password, ['admin', 'staff'])
+    signInWithRole(identifier, password, ['admin', 'staff'], { rememberMe: true })
   ), [signInWithRole]);
 
-  const loginCustomer = useCallback((identifier, password) => (
-    signInWithRole(identifier, password, ['customer'])
+  const loginCustomer = useCallback((identifier, password, options = {}) => (
+    signInWithRole(identifier, password, ['customer'], options)
   ), [signInWithRole]);
 
   const registerCustomer = useCallback(async ({
@@ -351,95 +349,52 @@ export const AuthProvider = ({ children }) => {
         : parsedAcceptedTermsAt.toISOString();
       const normalizedTermsVersion = String(termsVersion || TERMS_VERSION).trim() || TERMS_VERSION;
 
-      try {
-        await apiRequest('/api/auth/register/check', {
-          method: 'POST',
-          body: JSON.stringify({
-            username: normalizedUsername,
-            email: normalizedEmail,
-          }),
-        });
-      } catch (error) {
-        if (!isMissingRegisterCheckRouteError(error)) {
-          throw error;
-        }
-
-        await apiRequest('/api/auth/register', {
-          method: 'POST',
-          body: JSON.stringify({
-            username: normalizedUsername,
-            email: normalizedEmail,
-            password,
-            full_name: fullName,
-            address,
-            phone_number: phoneNumber,
-            terms_accepted: true,
-            terms_accepted_at: normalizedAcceptedTermsAt,
-            terms_version: normalizedTermsVersion,
-          }),
-        });
-
-        const { data, error: signInError } = await supabase.auth.signInWithPassword({
+      await apiRequest('/api/auth/register', {
+        method: 'POST',
+        body: JSON.stringify({
+          username: normalizedUsername,
           email: normalizedEmail,
           password,
-        });
+          full_name: fullName,
+          address,
+          phone_number: phoneNumber,
+          terms_accepted: true,
+          terms_accepted_at: normalizedAcceptedTermsAt,
+          terms_version: normalizedTermsVersion,
+        }),
+      });
 
-        if (signInError) {
-          return {
-            success: true,
-            email: normalizedEmail,
-            username: normalizedUsername,
-            needsVerification: false,
-            autoLoggedIn: false,
-            message: 'Account created successfully. Please log in with your new account.',
-          };
-        }
+      const { data, error: signInError } = await supabase.auth.signInWithPassword({
+        email: normalizedEmail,
+        password,
+      });
 
-        if (data.session) {
-          setSession(data.session);
-          try {
-            await refreshProfile(data.session);
-          } catch (profileError) {
-            console.warn('Created account, but profile sync will finish after sign-in settles:', profileError);
-          }
-        }
-
+      if (signInError) {
         return {
           success: true,
           email: normalizedEmail,
           username: normalizedUsername,
           needsVerification: false,
-          autoLoggedIn: true,
+          autoLoggedIn: false,
+          message: 'Account created successfully. Please log in with your new account.',
         };
       }
 
-      const { data, error } = await supabase.auth.signUp({
-        email: normalizedEmail,
-        password,
-        options: {
-          emailRedirectTo: appUrl('login'),
-          data: {
-            username: normalizedUsername,
-            full_name: fullName,
-            address,
-            phone_number: phoneNumber,
-            terms_accepted: true,
-            terms_accepted_at: normalizedAcceptedTermsAt,
-            terms_version: normalizedTermsVersion,
-          },
-        },
-      });
-
-      if (error) {
-        throw error;
+      if (data.session) {
+        setSession(data.session);
+        try {
+          await refreshProfile(data.session);
+        } catch (profileError) {
+          console.warn('Created account, but profile sync will finish after sign-in settles:', profileError);
+        }
       }
 
       return {
         success: true,
         email: normalizedEmail,
         username: normalizedUsername,
-        needsVerification: !data.session,
-        autoLoggedIn: Boolean(data.session),
+        needsVerification: false,
+        autoLoggedIn: true,
       };
     } catch (error) {
       return {
@@ -458,7 +413,7 @@ export const AuthProvider = ({ children }) => {
       const { data, error } = await supabase.auth.verifyOtp({
         email: String(email || '').trim().toLowerCase(),
         token: String(token || '').trim(),
-        type: 'email',
+        type: 'signup',
       });
 
       if (error) {
@@ -511,7 +466,7 @@ export const AuthProvider = ({ children }) => {
     }
 
     try {
-      const email = await resolveLoginEmail(identifier);
+      const email = await resolveLoginEmail(identifier, ['customer']);
       const { error } = await supabase.auth.resetPasswordForEmail(email, {
         redirectTo: appUrl('login'),
       });
@@ -528,6 +483,51 @@ export const AuthProvider = ({ children }) => {
       };
     }
   }, [resolveLoginEmail]);
+
+  const verifyAdminResetCode = useCallback(async ({ identifier, code }) => {
+    try {
+      const result = await apiRequest('/api/auth/admin/verify-reset-code', {
+        method: 'POST',
+        body: JSON.stringify({
+          identifier,
+          code,
+        }),
+      });
+
+      return {
+        success: true,
+        email: result.email,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        message: error instanceof ApiError ? error.message : (error.message || 'Unable to verify the admin reset code right now.'),
+      };
+    }
+  }, []);
+
+  const resetAdminPasswordWithCode = useCallback(async ({ identifier, code, password }) => {
+    try {
+      const result = await apiRequest('/api/auth/admin/reset-password', {
+        method: 'POST',
+        body: JSON.stringify({
+          identifier,
+          code,
+          password,
+        }),
+      });
+
+      return {
+        success: true,
+        email: result.email,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        message: error instanceof ApiError ? error.message : (error.message || 'Unable to reset the admin password right now.'),
+      };
+    }
+  }, []);
 
   const verifyPasswordRecoveryCode = useCallback(async (email, token) => {
     if (!isSupabaseConfigured || !supabase) {
@@ -677,6 +677,23 @@ export const AuthProvider = ({ children }) => {
     return normalizeProfile(updatedStaff);
   }, [fetchStaffAccounts, session]);
 
+  const resetStaffPassword = useCallback(async (id, password) => {
+    if (!session?.access_token) {
+      throw new ApiError('You need to sign in first.', 401);
+    }
+
+    const result = await apiRequest(`/api/profiles/staff/${id}/reset-password`, {
+      method: 'POST',
+      body: JSON.stringify({ password }),
+    }, {
+      auth: true,
+      accessToken: session.access_token,
+    });
+
+    await fetchStaffAccounts(session);
+    return result;
+  }, [fetchStaffAccounts, session]);
+
   const logout = useCallback(async () => {
     if (supabase) {
       await supabase.auth.signOut();
@@ -719,6 +736,8 @@ export const AuthProvider = ({ children }) => {
         verifyCustomerSignupCode,
         resendCustomerSignupCode,
         requestPasswordReset,
+        verifyAdminResetCode,
+        resetAdminPasswordWithCode,
         verifyPasswordRecoveryCode,
         completePasswordRecovery,
         updateMyProfile,
@@ -726,6 +745,7 @@ export const AuthProvider = ({ children }) => {
         logout,
         createStaffAccount,
         updateStaffAccount,
+        resetStaffPassword,
         deleteStaffAccount,
         refreshProfile,
         isPasswordRecovery,

@@ -1,9 +1,17 @@
 import express from 'express';
+import { timingSafeEqual } from 'node:crypto';
 import { getSupabaseAdmin } from '../lib/supabaseAdmin.js';
 
 const router = express.Router();
 
 const normalizeIdentifier = (value = '') => value.trim().toLowerCase();
+const normalizeRole = (value = '') => String(value || '').trim().toLowerCase();
+const normalizeRoleList = (value) => (
+  Array.isArray(value)
+    ? value.map((role) => normalizeRole(role)).filter(Boolean)
+    : []
+);
+const normalizeAdminResetCode = (value = '') => String(value || '').replace(/\D/g, '').slice(0, 6);
 const normalizeOptionalText = (value = '') => {
   const trimmed = String(value || '').trim();
   return trimmed || null;
@@ -46,6 +54,71 @@ const findAuthUserByUsername = (users, username) => (
 const findAuthUserByEmail = (users, email) => (
   users.find((user) => normalizeIdentifier(user.email) === email)
 );
+
+const getConfiguredAdminResetCode = () => normalizeAdminResetCode(process.env.ADMIN_RESET_CODE);
+
+const hasConfiguredAdminResetCode = () => /^\d{6}$/.test(getConfiguredAdminResetCode());
+
+const matchesAdminResetCode = (candidateCode = '') => {
+  const normalizedCandidateCode = normalizeAdminResetCode(candidateCode);
+  const configuredCode = getConfiguredAdminResetCode();
+
+  if (!/^\d{6}$/.test(normalizedCandidateCode) || !/^\d{6}$/.test(configuredCode)) {
+    return false;
+  }
+
+  const candidateBuffer = Buffer.from(normalizedCandidateCode, 'utf8');
+  const configuredBuffer = Buffer.from(configuredCode, 'utf8');
+
+  return candidateBuffer.length === configuredBuffer.length
+    && timingSafeEqual(candidateBuffer, configuredBuffer);
+};
+
+const resolveAccountForLogin = async (supabase, identifier) => {
+  const profileColumn = identifier.includes('@') ? 'email' : 'username';
+  const { data: profile, error: profileError } = await supabase
+    .from('profiles')
+    .select('id, email, role')
+    .ilike(profileColumn, identifier)
+    .maybeSingle();
+
+  if (profileError) {
+    throw profileError;
+  }
+
+  if (profile?.email) {
+    return {
+      id: profile.id,
+      email: normalizeIdentifier(profile.email),
+      role: normalizeRole(profile.role),
+    };
+  }
+
+  const authUsers = await listAuthUsers(supabase);
+  const authUser = identifier.includes('@')
+    ? findAuthUserByEmail(authUsers, identifier)
+    : findAuthUserByUsername(authUsers, identifier);
+
+  if (!authUser?.email) {
+    return null;
+  }
+
+  const { data: profileById, error: profileByIdError } = await supabase
+    .from('profiles')
+    .select('role')
+    .eq('id', authUser.id)
+    .maybeSingle();
+
+  if (profileByIdError) {
+    throw profileByIdError;
+  }
+
+  return {
+    id: authUser.id,
+    email: normalizeIdentifier(authUser.email),
+    role: normalizeRole(profileById?.role || authUser.user_metadata?.role),
+  };
+};
 
 const getRegistrationConflicts = async (supabase, normalizedEmail, normalizedUsername) => {
   const [
@@ -96,41 +169,60 @@ const buildRegistrationConflictMessage = (conflicts) => {
   return 'That username or email is already in use.';
 };
 
+const validateAdminResetAttempt = async (supabase, identifier, code) => {
+  if (!identifier || !code) {
+    return { status: 400, error: 'identifier and code are required.' };
+  }
+
+  if (!/^\d{6}$/.test(code)) {
+    return { status: 400, error: 'Enter the 6-digit admin reset code.' };
+  }
+
+  if (!hasConfiguredAdminResetCode()) {
+    return {
+      status: 503,
+      error: 'Admin reset code is not configured. Add ADMIN_RESET_CODE to dessert-ai-system/server/.env and restart the backend.',
+    };
+  }
+
+  const resolvedAccount = await resolveAccountForLogin(supabase, identifier);
+
+  if (!resolvedAccount?.id || !resolvedAccount?.email) {
+    return { status: 404, error: 'Admin account not found.' };
+  }
+
+  if (resolvedAccount.role !== 'admin') {
+    return { status: 403, error: 'Only admin accounts can use this reset form.' };
+  }
+
+  if (!matchesAdminResetCode(code)) {
+    return { status: 403, error: 'The admin reset code is invalid.' };
+  }
+
+  return { account: resolvedAccount };
+};
+
 router.post('/resolve-login', async (req, res, next) => {
   try {
     const identifier = normalizeIdentifier(req.body?.identifier);
+    const allowedRoles = normalizeRoleList(req.body?.allowed_roles);
 
     if (!identifier) {
       return res.status(400).json({ error: 'identifier is required.' });
     }
 
-    if (identifier.includes('@')) {
-      return res.json({ email: identifier });
-    }
-
     const supabase = getSupabaseAdmin();
-    const { data, error } = await supabase
-      .from('profiles')
-      .select('email')
-      .ilike('username', identifier)
-      .maybeSingle();
+    const resolvedAccount = await resolveAccountForLogin(supabase, identifier);
 
-    if (error) {
-      throw error;
-    }
-
-    if (data?.email) {
-      return res.json({ email: data.email });
-    }
-
-    const authUsers = await listAuthUsers(supabase);
-    const authUser = findAuthUserByUsername(authUsers, identifier);
-
-    if (!authUser?.email) {
+    if (!resolvedAccount?.email) {
       return res.status(404).json({ error: 'Account not found.' });
     }
 
-    res.json({ email: normalizeIdentifier(authUser.email) });
+    if (allowedRoles.length > 0 && !allowedRoles.includes(resolvedAccount.role)) {
+      return res.status(403).json({ error: 'This account does not have permission for that action.' });
+    }
+
+    res.json({ email: resolvedAccount.email });
   } catch (error) {
     next(error);
   }
@@ -156,6 +248,68 @@ router.post('/register/check', async (req, res, next) => {
     }
 
     res.json({ available: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/admin/verify-reset-code', async (req, res, next) => {
+  try {
+    const identifier = normalizeIdentifier(req.body?.identifier);
+    const code = normalizeAdminResetCode(req.body?.code);
+    const supabase = getSupabaseAdmin();
+    const validation = await validateAdminResetAttempt(supabase, identifier, code);
+
+    if (validation.error) {
+      return res.status(validation.status).json({ error: validation.error });
+    }
+
+    res.json({
+      success: true,
+      email: validation.account.email,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/admin/reset-password', async (req, res, next) => {
+  try {
+    const identifier = normalizeIdentifier(req.body?.identifier);
+    const code = normalizeAdminResetCode(req.body?.code);
+    const password = String(req.body?.password ?? '');
+
+    if (!identifier || !code || !password) {
+      return res.status(400).json({ error: 'identifier, code, and password are required.' });
+    }
+
+    if (!/^\d{6}$/.test(code)) {
+      return res.status(400).json({ error: 'Enter the 6-digit admin reset code.' });
+    }
+
+    if (password.length < 6) {
+      return res.status(400).json({ error: 'Password must be at least 6 characters.' });
+    }
+
+    const supabase = getSupabaseAdmin();
+    const validation = await validateAdminResetAttempt(supabase, identifier, code);
+
+    if (validation.error) {
+      return res.status(validation.status).json({ error: validation.error });
+    }
+
+    const { error: updateError } = await supabase.auth.admin.updateUserById(validation.account.id, {
+      password,
+    });
+
+    if (updateError) {
+      throw updateError;
+    }
+
+    res.json({
+      success: true,
+      email: validation.account.email,
+    });
   } catch (error) {
     next(error);
   }

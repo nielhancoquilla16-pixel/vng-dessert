@@ -1,25 +1,139 @@
 import express from 'express';
 import { getSupabaseAdmin } from '../lib/supabaseAdmin.js';
+import {
+  mapInventoryItem,
+  sanitizeInventoryPayload,
+  sortInventoryItems,
+} from '../lib/inventoryUtils.js';
 import { requireAuth } from '../middleware/requireAuth.js';
 import { requireRole } from '../middleware/requireRole.js';
 
 const router = express.Router();
 
-const getInventoryStatus = (stockQuantity) => {
-  if (stockQuantity <= 0) return 'out of stock';
-  if (stockQuantity <= 10) return 'low stock';
-  return 'in stock';
+const normalizeText = (value = '') => String(value ?? '').trim();
+
+const normalizeNameKey = (value = '') => normalizeText(value).toLowerCase();
+
+const isIngredientBatchId = (value = '') => {
+  const normalizedValue = normalizeText(value).toUpperCase();
+  return normalizedValue.startsWith('ING-');
 };
 
-const mapInventoryItem = (row) => ({
-  id: row.id,
-  ingredientName: row.ingredient_name,
-  stockQuantity: row.stock_quantity,
-  unit: row.unit,
-  status: row.status,
-  createdAt: row.created_at,
-  updatedAt: row.updated_at,
-});
+const getAvailabilityForStock = (stockQuantity, explicitAvailability) => {
+  if (explicitAvailability === 'hidden') {
+    return 'hidden';
+  }
+
+  return stockQuantity <= 0 ? 'out of stock' : (explicitAvailability || 'available');
+};
+
+const findLinkedProduct = async (supabase, { productId, productName, batchId } = {}) => {
+  if (productId) {
+    const { data, error } = await supabase
+      .from('products')
+      .select('id, product_name, availability, image_url, category')
+      .eq('id', productId)
+      .maybeSingle();
+
+    if (error) {
+      throw error;
+    }
+
+    if (data) {
+      return data;
+    }
+  }
+
+  const normalizedName = normalizeNameKey(productName);
+  if (!normalizedName || isIngredientBatchId(batchId)) {
+    return null;
+  }
+
+  const { data, error } = await supabase
+    .from('products')
+    .select('id, product_name, availability, image_url, category')
+    .ilike('product_name', normalizeText(productName));
+
+  if (error) {
+    throw error;
+  }
+
+  return (data || []).find((product) => normalizeNameKey(product.product_name) === normalizedName) || null;
+};
+
+const getInventoryTotalForProduct = async (supabase, product) => {
+  const { data: linkedInventory, error: linkedInventoryError } = await supabase
+    .from('inventory')
+    .select('stock_quantity')
+    .eq('product_id', product.id);
+
+  if (linkedInventoryError) {
+    throw linkedInventoryError;
+  }
+
+  const linkedTotal = (linkedInventory || [])
+    .reduce((sum, item) => sum + Math.max(0, Number(item.stock_quantity) || 0), 0);
+
+  const normalizedProductName = normalizeNameKey(product.product_name);
+  if (!normalizedProductName) {
+    return linkedTotal;
+  }
+
+  const { data: unlinkedInventory, error: unlinkedInventoryError } = await supabase
+    .from('inventory')
+    .select('stock_quantity, product_id, product_name')
+    .ilike('product_name', product.product_name);
+
+  if (unlinkedInventoryError) {
+    throw unlinkedInventoryError;
+  }
+
+  const unlinkedTotal = (unlinkedInventory || [])
+    .filter((item) => !item.product_id && normalizeNameKey(item.product_name) === normalizedProductName)
+    .reduce((sum, item) => sum + Math.max(0, Number(item.stock_quantity) || 0), 0);
+
+  return linkedTotal + unlinkedTotal;
+};
+
+const syncLinkedProductStock = async (supabase, productRef) => {
+  const linkedProduct = productRef?.id && productRef?.product_name
+    ? productRef
+    : await findLinkedProduct(supabase, productRef);
+  if (!linkedProduct?.id) {
+    return null;
+  }
+
+  const nextStockQuantity = await getInventoryTotalForProduct(supabase, linkedProduct);
+  const { data, error } = await supabase
+    .from('products')
+    .update({
+      stock_quantity: nextStockQuantity,
+      availability: getAvailabilityForStock(nextStockQuantity, linkedProduct.availability),
+    })
+    .eq('id', linkedProduct.id)
+    .select('id')
+    .maybeSingle();
+
+  if (error) {
+    throw error;
+  }
+
+  return data;
+};
+
+const syncAffectedProducts = async (supabase, productRefs = []) => {
+  const syncedProductIds = new Set();
+
+  for (const productRef of productRefs) {
+    const linkedProduct = await findLinkedProduct(supabase, productRef);
+    if (!linkedProduct?.id || syncedProductIds.has(linkedProduct.id)) {
+      continue;
+    }
+
+    syncedProductIds.add(linkedProduct.id);
+    await syncLinkedProductStock(supabase, linkedProduct);
+  }
+};
 
 router.get('/', requireAuth, requireRole('admin', 'staff'), async (req, res, next) => {
   try {
@@ -33,7 +147,8 @@ router.get('/', requireAuth, requireRole('admin', 'staff'), async (req, res, nex
       throw error;
     }
 
-    res.json((data || []).map(mapInventoryItem));
+    const mappedItems = (data || []).map((row) => mapInventoryItem(row));
+    res.json(sortInventoryItems(mappedItems));
   } catch (error) {
     next(error);
   }
@@ -41,30 +156,33 @@ router.get('/', requireAuth, requireRole('admin', 'staff'), async (req, res, nex
 
 router.post('/', requireAuth, requireRole('admin', 'staff'), async (req, res, next) => {
   try {
-    const {
-      ingredient_name,
-      ingredientName,
-      stock_quantity,
-      stockQuantity,
-      unit,
-      status,
-    } = req.body;
+    const payload = sanitizeInventoryPayload(req.body);
 
-    const resolvedIngredientName = ingredient_name || ingredientName;
-    const resolvedStockQuantity = Math.max(0, Number(stock_quantity ?? stockQuantity) || 0);
-
-    if (!resolvedIngredientName || !unit) {
-      return res.status(400).json({ error: 'ingredient_name and unit are required.' });
+    if (!payload.productName || !payload.batchId) {
+      return res.status(400).json({ error: 'product_name and batch_id are required.' });
     }
 
     const supabase = getSupabaseAdmin();
+    const linkedProduct = await findLinkedProduct(supabase, {
+      productId: payload.productId,
+      productName: payload.productName,
+      batchId: payload.batchId,
+    });
+    const resolvedProductName = linkedProduct?.product_name || payload.productName;
     const { data, error } = await supabase
       .from('inventory')
       .insert({
-        ingredient_name: resolvedIngredientName,
-        stock_quantity: resolvedStockQuantity,
-        unit,
-        status: status || getInventoryStatus(resolvedStockQuantity),
+        ingredient_name: resolvedProductName,
+        product_name: resolvedProductName,
+        batch_id: payload.batchId,
+        stock_quantity: payload.quantity,
+        unit: payload.unit,
+        date_created: payload.dateCreated || null,
+        expiration_date: payload.expirationDate || null,
+        product_id: linkedProduct?.id || payload.productId || null,
+        status: payload.status,
+        image_url: linkedProduct?.image_url || null,
+        category: linkedProduct?.category || null,
       })
       .select('*')
       .single();
@@ -72,6 +190,12 @@ router.post('/', requireAuth, requireRole('admin', 'staff'), async (req, res, ne
     if (error) {
       throw error;
     }
+
+    await syncAffectedProducts(supabase, [{
+      productId: linkedProduct?.id || payload.productId || null,
+      productName: resolvedProductName,
+      batchId: payload.batchId,
+    }]);
 
     res.status(201).json(mapInventoryItem(data));
   } catch (error) {
@@ -81,28 +205,48 @@ router.post('/', requireAuth, requireRole('admin', 'staff'), async (req, res, ne
 
 router.patch('/:id', requireAuth, requireRole('admin', 'staff'), async (req, res, next) => {
   try {
-    const updates = {};
-    const fieldAliases = {
-      ingredientName: 'ingredient_name',
-      stockQuantity: 'stock_quantity',
-    };
-    const allowedFields = ['ingredient_name', 'stock_quantity', 'unit', 'status'];
+    const supabase = getSupabaseAdmin();
+    const { data: existingItem, error: existingError } = await supabase
+      .from('inventory')
+      .select('*')
+      .eq('id', req.params.id)
+      .maybeSingle();
 
-    Object.entries(req.body || {}).forEach(([rawField, value]) => {
-      const field = fieldAliases[rawField] || rawField;
-      if (allowedFields.includes(field)) {
-        updates[field] = field === 'stock_quantity' ? Math.max(0, Number(value) || 0) : value;
-      }
-    });
-
-    if ('stock_quantity' in updates && !('status' in updates)) {
-      updates.status = getInventoryStatus(updates.stock_quantity);
+    if (existingError) {
+      throw existingError;
     }
 
-    const supabase = getSupabaseAdmin();
+    if (!existingItem) {
+      return res.status(404).json({ error: 'Inventory item not found.' });
+    }
+
+    const payload = sanitizeInventoryPayload(req.body, existingItem);
+
+    if (!payload.productName || !payload.batchId) {
+      return res.status(400).json({ error: 'product_name and batch_id are required.' });
+    }
+
+    const linkedProduct = await findLinkedProduct(supabase, {
+      productId: payload.productId,
+      productName: payload.productName,
+      batchId: payload.batchId,
+    });
+    const resolvedProductName = linkedProduct?.product_name || payload.productName;
     const { data, error } = await supabase
       .from('inventory')
-      .update(updates)
+      .update({
+        ingredient_name: resolvedProductName,
+        product_name: resolvedProductName,
+        batch_id: payload.batchId,
+        stock_quantity: payload.quantity,
+        unit: payload.unit,
+        date_created: payload.dateCreated || null,
+        expiration_date: payload.expirationDate || null,
+        product_id: linkedProduct?.id || payload.productId || null,
+        status: payload.status,
+        image_url: linkedProduct?.image_url ?? existingItem.image_url ?? null,
+        category: linkedProduct?.category ?? existingItem.category ?? null,
+      })
       .eq('id', req.params.id)
       .select('*')
       .maybeSingle();
@@ -111,9 +255,18 @@ router.patch('/:id', requireAuth, requireRole('admin', 'staff'), async (req, res
       throw error;
     }
 
-    if (!data) {
-      return res.status(404).json({ error: 'Inventory item not found.' });
-    }
+    await syncAffectedProducts(supabase, [
+      {
+        productId: existingItem.product_id,
+        productName: existingItem.product_name,
+        batchId: existingItem.batch_id,
+      },
+      {
+        productId: linkedProduct?.id || payload.productId || null,
+        productName: resolvedProductName,
+        batchId: payload.batchId,
+      },
+    ]);
 
     res.json(mapInventoryItem(data));
   } catch (error) {
@@ -124,6 +277,20 @@ router.patch('/:id', requireAuth, requireRole('admin', 'staff'), async (req, res
 router.delete('/:id', requireAuth, requireRole('admin', 'staff'), async (req, res, next) => {
   try {
     const supabase = getSupabaseAdmin();
+    const { data: existingItem, error: existingError } = await supabase
+      .from('inventory')
+      .select('id, product_id, product_name, batch_id')
+      .eq('id', req.params.id)
+      .maybeSingle();
+
+    if (existingError) {
+      throw existingError;
+    }
+
+    if (!existingItem) {
+      return res.status(404).json({ error: 'Inventory item not found.' });
+    }
+
     const { error } = await supabase
       .from('inventory')
       .delete()
@@ -132,6 +299,12 @@ router.delete('/:id', requireAuth, requireRole('admin', 'staff'), async (req, re
     if (error) {
       throw error;
     }
+
+    await syncAffectedProducts(supabase, [{
+      productId: existingItem.product_id,
+      productName: existingItem.product_name,
+      batchId: existingItem.batch_id,
+    }]);
 
     res.status(204).send();
   } catch (error) {

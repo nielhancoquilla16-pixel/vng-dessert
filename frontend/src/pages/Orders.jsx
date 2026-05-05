@@ -33,6 +33,7 @@ import {
   getPaymentStatusLabel,
   getReviewStatusLabel,
   isHistoryOrderStatus,
+  isWalkInOrder,
   normalizeReviewStatus,
   hasCustomerConfirmationPending,
 } from '../utils/orderWorkflow';
@@ -135,7 +136,9 @@ const OrderVerificationPanel = ({ order }) => {
               ? 'This QR code has already been used and cannot be scanned again.'
               : isAwaitingOnlinePayment
                 ? 'Your QR and Order ID are ready. Complete the online payment to continue processing this order.'
-                : 'Present this QR or your Order ID to staff during pickup/payment.'}
+                : isWalkInOrder(order)
+                  ? 'This QR code is for feedback purposes only. You may scan it to share your experience. It cannot be used to check order status.'
+                  : 'Please present your QR code or Order ID when claiming your order. QR codes are valid for one-time use only.'}
           </p>
           {isAwaitingOnlinePayment && (
             <div className="order-qr-actions">

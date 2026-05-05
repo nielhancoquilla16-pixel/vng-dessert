@@ -23,6 +23,22 @@ railway init
 railway up
 ```
 
+If this repo has both frontend and backend changes and you want to redeploy only the backend, use the backend folder as the Railway root:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\deploy-backend-railway.ps1
+```
+
+This helper deploys only `dessert-ai-system` to the linked Railway service.
+
+If you need to copy the backend `.env` values into Railway first, run:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\sync-backend-railway-env.ps1 -Service dessert-ai-backend
+```
+
+This reads `dessert-ai-system/server/.env` and sets the same variables on the chosen Railway service without printing secret values.
+
 After Railway creates the service, add these environment variables in Railway:
 
 ```env

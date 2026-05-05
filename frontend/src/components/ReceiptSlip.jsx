@@ -1,7 +1,7 @@
 import React, { useMemo } from 'react';
 import { QrCode, ReceiptText } from 'lucide-react';
 import { generateQrDataUrl } from '../utils/qrCode';
-import { getPaymentStatusLabel } from '../utils/orderWorkflow';
+import { getPaymentStatusLabel, isWalkInOrder } from '../utils/orderWorkflow';
 import './ReceiptSlip.css';
 
 const RECEIPT_TAX_RATE = 0.12;
@@ -77,6 +77,7 @@ const ReceiptSlip = ({
   const paymentMethodLabel = paymentMethodLabelOverride || getPaymentMethodLabel(order);
   const isPendingOnlineReference = paymentMethodLabel === 'Online Payment'
     && /^waiting for online payment$/i.test(paymentStatusLabel);
+  const isWalkInReceiptOrder = isWalkInOrder(order);
   const resolvedDocumentTitle = documentTitle || (isPendingOnlineReference ? 'Order Reference Slip' : 'Official Receipt');
   const resolvedDocumentSubtitle = documentSubtitle || (isPendingOnlineReference
     ? 'Reference slip before online payment'
@@ -105,6 +106,11 @@ const ReceiptSlip = ({
   const changeAmount = showChangeAmount ? Number(paymentSummary.changeAmount) || 0 : 0;
   const paymentReceivedLabel = paymentSummary?.receivedLabel || 'Payment received';
   const changeLabel = paymentSummary?.changeLabel || 'Change';
+  const receiptQrNote = isPendingOnlineReference
+    ? 'Use this QR code or Order ID as your reference while completing the online payment.'
+    : isWalkInReceiptOrder
+      ? 'Walk-in (POS): Scan QR for feedback only.'
+      : 'Online Orders: Show QR or Order ID to claim. One-time use only.';
 
   const receiptDate = paidAt
     || order?.paymentCheckoutPaidAt
@@ -224,12 +230,7 @@ const ReceiptSlip = ({
               )}
 
               <p className="receipt-note">
-                {isPendingOnlineReference
-                  ? 'Use this QR code or Order ID as your reference while completing the online payment.'
-                  : 'Present this receipt with the QR code or Order ID when claiming the order.'}
-                {order?.verificationRequired
-                  ? ' QR codes are one-time use only.'
-                  : ' Staff can process this order manually if needed.'}
+                {receiptQrNote}
               </p>
             </aside>
           )}

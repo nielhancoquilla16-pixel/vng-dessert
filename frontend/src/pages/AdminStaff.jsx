@@ -12,6 +12,10 @@ const emptyStaffForm = {
   role: 'staff',
   avatarUrl: '',
 };
+const emptyResetPasswordForm = {
+  password: '',
+  confirmPassword: '',
+};
 
 const getInitials = (value = '') => (
   String(value || '')
@@ -71,10 +75,12 @@ const AvatarPreview = ({ avatarUrl, label, size = 52, fontSize = '1rem' }) => (
 
 const AdminStaff = () => {
   const {
+    isAuthLoading,
     profile,
     staffAccounts = [],
     createStaffAccount,
     updateStaffAccount,
+    resetStaffPassword,
     deleteStaffAccount,
     updateMyProfile,
   } = useAuth();
@@ -90,10 +96,16 @@ const AdminStaff = () => {
   const [formError, setFormError] = useState('');
   const [editFormError, setEditFormError] = useState('');
   const [actionError, setActionError] = useState('');
+  const [actionNotice, setActionNotice] = useState('');
   const [profileError, setProfileError] = useState('');
   const [profileNotice, setProfileNotice] = useState('');
   const [deletingId, setDeletingId] = useState('');
+  const [resettingId, setResettingId] = useState('');
   const [isSavingProfilePhoto, setIsSavingProfilePhoto] = useState(false);
+  const [isResetPasswordOpen, setIsResetPasswordOpen] = useState(false);
+  const [resetStaffInfo, setResetStaffInfo] = useState(null);
+  const [resetPasswordForm, setResetPasswordForm] = useState({ ...emptyResetPasswordForm });
+  const [resetFormError, setResetFormError] = useState('');
 
   useEffect(() => {
     setAdminAvatarDraft(profile?.avatarUrl || '');
@@ -113,6 +125,7 @@ const AdminStaff = () => {
     e.preventDefault();
     setFormError('');
     setActionError('');
+    setActionNotice('');
 
     try {
       await createStaffAccount(newStaff);
@@ -127,6 +140,8 @@ const AdminStaff = () => {
     if (!staff?.id) {
       return;
     }
+
+    setActionNotice('');
 
     if (staff.id === profile?.id) {
       setActionError('You cannot delete your own admin account.');
@@ -144,6 +159,7 @@ const AdminStaff = () => {
     }
 
     setActionError('');
+    setActionNotice('');
     setDeletingId(confirmDeleteStaffId);
 
     try {
@@ -165,6 +181,8 @@ const AdminStaff = () => {
   };
 
   const handleOpenEditModal = (staff) => {
+    setActionError('');
+    setActionNotice('');
     setEditStaff({
       username: staff.username || '',
       email: staff.email || '',
@@ -189,12 +207,82 @@ const AdminStaff = () => {
     e.preventDefault();
     setEditFormError('');
     setActionError('');
+    setActionNotice('');
 
     try {
       await updateStaffAccount(editingStaffId, editStaff);
       handleCloseEditModal();
     } catch (nextError) {
       setEditFormError(nextError.message || 'Unable to update the staff account right now.');
+    }
+  };
+
+  const handleOpenResetModal = (staff) => {
+    if (!staff?.id) {
+      return;
+    }
+
+    setActionError('');
+    setActionNotice('');
+
+    if (staff.role !== 'staff') {
+      setActionError('Only staff account passwords can be reset from this panel.');
+      return;
+    }
+
+    setResetStaffInfo(staff);
+    setResetPasswordForm({ ...emptyResetPasswordForm });
+    setResetFormError('');
+    setIsResetPasswordOpen(true);
+  };
+
+  const handleCloseResetModal = () => {
+    setIsResetPasswordOpen(false);
+    setResetStaffInfo(null);
+    setResetPasswordForm({ ...emptyResetPasswordForm });
+    setResetFormError('');
+  };
+
+  const handleResetStaffPassword = async (e) => {
+    e.preventDefault();
+
+    if (!resetStaffInfo?.id) {
+      return;
+    }
+
+    const nextPassword = resetPasswordForm.password;
+    const confirmation = resetPasswordForm.confirmPassword;
+
+    setResetFormError('');
+    setActionError('');
+    setActionNotice('');
+
+    if (!nextPassword.trim()) {
+      setResetFormError('Enter a new temporary password.');
+      return;
+    }
+
+    if (nextPassword.length < 8) {
+      setResetFormError('Temporary passwords must be at least 8 characters long.');
+      return;
+    }
+
+    if (nextPassword !== confirmation) {
+      setResetFormError('The password confirmation does not match.');
+      return;
+    }
+
+    const staffLabel = resetStaffInfo.fullName || resetStaffInfo.username || 'the staff member';
+    setResettingId(resetStaffInfo.id);
+
+    try {
+      await resetStaffPassword(resetStaffInfo.id, nextPassword);
+      handleCloseResetModal();
+      setActionNotice(`Password reset for ${staffLabel}. Share the temporary password securely.`);
+    } catch (nextError) {
+      setResetFormError(nextError.message || 'Unable to reset that password right now.');
+    } finally {
+      setResettingId('');
     }
   };
 
@@ -214,6 +302,25 @@ const AdminStaff = () => {
       setIsSavingProfilePhoto(false);
     }
   };
+
+  if (isAuthLoading) {
+    return (
+      <div className="recent-orders-card" style={{ marginTop: '2rem', padding: '2rem', color: '#475569' }}>
+        Loading staff management access...
+      </div>
+    );
+  }
+
+  if (profile?.role !== 'admin') {
+    return (
+      <div className="recent-orders-card" style={{ marginTop: '2rem', padding: '2rem' }}>
+        <h1 style={{ margin: '0 0 0.75rem', fontSize: '1.5rem', color: '#0f172a' }}>Admin Access Required</h1>
+        <p style={{ margin: 0, color: '#64748b', lineHeight: 1.6 }}>
+          Only admins can manage staff accounts and reset staff passwords.
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div className="admin-staff-container">
@@ -374,6 +481,12 @@ const AdminStaff = () => {
         </div>
       )}
 
+      {actionNotice && (
+        <div style={{ marginTop: actionError ? '0.5rem' : '1rem', color: '#15803d', fontWeight: 600, fontSize: '0.9rem' }}>
+          {actionNotice}
+        </div>
+      )}
+
       <div className="recent-orders-card" style={{ padding: '0', marginTop: '2rem' }}>
         <table className="admin-table">
           <thead>
@@ -423,7 +536,18 @@ const AdminStaff = () => {
                     </div>
                   </td>
                   <td style={{ paddingRight: '2rem' }}>
-                    <div style={{ display: 'flex', gap: '0.5rem' }}>
+                    <div className="admin-staff-actions-row">
+                      {staff.role === 'staff' && (
+                        <button
+                          className="btn-add-item"
+                          onClick={() => handleOpenResetModal(staff)}
+                          disabled={resettingId === staff.id}
+                          style={{ padding: '0.4rem 0.8rem', background: '#f59e0b', color: 'white' }}
+                          title="Reset staff password"
+                        >
+                          <Key size={16} /> {resettingId === staff.id ? 'Resetting...' : 'Reset Password'}
+                        </button>
+                      )}
                       <button
                         className="btn-add-item"
                         onClick={() => handleOpenEditModal(staff)}
@@ -597,6 +721,84 @@ const AdminStaff = () => {
                 </button>
                 <button type="submit" className="btn-add-item" style={{ flex: 1, justifyContent: 'center' }}>
                   <Key size={16} /> Create Account
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {isResetPasswordOpen && resetStaffInfo && (
+        <div className="modal-overlay">
+          <div className="modal-content admin-staff-modal">
+            <h2 style={{ marginBottom: '0.5rem' }}>Reset Staff Password</h2>
+            <p style={{ margin: '0 0 1.5rem', color: '#64748b', lineHeight: 1.6 }}>
+              Set a new temporary password for <strong>{resetStaffInfo.fullName || resetStaffInfo.username}</strong>.
+              Only the admin can do this from the staff management panel.
+            </p>
+
+            <form onSubmit={handleResetStaffPassword}>
+              {resetFormError && (
+                <div style={{ marginBottom: '1rem', color: '#b91c1c', fontWeight: 600, fontSize: '0.9rem' }}>
+                  {resetFormError}
+                </div>
+              )}
+
+              <div className="modal-form-group">
+                <label>Staff Account</label>
+                <input
+                  type="text"
+                  className="modal-input"
+                  value={`${resetStaffInfo.fullName || resetStaffInfo.username} (${resetStaffInfo.email || 'No email'})`}
+                  readOnly
+                />
+              </div>
+
+              <div className="modal-form-group">
+                <label>New Temporary Password</label>
+                <input
+                  type="password"
+                  className="modal-input"
+                  placeholder="Enter a temporary password"
+                  value={resetPasswordForm.password}
+                  onChange={(e) => setResetPasswordForm((current) => ({ ...current, password: e.target.value }))}
+                  required
+                />
+              </div>
+
+              <div className="modal-form-group">
+                <label>Confirm Temporary Password</label>
+                <input
+                  type="password"
+                  className="modal-input"
+                  placeholder="Re-enter the temporary password"
+                  value={resetPasswordForm.confirmPassword}
+                  onChange={(e) => setResetPasswordForm((current) => ({ ...current, confirmPassword: e.target.value }))}
+                  required
+                />
+              </div>
+
+              <div style={{ background: '#f8fafc', padding: '1rem', borderRadius: '0.75rem', marginBottom: '1.5rem', fontSize: '0.85rem', color: '#64748b', lineHeight: 1.6 }}>
+                The new password takes effect immediately. Share it securely with the staff member so they can sign in again.
+              </div>
+
+              <div style={{ display: 'flex', gap: '1rem' }}>
+                <button
+                  type="button"
+                  className="btn-pos-cancel"
+                  style={{ flex: 1 }}
+                  onClick={handleCloseResetModal}
+                  disabled={resettingId === resetStaffInfo.id}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="btn-add-item"
+                  style={{ flex: 1, justifyContent: 'center', background: '#f59e0b' }}
+                  disabled={resettingId === resetStaffInfo.id}
+                >
+                  <Key size={16} /> {resettingId === resetStaffInfo.id ? 'Resetting...' : 'Reset Password'}
                 </button>
               </div>
             </form>

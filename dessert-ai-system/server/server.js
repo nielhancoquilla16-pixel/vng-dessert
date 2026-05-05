@@ -11,8 +11,10 @@ import cartsRoute from "./routes/carts.js";
 import inventoryRoute from "./routes/inventory.js";
 import ordersRoute from "./routes/orders.js";
 import paymentsRoute from "./routes/payments.js";
+import preOrdersRoute from "./routes/preOrders.js";
 import productsRoute from "./routes/products.js";
 import profilesRoute from "./routes/profiles.js";
+import salesReportsRoute from "./routes/salesReports.js";
 import { getProfileUploadsDirectory } from "./lib/profileImages.js";
 import { getPayMongoStatusPayload } from "./lib/paymongo.js";
 import {
@@ -91,7 +93,7 @@ app.get("/api/health/database", async (req, res, next) => {
 
     if (adminConfigured) {
       const adminClient = getSupabaseAdmin();
-      for (const table of ["profiles", "inventory", "orders", "order_items", "order_issue_reports", "carts", "cart_items", "payment_checkouts"]) {
+      for (const table of ["profiles", "inventory", "orders", "pre_orders", "order_items", "order_issue_reports", "sales_reports", "sales_report_items", "product_recipes", "product_recipe_items", "carts", "cart_items", "payment_checkouts"]) {
         checks.push(await probeTable(adminClient, table));
       }
     }
@@ -127,19 +129,39 @@ app.use("/api/carts", cartsRoute);
 app.use("/api/inventory", inventoryRoute);
 app.use("/api/orders", ordersRoute);
 app.use("/api/payments", paymentsRoute);
+app.use("/api/pre-orders", preOrdersRoute);
 app.use("/api/products", productsRoute);
 app.use("/api/profiles", profilesRoute);
+app.use("/api/sales-reports", salesReportsRoute);
 
 app.get("/", (req, res) => {
   res.sendFile(join(clientDir, "index.html"));
 });
 
-app.use((error, req, res, next) => {
-  console.error(error);
+const isMalformedJsonError = (error) => (
+  error?.type === "entity.parse.failed"
+  || (
+    error instanceof SyntaxError
+    && error?.status === 400
+    && Object.prototype.hasOwnProperty.call(error, "body")
+  )
+);
 
+app.use((error, req, res, next) => {
   if (res.headersSent) {
     return next(error);
   }
+
+  if (isMalformedJsonError(error)) {
+    const requestPath = req.originalUrl || req.url || "/";
+    console.warn(`Rejected malformed JSON request on ${requestPath}.`);
+
+    return res.status(400).json({
+      error: "Malformed JSON body. Use valid JSON syntax with double-quoted property names.",
+    });
+  }
+
+  console.error(error);
 
   const rawMessage = error?.message || 'Internal server error.';
   const normalizedMessage = (

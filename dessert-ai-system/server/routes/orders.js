@@ -463,7 +463,18 @@ const setOrderStatus = async (supabase, currentOrder, nextStatus, extra = {}) =>
   }
 
   if (normalizedNextStatus === 'completed') {
-    if (currentStatus !== 'delivered') {
+    const placedByRole = String(currentOrder.profiles?.role || '').toLowerCase();
+    const isWalkInOrder = ['admin', 'staff'].includes(placedByRole)
+      && deliveryMethod === 'pickup'
+      && String(currentOrder.payment_method || 'cash').toLowerCase() !== 'online';
+
+    if (isWalkInOrder && currentStatus !== 'ready') {
+      const error = new Error('Walk-in POS orders must be Ready before they can be completed.');
+      error.status = 400;
+      throw error;
+    }
+
+    if (!isWalkInOrder && currentStatus !== 'delivered') {
       const error = new Error('The order must be Delivered before it can be completed.');
       error.status = 400;
       throw error;
@@ -762,9 +773,9 @@ router.post('/', requireAuth, async (req, res, next) => {
       });
     }
 
-    if (isStaffWalkInOrder && !['confirmed', 'ready'].includes(requestedStatus)) {
+    if (isStaffWalkInOrder && !['preparing', 'ready'].includes(requestedStatus)) {
       return res.status(400).json({
-        error: 'Walk-in POS orders can only start with confirmed or ready status.',
+        error: 'Walk-in POS orders can only start with preparing or ready status.',
       });
     }
 
@@ -1414,7 +1425,7 @@ router.patch('/:id/status', requireAuth, async (req, res, next) => {
       return res.status(400).json({ error: 'Pending is only allowed when a new order is created.' });
     }
 
-    if (['completed', 'refunded'].includes(nextStatus)) {
+    if (nextStatus === 'refunded') {
       return res.status(400).json({ error: 'Customer confirmation or return review is required for that status.' });
     }
 
@@ -1425,6 +1436,14 @@ router.patch('/:id/status', requireAuth, async (req, res, next) => {
     const role = String(req.profile?.role || '').toLowerCase();
     const isPrivileged = ['admin', 'staff'].includes(role);
     const belongsToCustomer = currentOrder.user_id === req.authUser.id;
+    const placedByRole = String(currentOrder.profiles?.role || '').toLowerCase();
+    const isWalkInOrder = ['admin', 'staff'].includes(placedByRole)
+      && String(currentOrder.delivery_method || '').toLowerCase() === 'pickup'
+      && String(currentOrder.payment_method || 'cash').toLowerCase() !== 'online';
+
+    if (nextStatus === 'completed' && !isWalkInOrder) {
+      return res.status(400).json({ error: 'Customer confirmation is required for that status.' });
+    }
 
     if (nextStatus === 'cancelled') {
       if (!isPrivileged) {

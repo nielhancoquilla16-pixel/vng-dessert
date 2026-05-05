@@ -1,9 +1,22 @@
 import { supabase, isSupabaseConfigured } from './supabase';
 
 const rawApiBaseUrl = (import.meta.env.VITE_API_BASE_URL ?? '').trim();
+const sanitizeApiBaseUrl = (value = '') => String(value || '').trim().replace(/^['"]|['"]$/g, '');
 const devFallbackBase = 'http://localhost:3001';
-const productionFallbackBase = 'https://dessert-ai-backend-production.up.railway.app';
-const resolvedBase = rawApiBaseUrl || (import.meta.env.DEV ? devFallbackBase : productionFallbackBase);
+const productionFallbackBase = 'https://dessert-ai-backend-production-5c00.up.railway.app';
+const configuredApiBases = Array.from(new Set(
+  (
+    import.meta.env.DEV
+      ? [
+          sanitizeApiBaseUrl(rawApiBaseUrl),
+          sanitizeApiBaseUrl(devFallbackBase),
+        ]
+      : [
+          sanitizeApiBaseUrl(rawApiBaseUrl),
+          sanitizeApiBaseUrl(productionFallbackBase),
+        ]
+  ).filter(Boolean),
+)).map((baseUrl) => baseUrl.replace(/\/$/, ''));
 const BACKEND_RETRY_DELAY_MS = import.meta.env.DEV ? 2000 : 1500;
 const BACKEND_STARTUP_GRACE_MS = import.meta.env.DEV ? 4000 : 45000;
 const BACKEND_HEALTH_POLL_MS = import.meta.env.DEV ? 400 : 1500;
@@ -15,7 +28,9 @@ let apiStatus = {
 };
 const apiStatusListeners = new Set();
 
-export const API_BASE_URL = resolvedBase.replace(/\/$/, '');
+export let API_BASE_URL = configuredApiBases[0] || sanitizeApiBaseUrl(
+  import.meta.env.DEV ? devFallbackBase : productionFallbackBase,
+).replace(/\/$/, '');
 
 export class ApiError extends Error {
   constructor(message, status = 500, details = null) {
@@ -52,6 +67,16 @@ export const subscribeToApiStatus = (listener) => {
 };
 
 export const normalizeApiErrorMessage = (message = '') => {
+  if (/Cannot POST \/api\/sales-reports|Cannot GET \/api\/sales-reports/i.test(message)) {
+    return import.meta.env.DEV
+      ? 'Your frontend reached a backend that does not include the sales reports routes yet. Start or restart the local backend on port 3001, then refresh.'
+      : 'The live backend does not include the sales reports routes yet. Redeploy the latest backend, then try again.';
+  }
+
+  if (/Cannot POST \/api\/auth\/admin\/verify-reset-code|Cannot POST \/api\/auth\/admin\/reset-password/i.test(message)) {
+    return 'The live backend is missing the admin reset routes. Redeploy the latest backend to Railway, then try again.';
+  }
+
   if (/SUPABASE_SERVICE_ROLE_KEY|Supabase environment variables are missing/i.test(message)) {
     return 'Backend configuration is incomplete. Add SUPABASE_SERVICE_ROLE_KEY to dessert-ai-system/server/.env and restart the backend.';
   }
@@ -62,6 +87,18 @@ export const normalizeApiErrorMessage = (message = '') => {
 
   if (/column orders\.(verification_required|qr_token|qr_generated_at|qr_used_at|verified_at|verified_by|verification_method) does not exist/i.test(message)) {
     return 'The live database is missing the order verification migration. Run supabase/migrations/20260408_add_order_qr_verification.sql in Supabase SQL Editor, then refresh the app.';
+  }
+
+  if (/relation "public\.pre_orders" does not exist|relation "pre_orders" does not exist|table .*pre_orders.* does not exist/i.test(message)) {
+    return 'The live database is missing the pre-orders migration. Run supabase/migrations/20260415_add_pre_orders.sql in Supabase SQL Editor, then refresh the app.';
+  }
+
+  if (/relation "public\.(sales_reports|sales_report_items)" does not exist|relation "(sales_reports|sales_report_items)" does not exist|table .*(sales_reports|sales_report_items).* does not exist/i.test(message)) {
+    return 'The database is missing the sales reports migration. Run supabase/migrations/20260423_add_sales_reports.sql in Supabase SQL Editor, then refresh the app.';
+  }
+
+  if (/relation "public\.(product_recipes|product_recipe_items)" does not exist|relation "(product_recipes|product_recipe_items)" does not exist|table .*(product_recipes|product_recipe_items).* does not exist|could not find the table 'public\.(product_recipes|product_recipe_items)' in the schema cache/i.test(message)) {
+    return 'The database is missing the product recipes migration. Run supabase/migrations/20260429_add_product_recipes.sql in Supabase SQL Editor, then refresh the app.';
   }
 
   return message;
@@ -88,11 +125,80 @@ export const isBackendIssueError = (error) => (
   )
 );
 
-const buildUrl = (path = '') => (
+const buildUrl = (path = '', baseUrl = API_BASE_URL) => (
   path.startsWith('http')
     ? path
-    : `${API_BASE_URL}${path.startsWith('/') ? path : `/${path}`}`
+    : `${baseUrl}${path.startsWith('/') ? path : `/${path}`}`
 );
+
+const setApiBaseUrl = (nextBaseUrl = '') => {
+  const normalizedBaseUrl = sanitizeApiBaseUrl(nextBaseUrl).replace(/\/$/, '');
+  if (!normalizedBaseUrl || API_BASE_URL === normalizedBaseUrl) {
+    return;
+  }
+
+  API_BASE_URL = normalizedBaseUrl;
+};
+
+const getApiBaseCandidates = () => (
+  [API_BASE_URL, ...configuredApiBases.filter((baseUrl) => baseUrl !== API_BASE_URL)]
+);
+
+const parseResponseData = async (response) => {
+  if (response.status === 204) {
+    return null;
+  }
+
+  const contentType = response.headers.get('content-type') || '';
+  return contentType.includes('application/json')
+    ? response.json()
+    : response.text();
+};
+
+const isRailwayAppNotFoundResponse = (response, responseData) => {
+  if (response.status !== 404) {
+    return false;
+  }
+
+  const message = typeof responseData === 'object'
+    ? `${responseData?.message || ''} ${responseData?.error || ''}`.trim()
+    : extractTextErrorMessage(responseData);
+
+  return /Application not found/i.test(message);
+};
+
+const fetchApiResponse = async (path, options = {}) => {
+  const candidates = getApiBaseCandidates();
+  let lastNetworkError = null;
+  let sawRailwayAppNotFound = false;
+
+  for (const baseUrl of candidates) {
+    try {
+      const response = await fetch(buildUrl(path, baseUrl), options);
+      const responseData = await parseResponseData(response);
+
+      if (isRailwayAppNotFoundResponse(response, responseData)) {
+        sawRailwayAppNotFound = true;
+        continue;
+      }
+
+      setApiBaseUrl(baseUrl);
+      return { response, responseData };
+    } catch (error) {
+      if (isAbortError(error)) {
+        throw error;
+      }
+
+      lastNetworkError = error;
+    }
+  }
+
+  if (sawRailwayAppNotFound) {
+    throw new ApiError('Backend server is unavailable.', 503);
+  }
+
+  throw lastNetworkError || new ApiError('Backend server is unavailable.', 503);
+};
 
 const isClientOffline = () => (
   typeof navigator !== 'undefined'
@@ -133,18 +239,18 @@ const isAbortError = (error) => (
 );
 
 export const probeApiHealth = async () => {
-  const response = await fetch(buildUrl('/api/health'), {
+  const { response, responseData } = await fetchApiResponse('/api/health', {
     method: 'GET',
     cache: 'no-store',
   });
 
   if (!response.ok) {
-    throw new ApiError('Backend health check failed.', response.status);
+    throw new ApiError('Backend health check failed.', response.status, responseData);
   }
 
   backendUnavailableUntil = 0;
   setApiStatus({ level: 'idle', message: '' });
-  return response.json();
+  return responseData;
 };
 
 const recoverBackendConnection = () => {
@@ -216,12 +322,13 @@ export const apiRequest = async (path, options = {}, config = {}) => {
   }
 
   let response;
+  let responseData;
 
   try {
-    response = await fetch(buildUrl(path), {
+    ({ response, responseData } = await fetchApiResponse(path, {
       ...options,
       headers,
-    });
+    }));
     backendUnavailableUntil = 0;
     setApiStatus({ level: 'idle', message: '' });
   } catch (error) {
@@ -251,11 +358,6 @@ export const apiRequest = async (path, options = {}, config = {}) => {
   if (response.status === 204) {
     return null;
   }
-
-  const contentType = response.headers.get('content-type') || '';
-  const responseData = contentType.includes('application/json')
-    ? await response.json()
-    : await response.text();
 
   if (!response.ok) {
     const rawMessage = typeof responseData === 'object' && responseData?.error

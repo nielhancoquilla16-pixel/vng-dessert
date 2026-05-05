@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Send, Sparkles, X } from 'lucide-react';
 import { useAI } from '../context/AIContext';
 
@@ -13,8 +13,13 @@ const FloatingAI = () => {
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isCompactViewport, setIsCompactViewport] = useState(false);
+  const [position, setPosition] = useState({ x: 0, y: 0 });
+  const [isDragging, setIsDragging] = useState(false);
+  const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
+  const [initialPos, setInitialPos] = useState({ x: 0, y: 0 });
   const { queryGeneralAI } = useAI();
   const messagesEndRef = useRef(null);
+  const containerRef = useRef(null);
 
   useEffect(() => {
     if (isOpen) {
@@ -43,6 +48,50 @@ const FloatingAI = () => {
     return () => mediaQuery.removeListener(handleViewportChange);
   }, []);
 
+  const handleDragStart = useCallback((e) => {
+    e.preventDefault();
+    setIsDragging(true);
+    setDragStart({ x: e.clientX, y: e.clientY });
+    setInitialPos({ x: position.x, y: position.y });
+  }, [position]);
+
+  const handleDragMove = useCallback((e) => {
+    setPosition((prev) => {
+      const deltaX = e.clientX - dragStart.x;
+      const deltaY = e.clientY - dragStart.y;
+
+      const newX = initialPos.x + deltaX;
+      const newY = initialPos.y + deltaY;
+
+      const maxX = window.innerWidth - 100;
+      const maxY = window.innerHeight - 100;
+
+      return {
+        x: Math.max(0, Math.min(newX, maxX)),
+        y: Math.max(0, Math.min(newY, maxY)),
+      };
+    });
+  }, [dragStart, initialPos]);
+
+  const handleDragEnd = useCallback(() => {
+    setIsDragging(false);
+  }, []);
+
+  useEffect(() => {
+    if (isDragging) {
+      document.body.style.userSelect = 'none';
+      document.addEventListener('mousemove', handleDragMove);
+      document.addEventListener('mouseup', handleDragEnd);
+      
+      return () => {
+        document.body.style.userSelect = 'auto';
+        document.removeEventListener('mousemove', handleDragMove);
+        document.removeEventListener('mouseup', handleDragEnd);
+      };
+    }
+    return undefined;
+  }, [isDragging, handleDragMove, handleDragEnd, dragStart, initialPos]);
+
   const toggleLabel = isOpen ? 'Close AI' : 'Ask Llama AI';
 
   async function handleSend(event) {
@@ -69,24 +118,26 @@ const FloatingAI = () => {
 
   return (
     <div
+      ref={containerRef}
       style={{
         position: 'fixed',
-        bottom: isCompactViewport ? 'max(1rem, env(safe-area-inset-bottom))' : '2rem',
-        right: isCompactViewport ? '1rem' : '2rem',
-        left: isCompactViewport ? '1rem' : 'auto',
-        zIndex: 99999,
+        top: isCompactViewport && position.y === 0 ? '1rem' : position.y > 0 ? `${position.y}px` : '1rem',
+        left: isCompactViewport && position.x === 0 ? '1rem' : position.x > 0 ? `${position.x}px` : '1rem',
+        bottom: position.y > 0 ? 'auto' : 'auto',
+        right: position.x > 0 ? 'auto' : 'auto',
+        zIndex: 10,
         pointerEvents: 'auto',
         fontFamily: 'system-ui, sans-serif',
         display: 'flex',
-        justifyContent: isCompactViewport ? 'flex-end' : 'stretch',
+        justifyContent: isCompactViewport ? 'flex-start' : 'stretch',
       }}
     >
       {isOpen ? (
         <div
           style={{
             position: 'absolute',
-            bottom: isCompactViewport ? '72px' : '80px',
-            right: 0,
+            top: isCompactViewport ? '72px' : '80px',
+            left: 0,
             width: isCompactViewport ? '100%' : '360px',
             maxWidth: 'calc(100vw - 2rem)',
             height: isCompactViewport ? 'min(70vh, 500px)' : '500px',
@@ -106,7 +157,9 @@ const FloatingAI = () => {
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'space-between',
+              cursor: isDragging ? 'grabbing' : 'grab',
             }}
+            onMouseDown={handleDragStart}
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
               <div
@@ -264,35 +317,30 @@ const FloatingAI = () => {
       ) : null}
 
       <button
-        onClick={() => setIsOpen((prev) => !prev)}
+        onClick={() => !isDragging && setIsOpen((prev) => !prev)}
+        onMouseDown={handleDragStart}
         aria-label={toggleLabel}
         style={{
-          background: 'linear-gradient(135deg, #6366f1, #a855f7)',
+          background: 'linear-gradient(to right, #a855f7, #6366f1)',
           color: 'white',
           border: '3px solid white',
-          width: isCompactViewport ? '56px' : 'auto',
-          height: isCompactViewport ? '56px' : 'auto',
-          padding: isCompactViewport ? '0' : '0.85rem 1.25rem',
+          width: isCompactViewport ? '48px' : '48px',
+          height: isCompactViewport ? '48px' : '48px',
+          padding: '0',
           borderRadius: '9999px',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          gap: isCompactViewport ? 0 : '0.6rem',
-          cursor: 'pointer',
-          boxShadow: '0 10px 25px rgba(99, 102, 241, 0.45)',
-          fontSize: isCompactViewport ? '0.88rem' : '0.95rem',
+          gap: 0,
+          cursor: isDragging ? 'grabbing' : 'grab',
+          boxShadow: '0 12px 24px rgba(99, 102, 241, 0.25)',
+          fontSize: '0.8rem',
           fontWeight: 700,
-          transition: 'transform 0.2s, box-shadow 0.2s',
-        }}
-        onMouseEnter={(event) => {
-          event.currentTarget.style.transform = 'translateY(-3px)';
-        }}
-        onMouseLeave={(event) => {
-          event.currentTarget.style.transform = 'translateY(0)';
+          transition: isDragging ? 'none' : 'box-shadow 0.2s',
+          userSelect: 'none',
         }}
       >
-        <Sparkles size={isCompactViewport ? 20 : 22} />
-        {!isCompactViewport ? toggleLabel : null}
+        <Sparkles size={20} />
       </button>
     </div>
   );

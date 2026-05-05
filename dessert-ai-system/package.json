@@ -4,6 +4,7 @@
   "description": "V&G Dessert AI Backend — Powered by Llama AI",
   "type": "module",
   "main": "server/server.js",
+  "packageManager": "npm@10.2.3",
   "scripts": {
     "start": "node server/server.js",
     "dev": "node server/server.js"

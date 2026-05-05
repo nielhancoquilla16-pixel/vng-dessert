@@ -1,7 +1,7 @@
 /* eslint-disable react-refresh/only-export-components */
 import React, { createContext, useContext, useState, useCallback } from 'react';
 import { useProducts } from './ProductContext';
-import { API_BASE_URL } from '../lib/api';
+import { apiRequest } from '../lib/api';
 
 const AIContext = createContext();
 const AI_REQUEST_TIMEOUT_MS = 12000;
@@ -174,6 +174,10 @@ export const AIProvider = ({ children }) => {
       return 'I can answer many customer questions, explain simple topics, help write short captions or messages, and assist with V&G desserts, prices, recommendations, location, store hours, delivery, and payment options.';
     }
 
+    if (/(ingredient calculator|production calculator|limiting ingredient|remaining ingredients)/.test(text)) {
+      return 'The ingredient calculator estimates how many products you can make from your current stock, shows the limiting ingredient for each recipe, and highlights what will remain after production.';
+    }
+
     if (/(how old are you|your age|when were you made|when were you created)/.test(text)) {
       return "I'm a virtual assistant, so I don't have a human age, but I'm here and ready to help anytime.";
     }
@@ -330,12 +334,11 @@ export const AIProvider = ({ children }) => {
     const controller = new AbortController();
     const timeoutId = window.setTimeout(() => controller.abort(), AI_REQUEST_TIMEOUT_MS);
 
-    let response;
+    let data;
 
     try {
-      response = await fetch(`${API_BASE_URL}/api/chat-messages`, {
+      data = await apiRequest('/api/chat-messages', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           content: message,
           menuContext,
@@ -344,12 +347,6 @@ export const AIProvider = ({ children }) => {
       });
     } finally {
       window.clearTimeout(timeoutId);
-    }
-
-    const data = await response.json();
-
-    if (!response.ok) {
-      throw new Error(data.error || 'AI backend unavailable');
     }
 
     return data?.data?.content || data.reply || data.answer;
@@ -381,6 +378,77 @@ export const AIProvider = ({ children }) => {
       suggestions: lowStock.map((p) => `Restock ${p.name} before the weekend rush.`),
     };
   }, [products]);
+
+  const generateIngredientCalculatorInsight = useCallback(({
+    summary,
+    productResults = [],
+    selectedResult = null,
+    ingredientRows = [],
+  }) => {
+    if (!summary || productResults.length === 0) {
+      return {
+        status: 'neutral',
+        title: 'AI-Powered Insight',
+        message: 'Enter ingredient quantities to see which product lines have the strongest production potential.',
+        suggestions: [],
+      };
+    }
+
+    const limitingCounts = productResults.reduce((counts, result) => {
+      const ingredientName = String(result.limitingIngredientName || '').trim();
+      if (!ingredientName) {
+        return counts;
+      }
+
+      counts.set(ingredientName, (counts.get(ingredientName) || 0) + 1);
+      return counts;
+    }, new Map());
+
+    const topConstraints = Array.from(limitingCounts.entries())
+      .map(([ingredientName, count]) => ({ ingredientName, count }))
+      .sort((left, right) => right.count - left.count || left.ingredientName.localeCompare(right.ingredientName));
+    const producibleResults = productResults.filter((result) => result.quantity > 0);
+    const topProduct = producibleResults[0] || productResults[0] || null;
+    const leanIngredients = ingredientRows
+      .filter((ingredient) => (Number(ingredient.quantity) || 0) > 0)
+      .sort((left, right) => (Number(left.quantity) || 0) - (Number(right.quantity) || 0))
+      .slice(0, 3)
+      .map((ingredient) => ingredient.ingredientName);
+
+    if (producibleResults.length === 0) {
+      return {
+        status: 'warning',
+        title: 'AI-Powered Insight',
+        message: topConstraints.length > 0
+          ? `${topConstraints[0].ingredientName} is the main blocker right now, so your tracked recipes cannot complete a full production cycle yet.`
+          : 'Your current stock is too low to complete any tracked recipe yet.',
+        suggestions: [
+          topConstraints[0] ? `Increase ${topConstraints[0].ingredientName} first to unlock the most products.` : '',
+          topConstraints[1] ? `${topConstraints[1].ingredientName} is the next bottleneck to watch after your first restock.` : '',
+          leanIngredients[0] ? `Review your thinnest live stock next: ${leanIngredients.join(', ')}.` : '',
+        ].filter(Boolean),
+      };
+    }
+
+    const selectedMessage = selectedResult
+      ? (
+          selectedResult.quantity > 0
+            ? `${selectedResult.productName} can currently produce ${selectedResult.quantity} ${selectedResult.outputLabel}.`
+            : `${selectedResult.productName} is blocked by ${selectedResult.limitingIngredientName || 'missing ingredients'}.`
+        )
+      : '';
+
+    return {
+      status: summary.totalProducts >= 4 ? 'good' : 'warning',
+      title: 'AI-Powered Insight',
+      message: `${topProduct.productName} has the strongest output right now with up to ${topProduct.quantity} ${topProduct.outputLabel}. ${selectedMessage}`.trim(),
+      suggestions: [
+        topConstraints[0] ? `Increase ${topConstraints[0].ingredientName}; it currently limits ${topConstraints[0].count} product lines.` : '',
+        topConstraints[1] ? `Boost ${topConstraints[1].ingredientName} next to widen your production mix.` : '',
+        leanIngredients[0] ? `Protect your smallest live stocks: ${leanIngredients.join(', ')}.` : '',
+      ].filter(Boolean),
+    };
+  }, []);
 
   const queryProductAI = useCallback(async (product, question) => {
     const menuContext = buildMenuContext();
@@ -416,6 +484,7 @@ export const AIProvider = ({ children }) => {
         recommendations,
         getSmartRecommendations,
         generateAIInventoryReport,
+        generateIngredientCalculatorInsight,
         queryProductAI,
         queryGeneralAI,
       }}

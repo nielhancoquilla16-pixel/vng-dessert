@@ -272,6 +272,51 @@ router.post("/staff", requireAuth, requireRole("admin"), async (req, res, next) 
   }
 });
 
+router.post("/staff/:id/reset-password", requireAuth, requireRole("admin"), async (req, res, next) => {
+  try {
+    const password = String(req.body?.password ?? "");
+
+    if (!password.trim()) {
+      return res.status(400).json({ error: "A new password is required." });
+    }
+
+    if (password.length < 8) {
+      return res.status(400).json({ error: "The new password must be at least 8 characters long." });
+    }
+
+    const supabase = getSupabaseAdmin();
+    const { data: managedProfile, error: profileError } = await supabase
+      .from("profiles")
+      .select("*")
+      .eq("id", req.params.id)
+      .single();
+
+    if (profileError || !managedProfile) {
+      return res.status(404).json({ error: "Staff account not found." });
+    }
+
+    if (managedProfile.role !== "staff") {
+      return res.status(400).json({ error: "Only staff account passwords can be reset here." });
+    }
+
+    const { error: authUpdateError } = await supabase.auth.admin.updateUserById(req.params.id, {
+      password,
+    });
+
+    if (authUpdateError) {
+      throw authUpdateError;
+    }
+
+    res.json({
+      success: true,
+      id: managedProfile.id,
+      email: managedProfile.email,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 router.delete("/staff/:id", requireAuth, requireRole("admin"), async (req, res, next) => {
   try {
     if (req.params.id === req.authUser.id) {

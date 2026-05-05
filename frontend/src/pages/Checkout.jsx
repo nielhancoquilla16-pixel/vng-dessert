@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import LoadingButton from '../components/LoadingButton';
 import { useCart } from '../context/CartContext';
 import { useAuth } from '../context/AuthContext';
 import { useOrders } from '../context/OrderContext';
@@ -459,13 +460,11 @@ const Checkout = () => {
             )}
           </div>
 
-          <button type="submit" className="btn-primary place-order-btn" disabled={isSubmitting}>
-            {isSubmitting
-              ? 'Processing...'
-              : formData.paymentMethod === 'online'
-                ? 'Review QR and Continue'
-                : 'Place Order'}
-          </button>
+          <LoadingButton type="submit" className="btn-primary place-order-btn" isLoading={isSubmitting}>
+            {formData.paymentMethod === 'online'
+              ? 'Review QR and Continue'
+              : 'Place Order'}
+          </LoadingButton>
         </form>
 
         <div className="checkout-summary">

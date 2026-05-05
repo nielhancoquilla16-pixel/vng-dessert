@@ -1,10 +1,12 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { createPortal } from 'react-dom';
-
-import { Search, Plus, Sparkles, X, Send } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { CalendarDays, Search, Plus, Sparkles, X, Send } from 'lucide-react';
 import { useProducts } from '../context/ProductContext';
 import { useCart } from '../context/CartContext';
 import { useAI } from '../context/AIContext';
+import { useAuth } from '../context/AuthContext';
+import PreOrderModal from '../components/PreOrderModal';
 import './Products.css';
 
 const Products = () => {
@@ -13,9 +15,12 @@ const Products = () => {
   const { products, isProductsLoading } = useProducts();
   const { addToCart } = useCart();
   const { queryProductAI } = useAI();
+  const { loggedInCustomer } = useAuth();
+  const navigate = useNavigate();
 
   // AI Chat State
   const [chatProduct, setChatProduct] = useState(null);
+  const [preOrderProduct, setPreOrderProduct] = useState(null);
   const [messages, setMessages] = useState([]);
   const [inputValue, setInputValue] = useState('');
   const [isSending, setIsSending] = useState(false);
@@ -58,6 +63,19 @@ const Products = () => {
     setChatProduct(null);
     setMessages([]);
     setInputValue('');
+  }
+
+  function openPreOrder(product) {
+    if (!loggedInCustomer) {
+      navigate('/login');
+      return;
+    }
+
+    setPreOrderProduct(product);
+  }
+
+  function closePreOrder() {
+    setPreOrderProduct(null);
   }
 
   async function sendMessage(e) {
@@ -176,11 +194,17 @@ const Products = () => {
                   <div className="product-actions">
                     <button
                       className="btn-primary btn-icon"
-                      style={{ padding: '0.5rem 1rem', width: '100%' }}
                       disabled={Number(product.stock) <= 0}
                       onClick={() => addToCart(product)}
                     >
                       <Plus size={16} /> {Number(product.stock) <= 0 ? 'Out of Stock' : 'Add to Cart'}
+                    </button>
+                    <button
+                      className="btn-preorder"
+                      type="button"
+                      onClick={() => openPreOrder(product)}
+                    >
+                      <CalendarDays size={16} /> Pre-Order
                     </button>
                   </div>
                 </div>
@@ -367,6 +391,12 @@ const Products = () => {
         </div>,
         document.body
       )}
+
+      <PreOrderModal
+        product={preOrderProduct}
+        isOpen={Boolean(preOrderProduct)}
+        onClose={closePreOrder}
+      />
     </div>
   );
 };
