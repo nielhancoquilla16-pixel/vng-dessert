@@ -14,6 +14,7 @@ import Orders from './pages/Orders';
 import Checkout from './pages/Checkout';
 import CheckoutPayMongoReturn from './pages/CheckoutPayMongoReturn';
 import CustomerProfile from './pages/CustomerProfile';
+import Feedback from './pages/Feedback';
 
 import AdminLayout from './components/AdminLayout';
 import AdminDashboard from './pages/AdminDashboard';
@@ -24,6 +25,7 @@ import AdminPOS from './pages/AdminPOS';
 import AdminInventory from './pages/AdminInventory';
 import AdminReports from './pages/AdminReports';
 import AdminQR from './pages/AdminQR';
+import AdminFeedback from './pages/AdminFeedback';
 import AdminStaff from './pages/AdminStaff';
 import AdminContent from './pages/AdminContent';
 
@@ -70,6 +72,7 @@ function App() {
                               <Route path="checkout" element={<Checkout />} />
                               <Route path="checkout/paymongo/success" element={<CheckoutPayMongoReturn mode="success" />} />
                               <Route path="checkout/paymongo/cancel" element={<CheckoutPayMongoReturn mode="cancel" />} />
+                              <Route path="feedback/:token" element={<Feedback />} />
                             </Route>
 
                             {/* Admin Routes */}
@@ -81,6 +84,7 @@ function App() {
                               <Route path="pos" element={<AdminPOS />} />
                               <Route path="inventory" element={<AdminInventory />} />
                               <Route path="reports" element={<AdminReports />} />
+                              <Route path="feedback" element={<AdminFeedback />} />
                               <Route path="qr" element={<AdminQR />} />
                               <Route path="staff" element={<AdminStaff />} />
                               <Route path="content" element={<AdminContent />} />

@@ -1,6 +1,7 @@
 import React, { useMemo } from 'react';
 import { QrCode, ReceiptText } from 'lucide-react';
 import { generateQrDataUrl } from '../utils/qrCode';
+import { appUrl } from '../lib/appUrl';
 import { getPaymentStatusLabel, isWalkInOrder } from '../utils/orderWorkflow';
 import './ReceiptSlip.css';
 
@@ -78,6 +79,7 @@ const ReceiptSlip = ({
   const isPendingOnlineReference = paymentMethodLabel === 'Online Payment'
     && /^waiting for online payment$/i.test(paymentStatusLabel);
   const isWalkInReceiptOrder = isWalkInOrder(order);
+  const feedbackToken = order?.feedbackToken || '';
   const resolvedDocumentTitle = documentTitle || (isPendingOnlineReference ? 'Order Reference Slip' : 'Official Receipt');
   const resolvedDocumentSubtitle = documentSubtitle || (isPendingOnlineReference
     ? 'Reference slip before online payment'
@@ -85,11 +87,11 @@ const ReceiptSlip = ({
       ? 'Delivery order receipt'
       : 'Pickup order receipt');
   const qrImage = useMemo(() => (
-    order?.verificationRequired && order?.qrPayload && !order?.qrUsedAt
-      ? generateQrDataUrl(order.qrPayload, 180)
+    feedbackToken
+      ? generateQrDataUrl(appUrl(`/feedback/${feedbackToken}`), 180)
       : ''
-  ), [order?.verificationRequired, order?.qrPayload, order?.qrUsedAt]);
-  const showQrPanel = receiptVariant !== 'thermal' || Boolean(qrImage) || Boolean(order?.verificationRequired);
+  ), [feedbackToken]);
+  const showQrPanel = Boolean(qrImage);
   const showPaymentReceived = Boolean(
     paymentSummary
     && paymentSummary.receivedAmount !== undefined
@@ -107,10 +109,10 @@ const ReceiptSlip = ({
   const paymentReceivedLabel = paymentSummary?.receivedLabel || 'Payment received';
   const changeLabel = paymentSummary?.changeLabel || 'Change';
   const receiptQrNote = isPendingOnlineReference
-    ? 'Use this QR code or Order ID as your reference while completing the online payment.'
+    ? 'Feedback QR becomes available after order confirmation.'
     : isWalkInReceiptOrder
-      ? 'Walk-in (POS): Scan QR for feedback only.'
-      : 'Online Orders: Show QR or Order ID to claim. One-time use only.';
+      ? 'Scan to rate your walk-in experience and send suggestions.'
+      : 'Scan to rate your order experience and send suggestions.';
 
   const receiptDate = paidAt
     || order?.paymentCheckoutPaidAt
@@ -214,7 +216,7 @@ const ReceiptSlip = ({
             <aside className="receipt-qr-panel">
               <div className="receipt-section-title">
                 <QrCode size={16} />
-                <span>Order QR</span>
+                <span>Feedback QR</span>
               </div>
 
               {qrImage ? (
@@ -225,7 +227,7 @@ const ReceiptSlip = ({
                 />
               ) : (
                 <div className="receipt-qr-image receipt-qr-image--fallback">
-                  QR unavailable
+                  Feedback unavailable
                 </div>
               )}
 

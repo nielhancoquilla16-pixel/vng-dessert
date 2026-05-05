@@ -8,6 +8,7 @@ import authRoute from "./routes/auth.js";
 import aiRoute, { getAiStatusPayload } from "./routes/ai.js";
 import chatMessagesRoute from "./routes/chatMessages.js";
 import cartsRoute from "./routes/carts.js";
+import feedbackRoute from "./routes/feedback.js";
 import inventoryRoute from "./routes/inventory.js";
 import ordersRoute from "./routes/orders.js";
 import paymentsRoute from "./routes/payments.js";
@@ -93,7 +94,7 @@ app.get("/api/health/database", async (req, res, next) => {
 
     if (adminConfigured) {
       const adminClient = getSupabaseAdmin();
-      for (const table of ["profiles", "inventory", "orders", "pre_orders", "order_items", "order_issue_reports", "sales_reports", "sales_report_items", "product_recipes", "product_recipe_items", "carts", "cart_items", "payment_checkouts"]) {
+      for (const table of ["profiles", "inventory", "orders", "pre_orders", "order_items", "order_issue_reports", "order_feedback", "sales_reports", "sales_report_items", "product_recipes", "product_recipe_items", "carts", "cart_items", "payment_checkouts"]) {
         checks.push(await probeTable(adminClient, table));
       }
     }
@@ -126,6 +127,7 @@ app.use("/api/auth", authRoute);
 app.use("/api/ai", aiRoute);
 app.use("/api/chat-messages", chatMessagesRoute);
 app.use("/api/carts", cartsRoute);
+app.use("/api/feedback", feedbackRoute);
 app.use("/api/inventory", inventoryRoute);
 app.use("/api/orders", ordersRoute);
 app.use("/api/payments", paymentsRoute);

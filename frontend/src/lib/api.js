@@ -89,6 +89,10 @@ export const normalizeApiErrorMessage = (message = '') => {
     return 'The live database is missing the order verification migration. Run supabase/migrations/20260408_add_order_qr_verification.sql in Supabase SQL Editor, then refresh the app.';
   }
 
+  if (/column orders\.(feedback_token|feedback_token_generated_at) does not exist|relation "public\.order_feedback" does not exist|relation "order_feedback" does not exist|table .*order_feedback.* does not exist/i.test(message)) {
+    return 'The database is missing the order feedback migration. Run supabase/migrations/20260505_add_order_feedback.sql in Supabase SQL Editor, then refresh the app.';
+  }
+
   if (/relation "public\.pre_orders" does not exist|relation "pre_orders" does not exist|table .*pre_orders.* does not exist/i.test(message)) {
     return 'The live database is missing the pre-orders migration. Run supabase/migrations/20260415_add_pre_orders.sql in Supabase SQL Editor, then refresh the app.';
   }

@@ -8,6 +8,7 @@ import {
   extractOrderQrToken,
   enrichItemsFromProducts,
   fetchProductsByIds,
+  generateFeedbackToken,
   generateOrderQrToken,
   getShortagesForItems,
   mapOrder,
@@ -373,6 +374,25 @@ const setOrderStatus = async (supabase, currentOrder, nextStatus, extra = {}) =>
     throw error;
   }
 
+  if (
+    normalizedNextStatus === 'confirmed'
+    && !currentOrder.feedback_token
+    && !['cancelled', 'refunded'].includes(currentStatus)
+  ) {
+    statusPatch.feedback_token = generateFeedbackToken();
+    statusPatch.feedback_token_generated_at = now;
+  }
+
+  if (
+    normalizedNextStatus === 'confirmed'
+    && currentOrder.verification_required !== false
+    && !currentOrder.qr_token
+  ) {
+    statusPatch.qr_token = generateOrderQrToken();
+    statusPatch.qr_generated_at = now;
+    statusPatch.qr_used_at = null;
+  }
+
   if (normalizedNextStatus === 'preparing' && currentStatus !== 'confirmed') {
     const error = new Error('The order must be confirmed before it can be set to Preparing.');
     error.status = 400;
@@ -460,6 +480,11 @@ const setOrderStatus = async (supabase, currentOrder, nextStatus, extra = {}) =>
     statusPatch.review_status = 'none';
     statusPatch.review_reason = null;
     statusPatch.review_status_updated_at = null;
+    statusPatch.feedback_token = null;
+    statusPatch.feedback_token_generated_at = null;
+    statusPatch.qr_token = null;
+    statusPatch.qr_generated_at = null;
+    statusPatch.qr_used_at = null;
   }
 
   if (normalizedNextStatus === 'completed') {
@@ -1365,6 +1390,8 @@ router.patch('/reports/:reportId', requireAuth, requireRole('admin', 'staff'), a
         review_status: 'approved',
         review_reason: reason || 'Return approved.',
         review_status_updated_at: now,
+        feedback_token: null,
+        feedback_token_generated_at: null,
         status_timestamps: statusTimestamps,
         notifications: mergedNotifications,
       });

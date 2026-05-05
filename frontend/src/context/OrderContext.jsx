@@ -138,6 +138,7 @@ const normalizeOrder = (order) => {
   );
   const verificationRequired = Boolean(order.verificationRequired ?? order.verification_required ?? true);
   const qrToken = verificationRequired ? String(order.qrToken || order.qr_token || '').toUpperCase() : '';
+  const feedbackToken = String(order.feedbackToken || order.feedback_token || '').toUpperCase();
   const qrPayload = String(order.qrPayload || order.qr_payload || (qrToken ? `vng-order:${qrToken}` : ''));
   const qrUsedAt = order.qrUsedAt || order.qr_used_at || order.qrClaimedAt || order.qr_claimed_at || null;
   const pickupPaymentLabel = paymentMethod === 'online' ? 'Online Payment' : 'Pay at Store';
@@ -186,6 +187,8 @@ const normalizeOrder = (order) => {
     verifiedAt: order.verifiedAt || order.verified_at || null,
     verifiedBy: order.verifiedBy || order.verified_by || null,
     qrToken,
+    feedbackToken,
+    feedbackTokenGeneratedAt: order.feedbackTokenGeneratedAt || order.feedback_token_generated_at || null,
     qrPayload,
     qrGeneratedAt: order.qrGeneratedAt || order.qr_generated_at || null,
     qrUsedAt,

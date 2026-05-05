@@ -103,6 +103,10 @@ export const generateOrderQrToken = () => (
   `VNGQR-${randomUUID().replace(/-/g, '').slice(0, 20).toUpperCase()}`
 );
 
+export const generateFeedbackToken = () => (
+  `VNGFB-${randomUUID().replace(/-/g, '').slice(0, 24).toUpperCase()}`
+);
+
 export const buildOrderQrPayload = (token = '') => {
   const normalizedToken = String(token || '').trim().toUpperCase();
   return normalizedToken ? `${ORDER_QR_PREFIX}${normalizedToken}` : '';
@@ -262,6 +266,8 @@ export const orderSelect = `
   verified_at,
   verified_by,
   verification_method,
+  feedback_token,
+  feedback_token_generated_at,
   qr_claimed_at,
   ready_notified_at,
   ready_notification_message,
@@ -521,6 +527,9 @@ export const mapOrder = (row) => {
     && Boolean(qrToken)
     && !qrUsedAt
     && !['completed', 'cancelled', 'refunded', 'delivered'].includes(normalizedStatus);
+  const feedbackToken = !['pending', 'cancelled', 'refunded'].includes(normalizedStatus)
+    ? String(row.feedback_token || '').toUpperCase()
+    : '';
 
   return {
     id: row.id,
@@ -565,6 +574,8 @@ export const mapOrder = (row) => {
     qrPayload,
     qrGeneratedAt: row.qr_generated_at || null,
     qrUsedAt,
+    feedbackToken,
+    feedbackTokenGeneratedAt: row.feedback_token_generated_at || null,
     qrClaimedAt: row.qr_claimed_at || null,
     readyNotifiedAt: row.ready_notified_at || null,
     readyNotificationMessage: row.ready_notification_message || '',
@@ -733,7 +744,11 @@ export const createFulfilledOrder = async (
     normalizedDeliveryMethod,
     normalizedPaymentMethod,
   );
-  const qrToken = verificationRequired ? generateOrderQrToken() : null;
+  const shouldGenerateReceiptTokens = !['pending', 'cancelled', 'refunded'].includes(normalizedStatus);
+  const qrToken = verificationRequired && shouldGenerateReceiptTokens ? generateOrderQrToken() : null;
+  const feedbackToken = ['pending', 'cancelled', 'refunded'].includes(normalizedStatus)
+    ? null
+    : generateFeedbackToken();
   const cancellationReason = normalizedStatus === 'cancelled'
     ? getLecheFlanRestrictionMessage(normalizedDistance) || 'The order was cancelled before fulfillment.'
     : null;
@@ -773,6 +788,8 @@ export const createFulfilledOrder = async (
       verified_at: null,
       verified_by: null,
       verification_method: null,
+      feedback_token: feedbackToken,
+      feedback_token_generated_at: feedbackToken ? now : null,
       notifications,
       status_timestamps: statusTimestamps,
     })

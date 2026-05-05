@@ -1,0 +1,244 @@
+.admin-feedback-page {
+  display: grid;
+  gap: 1rem;
+  color: #0f172a;
+}
+
+.admin-feedback-header,
+.admin-feedback-chip,
+.admin-feedback-toolbar,
+.admin-feedback-kpis,
+.admin-feedback-grid,
+.admin-feedback-row,
+.admin-feedback-row-head,
+.admin-feedback-rating {
+  display: flex;
+}
+
+.admin-feedback-header {
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.admin-feedback-kicker,
+.admin-feedback-header h1,
+.admin-feedback-panel h2,
+.admin-feedback-row p {
+  margin: 0;
+}
+
+.admin-feedback-kicker {
+  margin-bottom: 0.35rem;
+  color: #2563eb;
+  font-size: 0.78rem;
+  font-weight: 900;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.admin-feedback-header h1 {
+  font-size: 2rem;
+  line-height: 1.05;
+}
+
+.admin-feedback-chip,
+.admin-feedback-toolbar,
+.admin-feedback-kpis article,
+.admin-feedback-panel {
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.admin-feedback-chip {
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.65rem 0.8rem;
+  font-weight: 800;
+}
+
+.admin-feedback-toolbar {
+  align-items: end;
+  gap: 0.75rem;
+  padding: 1rem;
+  flex-wrap: wrap;
+}
+
+.admin-feedback-toolbar label {
+  display: grid;
+  gap: 0.4rem;
+  min-width: 150px;
+  flex: 1;
+}
+
+.admin-feedback-toolbar span {
+  color: #475569;
+  font-size: 0.78rem;
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.admin-feedback-toolbar input,
+.admin-feedback-toolbar select {
+  min-height: 2.75rem;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  padding: 0.7rem 0.8rem;
+  font: inherit;
+}
+
+.admin-feedback-toolbar button {
+  min-height: 2.75rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  border: 0;
+  border-radius: 8px;
+  padding: 0.7rem 1rem;
+  background: #2563eb;
+  color: #ffffff;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.admin-feedback-kpis {
+  gap: 1rem;
+}
+
+.admin-feedback-kpis article {
+  flex: 1;
+  display: grid;
+  gap: 0.35rem;
+  padding: 1rem;
+}
+
+.admin-feedback-kpis svg {
+  color: #2563eb;
+}
+
+.admin-feedback-kpis span {
+  color: #64748b;
+  font-weight: 800;
+}
+
+.admin-feedback-kpis strong {
+  font-size: 1.8rem;
+}
+
+.admin-feedback-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(280px, 0.65fr);
+  gap: 1rem;
+}
+
+.admin-feedback-panel {
+  display: grid;
+  gap: 1rem;
+  padding: 1rem;
+}
+
+.admin-feedback-panel-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.admin-feedback-panel h2 {
+  font-size: 1.05rem;
+}
+
+.admin-feedback-chart {
+  min-width: 0;
+}
+
+.admin-feedback-terms {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+}
+
+.admin-feedback-terms span {
+  padding: 0.5rem 0.65rem;
+  border-radius: 8px;
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-weight: 800;
+}
+
+.admin-feedback-list {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.admin-feedback-row {
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.85rem;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+}
+
+.admin-feedback-row-head {
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.admin-feedback-row-head span,
+.admin-feedback-row small {
+  color: #64748b;
+}
+
+.admin-feedback-row p {
+  margin-top: 0.35rem;
+  color: #334155;
+}
+
+.admin-feedback-row small {
+  display: block;
+  margin-top: 0.45rem;
+}
+
+.admin-feedback-rating {
+  align-items: center;
+  align-self: flex-start;
+  gap: 0.3rem;
+  color: #f59e0b;
+}
+
+.admin-feedback-empty,
+.admin-feedback-error {
+  padding: 1rem;
+  border-radius: 8px;
+  background: #f8fafc;
+  color: #64748b;
+  font-weight: 800;
+  text-align: center;
+}
+
+.admin-feedback-error {
+  background: #fef2f2;
+  color: #991b1b;
+}
+
+@media (max-width: 900px) {
+  .admin-feedback-kpis,
+  .admin-feedback-grid {
+    grid-template-columns: 1fr;
+    flex-direction: column;
+  }
+}
+
+@media (max-width: 620px) {
+  .admin-feedback-header,
+  .admin-feedback-row {
+    flex-direction: column;
+  }
+
+  .admin-feedback-toolbar button {
+    width: 100%;
+  }
+}
