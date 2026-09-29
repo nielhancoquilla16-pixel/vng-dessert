@@ -7,6 +7,7 @@ import { useOrders } from '../context/OrderContext';
 import { useProducts } from '../context/ProductContext';
 import { apiRequest } from '../lib/api';
 import ReceiptSlip from '../components/ReceiptSlip';
+import './Checkout.css';
 
 const wait = (ms) => new Promise((resolve) => {
   window.setTimeout(resolve, ms);
@@ -214,24 +215,12 @@ const CheckoutPayMongoReturn = ({ mode = 'success' }) => {
   };
 
   return (
-    <div
-      className="checkout-paymongo-return-page"
-      style={{ maxWidth: '960px', margin: '2rem auto', padding: '0 1.25rem 2rem' }}
-    >
-      <div
-        className="checkout-return-shell"
-        style={{
-          background: 'white',
-          borderRadius: '1.5rem',
-          padding: '2rem',
-          boxShadow: '0 16px 40px rgba(15, 23, 42, 0.08)',
-          border: '1px solid rgba(148, 163, 184, 0.16)',
-        }}
-      >
+    <div className="checkout-paymongo-return-page">
+      <div className="checkout-return-shell">
         <div className="checkout-return-header" style={{ display: 'flex', alignItems: 'center', gap: '0.9rem', marginBottom: '1.25rem' }}>
           <HeaderIcon size={28} color={headerIconColor} />
           <div>
-            <h1 style={{ margin: 0, fontSize: '1.9rem', color: '#0f172a' }}>
+            <h1>
               {pageTitle}
             </h1>
             <p style={{ margin: '0.25rem 0 0', color: '#64748b' }}>
@@ -242,6 +231,7 @@ const CheckoutPayMongoReturn = ({ mode = 'success' }) => {
 
         {isLoading && (
           <div
+            role="status"
             style={{
               borderRadius: '1rem',
               padding: '1rem 1.1rem',
@@ -261,6 +251,7 @@ const CheckoutPayMongoReturn = ({ mode = 'success' }) => {
 
         {!isLoading && error && (
           <div
+            role="alert"
             style={{
               borderRadius: '1rem',
               padding: '1rem 1.1rem',
@@ -275,7 +266,7 @@ const CheckoutPayMongoReturn = ({ mode = 'success' }) => {
         )}
 
         {!isLoading && error && (
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem', marginTop: '1.5rem' }}>
+          <div className="checkout-return-secondary-actions" style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem', marginTop: '1.5rem' }}>
             {!loggedInCustomer && (
               <Link className="btn-primary" to="/login" style={{ textDecoration: 'none' }}>
                 Log In

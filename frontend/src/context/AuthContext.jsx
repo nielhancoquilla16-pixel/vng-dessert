@@ -6,8 +6,29 @@ import {supabase, isSupabaseConfigured, clearSupabaseSessionStorage, setRemember
 } from '../lib/supabase';
 import { appUrl } from '../lib/appUrl';
 
+const getAuthErrorMessage = (error) => {
+  if (error instanceof ApiError) {
+    return error.details?.errorCode === 'AUTH_EMAIL_DELIVERY_UNAVAILABLE'
+      ? error.userMessage
+      : error.message;
+  }
+  console.error('Authentication request failed:', error);
+  return new ApiError(error?.message, error?.status || 500).message;
+};
+
 const AuthContext = createContext();
 const PASSWORD_RECOVERY_STORAGE_KEY = 'vng-password-recovery-active';
+const SESSION_TIMEOUT_MS = 30 * 60 * 1000;
+
+export const ROLE_DASHBOARD_PATHS = {
+  customer: '/customer/dashboard',
+  staff: '/staff/dashboard',
+  admin: '/admin/dashboard',
+};
+
+export const getDashboardPathForRole = (role = 'customer') => (
+  ROLE_DASHBOARD_PATHS[String(role || '').toLowerCase()] || ROLE_DASHBOARD_PATHS.customer
+);
 
 const hasRecoveryMarkerInLocation = () => {
   if (typeof window === 'undefined') {
@@ -54,6 +75,14 @@ const normalizeProfile = (profile, authUser = null) => ({
   ),
   termsAcceptedAt: profile?.termsAcceptedAt || profile?.terms_accepted_at || authUser?.user_metadata?.terms_accepted_at || '',
   termsVersion: profile?.termsVersion || profile?.terms_version || authUser?.user_metadata?.terms_version || '',
+  emailVerified: Boolean(
+    profile?.emailVerified
+    ?? profile?.email_verified
+    ?? authUser?.user_metadata?.email_verified
+    ?? authUser?.email_confirmed_at
+  ),
+  emailVerifiedAt: profile?.emailVerifiedAt || profile?.email_verified_at || authUser?.user_metadata?.email_verified_at || authUser?.email_confirmed_at || '',
+  lastLoginAt: profile?.lastLoginAt || profile?.last_login_at || '',
   createdAt: profile?.createdAt || profile?.created_at || authUser?.created_at || '',
 });
 
@@ -255,26 +284,78 @@ export const AuthProvider = ({ children }) => {
     };
   }, [fetchStaffAccounts, refreshProfile]);
 
-  const resolveLoginEmail = useCallback(async (identifier, allowedRoles = []) => {
+  const resolveLoginAccount = useCallback(async (identifier, allowedRoles = [], options = {}) => {
     const response = await apiRequest('/api/auth/resolve-login', {
       method: 'POST',
       body: JSON.stringify({
         identifier,
         ...(allowedRoles.length ? { allowed_roles: allowedRoles } : {}),
+        ...(options.captchaId ? { captcha_id: options.captchaId } : {}),
+        ...(options.captchaAnswer ? { captcha_answer: options.captchaAnswer } : {}),
+        ...(Object.prototype.hasOwnProperty.call(options, 'captchaRequired')
+          ? { captcha_required: options.captchaRequired }
+          : {}),
+        ...(options.allowLocked ? { allow_locked: true } : {}),
       }),
     });
 
-    return response.email;
+    return response;
   }, []);
 
-  const signInWithRole = useCallback(async (identifier, password, allowedRoles, options = {}) => {
-    if (!isSupabaseConfigured || !supabase) {
-      return { success: false, message: 'Supabase is not configured yet. Add your frontend env keys first.' };
+  const resolveLoginEmail = useCallback(async (identifier, allowedRoles = [], options = {}) => {
+    const account = await resolveLoginAccount(identifier, allowedRoles, options);
+    return account.email;
+  }, [resolveLoginAccount]);
+
+  const recordFailedLogin = useCallback(async (identifier) => {
+    try {
+      await apiRequest('/api/auth/login/failed', {
+        method: 'POST',
+        body: JSON.stringify({ identifier }),
+      });
+    } catch (error) {
+      console.warn('Failed to record login attempt:', error);
     }
+  }, []);
+
+  const recordSuccessfulLogin = useCallback(async (accessToken) => {
+    try {
+      await apiRequest('/api/auth/login/success', {
+        method: 'POST',
+      }, {
+        auth: true,
+        accessToken,
+      });
+    } catch (error) {
+      console.warn('Failed to record successful login:', error);
+    }
+  }, []);
+
+  const loginUser = useCallback(async (identifier, password, options = {}) => {
+    if (!isSupabaseConfigured || !supabase) {
+      return { success: false, message: new ApiError('', 503).message };
+    }
+
+    const normalizedIdentifier = String(identifier || '').trim().toLowerCase();
 
     try {
       const rememberMe = options.rememberMe ?? true;
-      const email = await resolveLoginEmail(identifier, allowedRoles);
+      const account = await resolveLoginAccount(normalizedIdentifier, options.allowedRoles || [], {
+        captchaId: options.captchaId,
+        captchaAnswer: options.captchaAnswer,
+        captchaRequired: options.captchaRequired,
+      });
+      const email = String(account.email || '').trim().toLowerCase();
+
+      if (account.role === 'customer' && !account.emailVerified) {
+        return {
+          success: false,
+          requiresVerification: true,
+          email,
+          message: 'Please click the verification link sent to your email before logging in.',
+        };
+      }
+
       setRememberMePreference(rememberMe);
       const { data, error } = await supabase.auth.signInWithPassword({
         email,
@@ -282,12 +363,13 @@ export const AuthProvider = ({ children }) => {
       });
 
       if (error) {
+        await recordFailedLogin(normalizedIdentifier);
         if (/email not confirmed/i.test(error.message || '')) {
           return {
             success: false,
             requiresVerification: true,
             email,
-            message: 'Please enter the 6-digit verification code sent to your email before logging in.',
+            message: 'Please click the verification link sent to your email before logging in.',
           };
         }
 
@@ -295,31 +377,40 @@ export const AuthProvider = ({ children }) => {
       }
 
       const nextProfile = await refreshProfile(data.session);
-      if (!nextProfile || !allowedRoles.includes(nextProfile.role)) {
+      const allowedRoles = options.allowedRoles || [];
+      if (!nextProfile || (allowedRoles.length > 0 && !allowedRoles.includes(nextProfile.role))) {
         await supabase.auth.signOut();
         return { success: false, message: 'This account does not have permission for that login.' };
       }
 
+      await recordSuccessfulLogin(data.session?.access_token);
+
       if (nextProfile.role === 'admin') {
         await fetchStaffAccounts(data.session);
+      } else {
+        setStaffAccounts([]);
       }
 
-      return { success: true, role: nextProfile.role };
+      return {
+        success: true,
+        role: nextProfile.role,
+        redirectTo: getDashboardPathForRole(nextProfile.role),
+      };
     } catch (error) {
       return {
         success: false,
-        message: error instanceof ApiError ? error.message : (error.message || 'Unable to sign in right now.'),
+        message: getAuthErrorMessage(error),
       };
     }
-  }, [fetchStaffAccounts, refreshProfile, resolveLoginEmail]);
+  }, [fetchStaffAccounts, recordFailedLogin, recordSuccessfulLogin, refreshProfile, resolveLoginAccount]);
 
   const loginAdmin = useCallback((identifier, password) => (
-    signInWithRole(identifier, password, ['admin', 'staff'], { rememberMe: true })
-  ), [signInWithRole]);
+    loginUser(identifier, password, { allowedRoles: ['admin', 'staff'], rememberMe: true, captchaRequired: false })
+  ), [loginUser]);
 
   const loginCustomer = useCallback((identifier, password, options = {}) => (
-    signInWithRole(identifier, password, ['customer'], options)
-  ), [signInWithRole]);
+    loginUser(identifier, password, { ...options, allowedRoles: ['customer'], captchaRequired: false })
+  ), [loginUser]);
 
   const registerCustomer = useCallback(async ({
     username,
@@ -331,9 +422,11 @@ export const AuthProvider = ({ children }) => {
     acceptedTerms = false,
     acceptedTermsAt = '',
     termsVersion = TERMS_VERSION,
+    captchaId = '',
+    captchaAnswer = '',
   }) => {
     if (!isSupabaseConfigured || !supabase) {
-      return { success: false, message: 'Supabase is not configured yet. Add your frontend env keys first.' };
+      return { success: false, message: new ApiError('', 503).message };
     }
 
     if (!acceptedTerms) {
@@ -349,7 +442,7 @@ export const AuthProvider = ({ children }) => {
         : parsedAcceptedTermsAt.toISOString();
       const normalizedTermsVersion = String(termsVersion || TERMS_VERSION).trim() || TERMS_VERSION;
 
-      await apiRequest('/api/auth/register', {
+      const registration = await apiRequest('/api/auth/register', {
         method: 'POST',
         body: JSON.stringify({
           username: normalizedUsername,
@@ -361,112 +454,63 @@ export const AuthProvider = ({ children }) => {
           terms_accepted: true,
           terms_accepted_at: normalizedAcceptedTermsAt,
           terms_version: normalizedTermsVersion,
+          captcha_id: captchaId,
+          captcha_answer: captchaAnswer,
         }),
       });
-
-      const { data, error: signInError } = await supabase.auth.signInWithPassword({
-        email: normalizedEmail,
-        password,
-      });
-
-      if (signInError) {
-        return {
-          success: true,
-          email: normalizedEmail,
-          username: normalizedUsername,
-          needsVerification: false,
-          autoLoggedIn: false,
-          message: 'Account created successfully. Please log in with your new account.',
-        };
-      }
-
-      if (data.session) {
-        setSession(data.session);
-        try {
-          await refreshProfile(data.session);
-        } catch (profileError) {
-          console.warn('Created account, but profile sync will finish after sign-in settles:', profileError);
-        }
-      }
 
       return {
         success: true,
         email: normalizedEmail,
         username: normalizedUsername,
-        needsVerification: false,
-        autoLoggedIn: true,
+        needsVerification: Boolean(registration?.needsVerification ?? true),
+        autoLoggedIn: false,
+        message: registration?.message || '',
+        resendCooldownSeconds: Number(registration?.resendCooldownSeconds) || 35,
       };
     } catch (error) {
-      return {
-        success: false,
-        message: error instanceof ApiError ? error.message : (error.message || 'Unable to create the account right now.'),
-      };
+      return { success: false, message: getAuthErrorMessage(error) };
     }
-  }, [refreshProfile]);
+  }, []);
 
-  const verifyCustomerSignupCode = useCallback(async (email, token) => {
+  const resendCustomerSignupLink = useCallback(async (email) => {
     if (!isSupabaseConfigured || !supabase) {
-      return { success: false, message: 'Supabase is not configured yet. Add your frontend env keys first.' };
+      return { success: false, message: new ApiError('', 503).message };
     }
 
     try {
-      const { data, error } = await supabase.auth.verifyOtp({
-        email: String(email || '').trim().toLowerCase(),
-        token: String(token || '').trim(),
-        type: 'signup',
+      const result = await apiRequest('/api/auth/register/resend-link', {
+        method: 'POST',
+        body: JSON.stringify({
+          email: String(email || '').trim().toLowerCase(),
+        }),
       });
 
-      if (error) {
-        throw error;
-      }
-
-      const nextProfile = await refreshProfile(data.session);
       return {
         success: true,
-        profile: nextProfile,
+        resendCooldownSeconds: Number(result?.resendCooldownSeconds) || 35,
       };
     } catch (error) {
       return {
         success: false,
-        message: error instanceof ApiError ? error.message : (error.message || 'Unable to verify the code right now.'),
-      };
-    }
-  }, [refreshProfile]);
-
-  const resendCustomerSignupCode = useCallback(async (email) => {
-    if (!isSupabaseConfigured || !supabase) {
-      return { success: false, message: 'Supabase is not configured yet. Add your frontend env keys first.' };
-    }
-
-    try {
-      const { error } = await supabase.auth.resend({
-        type: 'signup',
-        email: String(email || '').trim().toLowerCase(),
-        options: {
-          emailRedirectTo: appUrl('login'),
-        },
-      });
-
-      if (error) {
-        throw error;
-      }
-
-      return { success: true };
-    } catch (error) {
-      return {
-        success: false,
-        message: error instanceof ApiError ? error.message : (error.message || 'Unable to resend the code right now.'),
+        message: getAuthErrorMessage(error),
+        cooldownSeconds: error instanceof ApiError ? error.details?.cooldownSeconds : undefined,
       };
     }
   }, []);
 
-  const requestPasswordReset = useCallback(async (identifier) => {
+  const requestPasswordReset = useCallback(async (identifier, options = {}) => {
     if (!isSupabaseConfigured || !supabase) {
-      return { success: false, message: 'Supabase is not configured yet. Add your frontend env keys first.' };
+      return { success: false, message: new ApiError('', 503).message };
     }
 
     try {
-      const email = await resolveLoginEmail(identifier, ['customer']);
+      const email = await resolveLoginEmail(identifier, [], {
+        captchaId: options.captchaId,
+        captchaAnswer: options.captchaAnswer,
+        captchaRequired: options.captchaRequired,
+        allowLocked: true,
+      });
       const { error } = await supabase.auth.resetPasswordForEmail(email, {
         redirectTo: appUrl('login'),
       });
@@ -477,10 +521,7 @@ export const AuthProvider = ({ children }) => {
 
       return { success: true, email };
     } catch (error) {
-      return {
-        success: false,
-        message: error instanceof ApiError ? error.message : (error.message || 'Unable to send the recovery email right now.'),
-      };
+      return { success: false, message: getAuthErrorMessage(error) };
     }
   }, [resolveLoginEmail]);
 
@@ -501,7 +542,7 @@ export const AuthProvider = ({ children }) => {
     } catch (error) {
       return {
         success: false,
-        message: error instanceof ApiError ? error.message : (error.message || 'Unable to verify the admin reset code right now.'),
+        message: getAuthErrorMessage(error),
       };
     }
   }, []);
@@ -524,14 +565,14 @@ export const AuthProvider = ({ children }) => {
     } catch (error) {
       return {
         success: false,
-        message: error instanceof ApiError ? error.message : (error.message || 'Unable to reset the admin password right now.'),
+        message: getAuthErrorMessage(error),
       };
     }
   }, []);
 
   const verifyPasswordRecoveryCode = useCallback(async (email, token) => {
     if (!isSupabaseConfigured || !supabase) {
-      return { success: false, message: 'Supabase is not configured yet. Add your frontend env keys first.' };
+      return { success: false, message: new ApiError('', 503).message };
     }
 
     try {
@@ -551,24 +592,29 @@ export const AuthProvider = ({ children }) => {
     } catch (error) {
       return {
         success: false,
-        message: error instanceof ApiError ? error.message : (error.message || 'Unable to verify the recovery code right now.'),
+        message: getAuthErrorMessage(error),
       };
     }
   }, []);
 
   const completePasswordRecovery = useCallback(async (password) => {
     if (!isSupabaseConfigured || !supabase) {
-      return { success: false, message: 'Supabase is not configured yet. Add your frontend env keys first.' };
+      return { success: false, message: new ApiError('', 503).message };
     }
 
     try {
-      const { error } = await supabase.auth.updateUser({
-        password,
-      });
-
-      if (error) {
-        throw error;
+      const { data, error: sessionError } = await supabase.auth.getSession();
+      if (sessionError) {
+        throw sessionError;
       }
+
+      await apiRequest('/api/auth/password/change', {
+        method: 'POST',
+        body: JSON.stringify({ password }),
+      }, {
+        auth: true,
+        accessToken: data.session?.access_token,
+      });
 
       writePasswordRecoveryFlag(false);
       setIsPasswordRecovery(false);
@@ -577,7 +623,7 @@ export const AuthProvider = ({ children }) => {
     } catch (error) {
       return {
         success: false,
-        message: error instanceof ApiError ? error.message : (error.message || 'Unable to update the password right now.'),
+        message: getAuthErrorMessage(error),
       };
     }
   }, []);
@@ -609,6 +655,14 @@ export const AuthProvider = ({ children }) => {
   const updateLoggedInCustomer = useCallback((updates) => (
     updateMyProfile(updates)
   ), [updateMyProfile]);
+
+  const updateProfileFromSavedAddress = useCallback((address) => {
+    setProfile((current) => current ? {
+      ...current,
+      address: address?.formattedAddress || '',
+      phoneNumber: address?.phoneNumber || '',
+    } : current);
+  }, []);
 
   const createStaffAccount = useCallback(async (staffData) => {
     if (!session?.access_token) {
@@ -706,6 +760,33 @@ export const AuthProvider = ({ children }) => {
     setStaffAccounts([]);
   }, []);
 
+  useEffect(() => {
+    if (!session?.access_token) {
+      return undefined;
+    }
+
+    let timeoutId;
+    const resetTimer = () => {
+      window.clearTimeout(timeoutId);
+      timeoutId = window.setTimeout(() => {
+        logout();
+      }, SESSION_TIMEOUT_MS);
+    };
+    const activityEvents = ['click', 'keydown', 'mousemove', 'scroll', 'touchstart'];
+
+    resetTimer();
+    activityEvents.forEach((eventName) => {
+      window.addEventListener(eventName, resetTimer, { passive: true });
+    });
+
+    return () => {
+      window.clearTimeout(timeoutId);
+      activityEvents.forEach((eventName) => {
+        window.removeEventListener(eventName, resetTimer);
+      });
+    };
+  }, [logout, session?.access_token]);
+
   const userRole = profile?.role || 'customer';
   const isAdmin = userRole === 'admin' || userRole === 'staff';
   const loggedInCustomer = profile && userRole === 'customer'
@@ -717,6 +798,7 @@ export const AuthProvider = ({ children }) => {
         address: profile.address,
         phoneNumber: profile.phoneNumber,
         avatarUrl: profile.avatarUrl,
+        emailVerified: profile.emailVerified,
       }
     : null;
 
@@ -730,11 +812,11 @@ export const AuthProvider = ({ children }) => {
         userRole,
         staffAccounts,
         loggedInCustomer,
+        loginUser,
         loginAdmin,
         loginCustomer,
         registerCustomer,
-        verifyCustomerSignupCode,
-        resendCustomerSignupCode,
+        resendCustomerSignupLink,
         requestPasswordReset,
         verifyAdminResetCode,
         resetAdminPasswordWithCode,
@@ -742,6 +824,7 @@ export const AuthProvider = ({ children }) => {
         completePasswordRecovery,
         updateMyProfile,
         updateLoggedInCustomer,
+        updateProfileFromSavedAddress,
         logout,
         createStaffAccount,
         updateStaffAccount,

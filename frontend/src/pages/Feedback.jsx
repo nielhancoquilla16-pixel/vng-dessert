@@ -1,10 +1,9 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { CheckCircle2, MessageSquareText, Star } from 'lucide-react';
 import { apiRequest } from '../lib/api';
+import { formatCurrency } from '../utils/currency';
 import './Feedback.css';
-
-const formatCurrency = (value) => `PHP ${Number(value || 0).toFixed(2)}`;
 
 const formatDateTime = (value) => {
   const parsed = new Date(value || '');
@@ -19,10 +18,37 @@ const formatDateTime = (value) => {
       });
 };
 
+const ratingLabels = ['', 'Needs attention', 'Could be better', 'Okay', 'Good', 'Excellent'];
+
+const FeedbackRating = ({ label, value, onChange }) => (
+  <fieldset className="feedback-rating-block">
+    <legend>{label}</legend>
+    <div className="feedback-stars" aria-label={label}>
+      {[1, 2, 3, 4, 5].map((star) => (
+        <button
+          key={star}
+          type="button"
+          className={star <= value ? 'is-selected' : ''}
+          aria-label={`${star} star${star === 1 ? '' : 's'}`}
+          onClick={() => onChange(star)}
+        >
+          <Star size={30} fill="currentColor" />
+        </button>
+      ))}
+    </div>
+    <span className="feedback-rating-label">{ratingLabels[value] || 'Choose a rating'}</span>
+  </fieldset>
+);
+
 const Feedback = () => {
   const { token } = useParams();
   const [payload, setPayload] = useState(null);
-  const [rating, setRating] = useState(0);
+  const [ratings, setRatings] = useState({
+    overall: 0,
+    product: 0,
+    service: 0,
+    fulfillment: 0,
+  });
   const [comment, setComment] = useState('');
   const [customerName, setCustomerName] = useState('');
   const [isAnonymous, setIsAnonymous] = useState(true);
@@ -41,6 +67,7 @@ const Feedback = () => {
         const result = await apiRequest(`/api/feedback/${encodeURIComponent(token || '')}`);
         if (isActive) {
           setPayload(result);
+          setCustomerName((current) => current || result?.order?.customer || '');
         }
       } catch (loadError) {
         if (isActive) {
@@ -61,21 +88,22 @@ const Feedback = () => {
 
   const order = payload?.order || null;
   const items = Array.isArray(order?.items) ? order.items : [];
-  const canSubmit = payload?.feedbackEnabled && rating >= 1 && !isSubmitting && !success;
-  const ratingLabel = useMemo(() => {
-    if (rating >= 5) return 'Excellent';
-    if (rating === 4) return 'Good';
-    if (rating === 3) return 'Okay';
-    if (rating === 2) return 'Could be better';
-    if (rating === 1) return 'Needs attention';
-    return 'Tap a star';
-  }, [rating]);
+  const hasAllRatings = Object.values(ratings).every((rating) => rating >= 1);
+  const canSubmit = payload?.feedbackEnabled && hasAllRatings && !isSubmitting && !success;
+  const fulfillmentLabel = String(order?.deliveryMethod || '').toLowerCase() === 'delivery'
+    ? 'Delivery experience'
+    : 'Pickup experience';
+
+  const setRating = (field, value) => {
+    setRatings((current) => ({ ...current, [field]: value }));
+    setError('');
+  };
 
   const submitFeedback = async (event) => {
     event.preventDefault();
 
-    if (!rating) {
-      setError('Please choose a star rating.');
+    if (!hasAllRatings) {
+      setError('Please choose a rating for each section.');
       return;
     }
 
@@ -86,13 +114,22 @@ const Feedback = () => {
       await apiRequest(`/api/feedback/${encodeURIComponent(token || '')}`, {
         method: 'POST',
         body: JSON.stringify({
-          rating,
+          rating: ratings.overall,
+          productRating: ratings.product,
+          serviceRating: ratings.service,
+          fulfillmentRating: ratings.fulfillment,
           comment,
           customerName,
           isAnonymous,
         }),
       });
       setSuccess(true);
+      setPayload((current) => ({
+        ...current,
+        feedbackEnabled: false,
+        feedbackSubmitted: true,
+        invalidReason: 'Thank you. Feedback has already been submitted for this order.',
+      }));
     } catch (submitError) {
       setError(submitError.message || 'Unable to submit feedback right now.');
     } finally {
@@ -130,17 +167,19 @@ const Feedback = () => {
             <h1>{order?.displayId || order?.orderCode || 'Your Order'}</h1>
             <p>{formatDateTime(order?.transactionAt || order?.createdAt)}</p>
           </div>
-          <div className="feedback-status-chip">{payload.feedbackEnabled ? 'Open' : 'Disabled'}</div>
+          <div className={`feedback-status-chip ${payload?.feedbackEnabled ? '' : 'is-disabled'}`}>
+            {payload?.feedbackSubmitted ? 'Submitted' : (payload?.feedbackEnabled ? 'Open' : 'Unavailable')}
+          </div>
         </header>
 
         <div className="feedback-order-panel">
           <div>
-            <span>Purchased items</span>
-            <strong>{items.length} item{items.length === 1 ? '' : 's'}</strong>
+            <span>Receipt / Order ID</span>
+            <strong>{order?.displayId || order?.orderCode || 'Not available'}</strong>
           </div>
           <div>
             <span>Total</span>
-            <strong>{order?.total || formatCurrency(order?.totalAmount)}</strong>
+            <strong>{formatCurrency(order?.total || order?.totalAmount)}</strong>
           </div>
         </div>
 
@@ -158,35 +197,17 @@ const Feedback = () => {
           </div>
         )}
 
-        {!payload.feedbackEnabled ? (
-          <div className="feedback-disabled">
-            {payload.invalidReason || 'Feedback is not available for this order.'}
-          </div>
-        ) : success ? (
-          <div className="feedback-success">
-            <CheckCircle2 size={38} />
-            <h2>Thank you</h2>
-            <p>Your feedback was submitted and linked to this order.</p>
+        {!payload?.feedbackEnabled ? (
+          <div className={payload?.feedbackSubmitted || success ? 'feedback-success feedback-success--compact' : 'feedback-disabled'}>
+            {payload?.feedbackSubmitted || success ? <CheckCircle2 size={30} /> : <MessageSquareText size={28} />}
+            <span>{payload?.invalidReason || 'Feedback is not available for this order.'}</span>
           </div>
         ) : (
           <form className="feedback-form" onSubmit={submitFeedback}>
-            <div className="feedback-rating-block">
-              <span>Rate your experience</span>
-              <div className="feedback-stars" aria-label="Rating">
-                {[1, 2, 3, 4, 5].map((value) => (
-                  <button
-                    key={value}
-                    type="button"
-                    className={value <= rating ? 'is-selected' : ''}
-                    aria-label={`${value} star${value === 1 ? '' : 's'}`}
-                    onClick={() => setRating(value)}
-                  >
-                    <Star size={32} fill="currentColor" />
-                  </button>
-                ))}
-              </div>
-              <strong>{ratingLabel}</strong>
-            </div>
+            <FeedbackRating label="Overall rating" value={ratings.overall} onChange={(value) => setRating('overall', value)} />
+            <FeedbackRating label="Product quality" value={ratings.product} onChange={(value) => setRating('product', value)} />
+            <FeedbackRating label="Service" value={ratings.service} onChange={(value) => setRating('service', value)} />
+            <FeedbackRating label={fulfillmentLabel} value={ratings.fulfillment} onChange={(value) => setRating('fulfillment', value)} />
 
             <label className="feedback-field">
               <span>Comments or suggestions</span>

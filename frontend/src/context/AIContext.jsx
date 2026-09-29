@@ -1,10 +1,12 @@
 /* eslint-disable react-refresh/only-export-components */
-import React, { createContext, useContext, useState, useCallback } from 'react';
+import React, { createContext, useContext, useState, useCallback, useEffect, useRef } from 'react';
 import { useProducts } from './ProductContext';
+import { useShopSettings } from './ShopSettingsContext';
 import { apiRequest } from '../lib/api';
 
 const AIContext = createContext();
 const AI_REQUEST_TIMEOUT_MS = 12000;
+const OPERATING_HOURS_QUESTION = /\b(hours?|open(?:ing)?|clos(?:e[ds]?|ing)|schedule)\b|\b(?:shop|store|business|operating)\s+time\b|\buntil when\b.*\border\b/i;
 const CAPITALS = {
   australia: 'Canberra',
   canada: 'Ottawa',
@@ -130,11 +132,24 @@ export const useAI = () => {
 
 export const AIProvider = ({ children }) => {
   const { products } = useProducts();
+  const { shopSettings, operatingHoursLabel, isShopOpen, isShopSettingsLoading, shopSettingsError } = useShopSettings();
+  const currentShopHours = useRef({ shopSettings, operatingHoursLabel, isShopOpen, isShopSettingsLoading, shopSettingsError });
   const [recommendations] = useState([]);
 
+  // A request may fail after the administrator changes the schedule. Read the
+  // current provider values when creating its fallback, not its starting values.
+  useEffect(() => {
+    currentShopHours.current = { shopSettings, operatingHoursLabel, isShopOpen, isShopSettingsLoading, shopSettingsError };
+  }, [shopSettings, operatingHoursLabel, isShopOpen, isShopSettingsLoading, shopSettingsError]);
+
   const buildMenuContext = useCallback(() => {
-    const activeProducts = products.filter((p) => (!p.type || p.type === 'product') && p.stock > 0);
-    return activeProducts.map((p) => `${p.name} (PHP ${p.price})`).join(', ');
+    const activeProducts = products.filter((p) => (
+      (!p.type || p.type === 'product')
+      && p.stock > 0
+      && p.availability !== 'hidden'
+      && p.expiryStatus !== 'expired'
+    ));
+    return activeProducts.map((p) => `${p.name} (PHP ${p.price}; expires ${p.expiryDisplay || 'not recorded'})`).join(', ');
   }, [products]);
 
   const createFallbackReply = useCallback((question, product = null) => {
@@ -145,13 +160,21 @@ export const AIProvider = ({ children }) => {
     const liveDataReply = getLiveDataReply(text);
     const sensitiveAdviceReply = getSensitiveAdviceReply(text);
     const storeProducts = products.filter((p) => !p.type || p.type === 'product');
-    const activeProducts = storeProducts.filter((p) => p.stock > 0);
+    const activeProducts = storeProducts.filter((p) => p.stock > 0 && p.availability !== 'hidden' && p.expiryStatus !== 'expired');
     const featuredProduct = product || activeProducts[0] || storeProducts[0];
     const matchingProduct = storeProducts.find((p) => text.includes(p.name.toLowerCase()));
     const targetProduct = matchingProduct || featuredProduct;
 
     if (!text.trim()) {
       return 'Ask me about our desserts, prices, location, hours, delivery, or payment options.';
+    }
+
+    if (OPERATING_HOURS_QUESTION.test(text)) {
+      const current = currentShopHours.current;
+      if (current.isShopSettingsLoading || current.shopSettingsError || !current.shopSettings?.openingTime || !current.shopSettings?.closingTime) {
+        return "I cannot confirm the shop's current operating hours right now. Please check the shop information again shortly or contact the shop.";
+      }
+      return `Our daily operating hours are ${current.operatingHoursLabel} (Philippine time). The shop is currently ${current.isShopOpen ? 'open' : 'closed'}.`;
     }
 
     if (/(^|\b)(hi|hello|hey|yo|good morning|good afternoon|good evening)\b/.test(text)) {
@@ -216,10 +239,6 @@ export const AIProvider = ({ children }) => {
       return 'We are located in Monark Subdivision, Las Pinas, Philippines.';
     }
 
-    if (/(hour|open|close|time|schedule)/.test(text)) {
-      return 'Our hours are Monday to Saturday, 8:00 AM to 8:00 PM, and Sunday, 9:00 AM to 6:00 PM.';
-    }
-
     if (/(phone|contact|call|email)/.test(text)) {
       return 'You can reach V&G at 0977 385 4909 or vnglecheflan0824@gmail.com.';
     }
@@ -270,6 +289,16 @@ export const AIProvider = ({ children }) => {
 
     if (targetProduct && /(price|cost|how much)/.test(text)) {
       return `${targetProduct.name} is currently PHP ${targetProduct.price}.`;
+    }
+
+    if (targetProduct && /(expiry|expire|expiration|best before|fresh until)/.test(text)) {
+      if (targetProduct.expiryStatus === 'expired') {
+        return `${targetProduct.name} has expired and is not available to order.`;
+      }
+
+      return targetProduct.expiryDisplay
+        ? `${targetProduct.name} expires on ${targetProduct.expiryDisplay}.`
+        : `Expiry information for ${targetProduct.name} has not been recorded yet.`;
     }
 
     if (targetProduct && /(stock|available|availability|have)/.test(text)) {

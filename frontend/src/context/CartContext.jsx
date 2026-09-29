@@ -3,7 +3,9 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { apiRequest } from '../lib/api';
 import { useAuth } from './AuthContext';
 import { useProducts } from './ProductContext';
+import { useShopSettings } from './ShopSettingsContext';
 import { resolveAssetUrl } from '../lib/publicUrl';
+import { isWithinOperatingHours } from '../utils/shopHours';
 
 const CartContext = createContext();
 const GUEST_CART_KEY = 'vng_guest_cart';
@@ -13,7 +15,7 @@ const normalizeCartItem = (item) => {
   const stock = Math.max(0, Number(product.stock ?? product.stockQuantity) || 0);
 
   return {
-    cartItemId: item.cartItemId || item.id || '',
+    cartItemId: item.cartItemId || item.cart_item_id || '',
     id: product.id || item.productId || item.product_id,
     productId: product.id || item.productId || item.product_id,
     name: product.name || product.productName || '',
@@ -32,7 +34,9 @@ const normalizeCartItem = (item) => {
 const readGuestCart = () => {
   try {
     const saved = localStorage.getItem(GUEST_CART_KEY);
-    return saved ? JSON.parse(saved).map(normalizeCartItem) : [];
+    return saved
+      ? JSON.parse(saved).map((item) => ({ ...normalizeCartItem(item), cartItemId: '' }))
+      : [];
   } catch {
     return [];
   }
@@ -43,16 +47,20 @@ export const useCart = () => useContext(CartContext);
 export const CartProvider = ({ children }) => {
   const { session, loggedInCustomer, isAuthLoading } = useAuth();
   const { products } = useProducts();
+  const { refreshShopSettings, isShopOpen, isShopSettingsLoading, shopSettingsError } = useShopSettings();
   const [cartItems, setCartItems] = useState(() => readGuestCart());
   const cartItemsRef = useRef(cartItems);
   const mergeAttemptedRef = useRef(false);
   const remoteItemIdsRef = useRef(new Map());
   const remoteSyncQueueRef = useRef(Promise.resolve());
+  const localCartMutationVersionRef = useRef(0);
+  const pendingRemoteSyncsRef = useRef(0);
 
   const isRemoteCart = Boolean(session?.access_token && loggedInCustomer);
 
   const persistGuestCart = useCallback((nextItems) => {
-    localStorage.setItem(GUEST_CART_KEY, JSON.stringify(nextItems));
+    const guestItems = nextItems.map((item) => ({ ...item, cartItemId: '' }));
+    localStorage.setItem(GUEST_CART_KEY, JSON.stringify(guestItems));
   }, []);
 
   const rememberRemoteItemIds = useCallback((items) => {
@@ -73,14 +81,21 @@ export const CartProvider = ({ children }) => {
 
   const commitCartItems = useCallback((nextItems) => {
     cartItemsRef.current = nextItems;
-    rememberRemoteItemIds(nextItems);
+    if (isRemoteCart) {
+      rememberRemoteItemIds(nextItems);
+    }
     setCartItems(nextItems);
     return nextItems;
-  }, [rememberRemoteItemIds]);
+  }, [isRemoteCart, rememberRemoteItemIds]);
+
+  const commitLocalCartItems = useCallback((nextItems) => {
+    localCartMutationVersionRef.current += 1;
+    return commitCartItems(nextItems);
+  }, [commitCartItems]);
 
   const updateCartItems = useCallback((updater) => (
-    commitCartItems(updater(cartItemsRef.current))
-  ), [commitCartItems]);
+    commitLocalCartItems(updater(cartItemsRef.current))
+  ), [commitLocalCartItems]);
 
   const queueRemoteCartSync = useCallback((task) => {
     remoteSyncQueueRef.current = remoteSyncQueueRef.current
@@ -90,12 +105,13 @@ export const CartProvider = ({ children }) => {
     return remoteSyncQueueRef.current;
   }, []);
 
-  const refreshRemoteCart = useCallback(async () => {
+  const refreshRemoteCart = useCallback(async ({ force = false } = {}) => {
     if (!session?.access_token) {
       replaceRemoteItemIds([]);
       return [];
     }
 
+    const mutationVersionAtStart = localCartMutationVersionRef.current;
     const response = await apiRequest('/api/carts/mine', {}, {
       auth: true,
       accessToken: session.access_token,
@@ -103,14 +119,27 @@ export const CartProvider = ({ children }) => {
 
     const mappedItems = (response?.items || []).map(normalizeCartItem);
     replaceRemoteItemIds(mappedItems);
-    commitCartItems(mappedItems);
-    return mappedItems;
+
+    if (
+      force
+      || (
+        mutationVersionAtStart === localCartMutationVersionRef.current
+        && pendingRemoteSyncsRef.current === 0
+      )
+    ) {
+      commitCartItems(mappedItems);
+      return mappedItems;
+    }
+
+    return cartItemsRef.current;
   }, [commitCartItems, replaceRemoteItemIds, session]);
 
   useEffect(() => {
     cartItemsRef.current = cartItems;
-    rememberRemoteItemIds(cartItems);
-  }, [cartItems, rememberRemoteItemIds]);
+    if (isRemoteCart) {
+      rememberRemoteItemIds(cartItems);
+    }
+  }, [cartItems, isRemoteCart, rememberRemoteItemIds]);
 
   useEffect(() => {
     if (isAuthLoading) {
@@ -155,7 +184,7 @@ export const CartProvider = ({ children }) => {
   }, [cartItems, isAuthLoading, isRemoteCart, persistGuestCart]);
 
   useEffect(() => {
-    if (!isRemoteCart || mergeAttemptedRef.current) {
+    if (!isRemoteCart || mergeAttemptedRef.current || !isShopOpen || isShopSettingsLoading || shopSettingsError) {
       return;
     }
 
@@ -197,10 +226,12 @@ export const CartProvider = ({ children }) => {
     return () => {
       isActive = false;
     };
-  }, [isRemoteCart, refreshRemoteCart, session]);
+  }, [isRemoteCart, isShopOpen, isShopSettingsLoading, shopSettingsError, refreshRemoteCart, session]);
 
-  const syncRemoteQuantity = useCallback((productId, nextQuantity) => (
-    queueRemoteCartSync(async () => {
+  const syncRemoteQuantity = useCallback((productId, nextQuantity) => {
+    pendingRemoteSyncsRef.current += 1;
+
+    return queueRemoteCartSync(async () => {
       try {
         const remoteItemId = remoteItemIdsRef.current.get(productId);
 
@@ -209,12 +240,18 @@ export const CartProvider = ({ children }) => {
             return;
           }
 
-          await apiRequest(`/api/carts/mine/items/${remoteItemId}`, {
-            method: 'DELETE',
-          }, {
-            auth: true,
-            accessToken: session?.access_token,
-          });
+          try {
+            await apiRequest(`/api/carts/mine/items/${remoteItemId}`, {
+              method: 'DELETE',
+            }, {
+              auth: true,
+              accessToken: session?.access_token,
+            });
+          } catch (error) {
+            // A successful checkout already removes these rows on the server.
+            // Treat an already-absent item as removed; keep other errors visible.
+            if (error.status !== 404) throw error;
+          }
           remoteItemIdsRef.current.delete(productId);
           return;
         }
@@ -235,7 +272,11 @@ export const CartProvider = ({ children }) => {
             remoteItemIdsRef.current.set(productId, createdItem.id);
             updateCartItems((prev) => prev.map((item) => (
               item.id === productId
-                ? { ...item, cartItemId: item.cartItemId || createdItem.id }
+                ? {
+                    ...item,
+                    cartItemId: item.cartItemId || createdItem.id,
+                    quantity: Math.max(item.quantity, Number(createdItem.quantity) || item.quantity),
+                  }
                 : item
             )));
           }
@@ -253,24 +294,52 @@ export const CartProvider = ({ children }) => {
         console.error('Failed to sync cart item:', error);
 
         try {
-          await refreshRemoteCart();
+          await refreshRemoteCart({ force: true });
         } catch (refreshError) {
           console.error('Failed to refresh cart after sync error:', refreshError);
         }
+        throw error;
+      } finally {
+        pendingRemoteSyncsRef.current = Math.max(0, pendingRemoteSyncsRef.current - 1);
       }
-    })
-  ), [queueRemoteCartSync, refreshRemoteCart, session, updateCartItems]);
+    });
+  }, [queueRemoteCartSync, refreshRemoteCart, session, updateCartItems]);
+
+  const assertShopIsOpen = useCallback(async () => {
+    let latestSettings;
+    try {
+      latestSettings = await refreshShopSettings();
+    } catch {
+      throw new Error('Unable to confirm shop hours. Please try again shortly.');
+    }
+    const referenceTime = latestSettings.serverTime ? new Date(latestSettings.serverTime) : undefined;
+    if (!isWithinOperatingHours(latestSettings, referenceTime)) {
+      throw new Error('The shop is closed for orders. Your existing cart is saved for later.');
+    }
+  }, [refreshShopSettings]);
 
   const addToCart = useCallback(async (product, quantity = 1) => {
-    const normalizedProduct = normalizeCartItem({ ...product, quantity });
+    await assertShopIsOpen();
+    const requestedQuantity = Math.max(1, Number(quantity) || 1);
+    const currentProduct = products.find((item) => String(item.id) === String(product.id)) || product;
+    const normalizedProduct = normalizeCartItem({ ...currentProduct, quantity: requestedQuantity });
     const maxStock = Math.max(0, Number(normalizedProduct.stock) || 0);
 
+    if (
+      normalizedProduct.availability === 'expired'
+      || normalizedProduct.availability === 'hidden'
+      || currentProduct?.expiryStatus === 'expired'
+      || currentProduct?.isExpired
+    ) {
+      throw new Error('This product is no longer available to order.');
+    }
+
     if (maxStock === 0) {
-      return;
+      throw new Error('This product is out of stock.');
     }
 
     const existingItem = cartItemsRef.current.find((item) => item.id === normalizedProduct.id);
-    const nextQuantity = Math.min((existingItem?.quantity || 0) + quantity, maxStock);
+    const nextQuantity = Math.min((existingItem?.quantity || 0) + requestedQuantity, maxStock);
 
     if (isRemoteCart) {
       updateCartItems((prev) => {
@@ -283,7 +352,7 @@ export const CartProvider = ({ children }) => {
           ));
         }
 
-        return [...prev, { ...normalizedProduct, quantity: Math.min(quantity, maxStock) }];
+        return [...prev, { ...normalizedProduct, quantity: Math.min(requestedQuantity, maxStock) }];
       });
       await syncRemoteQuantity(normalizedProduct.id, nextQuantity);
       return;
@@ -299,9 +368,9 @@ export const CartProvider = ({ children }) => {
         ));
       }
 
-      return [...prev, { ...normalizedProduct, quantity: Math.min(quantity, maxStock) }];
+      return [...prev, { ...normalizedProduct, quantity: Math.min(requestedQuantity, maxStock) }];
     });
-  }, [isRemoteCart, syncRemoteQuantity, updateCartItems]);
+  }, [assertShopIsOpen, isRemoteCart, products, syncRemoteQuantity, updateCartItems]);
 
   const removeFromCart = useCallback(async (id) => {
     if (isRemoteCart) {
@@ -326,7 +395,24 @@ export const CartProvider = ({ children }) => {
     }
 
     const liveItem = cartItemsRef.current.find((item) => item.id === id);
-    const maxStock = Math.max(1, Number(liveItem?.stock) || quantity);
+    if (!liveItem) return;
+    const currentProduct = products.find((item) => String(item.id) === String(id)) || liveItem;
+    const isIncreasing = quantity > liveItem.quantity;
+    if (isIncreasing) {
+      await assertShopIsOpen();
+      if (
+        currentProduct.availability === 'expired'
+        || currentProduct.availability === 'hidden'
+        || currentProduct.expiryStatus === 'expired'
+        || currentProduct.isExpired
+      ) {
+        throw new Error('This product is no longer available to order.');
+      }
+      if (Number(currentProduct.stock) <= liveItem.quantity) {
+        throw new Error('There is no more stock available for this product.');
+      }
+    }
+    const maxStock = Math.max(1, Number(currentProduct.stock) || liveItem.quantity);
     const nextQuantity = Math.min(quantity, maxStock);
 
     if (isRemoteCart) {
@@ -340,18 +426,18 @@ export const CartProvider = ({ children }) => {
     updateCartItems((prev) => prev.map((item) => (
       item.id === id ? { ...item, quantity: nextQuantity } : item
     )));
-  }, [isRemoteCart, syncRemoteQuantity, updateCartItems]);
+  }, [assertShopIsOpen, isRemoteCart, products, syncRemoteQuantity, updateCartItems]);
 
   const clearCart = useCallback(async () => {
     if (isRemoteCart) {
       const productIds = cartItemsRef.current.map((item) => item.id);
-      commitCartItems([]);
+      commitLocalCartItems([]);
       await Promise.all(productIds.map((productId) => syncRemoteQuantity(productId, 0)));
       return;
     }
 
-    commitCartItems([]);
-  }, [commitCartItems, isRemoteCart, syncRemoteQuantity]);
+    commitLocalCartItems([]);
+  }, [commitLocalCartItems, isRemoteCart, syncRemoteQuantity]);
 
   useEffect(() => {
     if (!products.length) {
@@ -359,7 +445,7 @@ export const CartProvider = ({ children }) => {
     }
 
     const timer = window.setTimeout(() => {
-      updateCartItems((prev) => prev
+      commitCartItems(cartItemsRef.current
         .map((item) => {
           const liveProduct = products.find((product) => product.id === item.id);
           if (!liveProduct) {
@@ -367,7 +453,7 @@ export const CartProvider = ({ children }) => {
           }
 
           const liveStock = Math.max(0, Number(liveProduct.stock) || 0);
-          if (liveStock === 0) {
+          if (liveStock === 0 || liveProduct.availability === 'expired' || liveProduct.availability === 'hidden') {
             return null;
           }
 
@@ -382,7 +468,7 @@ export const CartProvider = ({ children }) => {
     }, 0);
 
     return () => window.clearTimeout(timer);
-  }, [products, updateCartItems]);
+  }, [commitCartItems, products]);
 
   const cartTotal = useMemo(() => (
     cartItems.reduce((total, item) => total + (item.price * item.quantity), 0)

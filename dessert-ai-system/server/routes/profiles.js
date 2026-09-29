@@ -8,6 +8,15 @@ import {
   removeManagedProfileImage,
   resolveProfileImageValue,
 } from "../lib/profileImages.js";
+import { validatePasswordPolicy } from "../lib/passwordPolicy.js";
+import { getPhoneNumberValidationMessage } from "../lib/phoneNumber.js";
+import { writeAuditLog } from "../lib/auditLog.js";
+import {
+  getCustomerAddressValidationError,
+  mapCustomerAddress,
+  normalizeCustomerAddressInput,
+  syncProfileDefaultAddress,
+} from "../lib/customerAddresses.js";
 
 const router = express.Router();
 
@@ -18,6 +27,16 @@ const normalizeOptionalValue = (value = "") => {
 };
 
 const getRequestBaseUrl = (req) => `${req.protocol}://${req.get("host")}`;
+const ACTIVE_ADDRESS_ORDER_STATUSES = new Set([
+  "pending",
+  "confirmed",
+  "preparing",
+  "ready",
+  "out-for-delivery",
+  "processing",
+  "received",
+  "delivered",
+]);
 
 const mapProfile = (row, authUser = null) => ({
   id: row.id,
@@ -31,6 +50,9 @@ const mapProfile = (row, authUser = null) => ({
   termsAccepted: Boolean(row.terms_accepted ?? authUser?.user_metadata?.terms_accepted),
   termsAcceptedAt: row.terms_accepted_at || authUser?.user_metadata?.terms_accepted_at || null,
   termsVersion: row.terms_version || authUser?.user_metadata?.terms_version || null,
+  emailVerified: Boolean(row.email_verified || authUser?.email_confirmed_at),
+  emailVerifiedAt: row.email_verified_at || authUser?.email_confirmed_at || null,
+  lastLoginAt: row.last_login_at || null,
   createdAt: row.created_at,
 });
 
@@ -93,6 +115,8 @@ router.get("/me", requireAuth, async (req, res, next) => {
           terms_accepted: Boolean(req.authUser.user_metadata?.terms_accepted),
           terms_accepted_at: req.authUser.user_metadata?.terms_accepted_at || null,
           terms_version: req.authUser.user_metadata?.terms_version || null,
+          email_verified: Boolean(authUser?.email_confirmed_at || req.authUser.email_confirmed_at),
+          email_verified_at: authUser?.email_confirmed_at || req.authUser.email_confirmed_at || null,
         })
         .select("*")
         .single();
@@ -112,6 +136,15 @@ router.get("/me", requireAuth, async (req, res, next) => {
 
 router.put("/me", requireAuth, async (req, res, next) => {
   try {
+    const profileRole = req.profile?.role || "customer";
+    if (profileRole === "customer") {
+      const currentPhoneNumber = req.body.phone_number ?? req.profile?.phone_number ?? "";
+      const phoneNumberError = getPhoneNumberValidationMessage(currentPhoneNumber);
+      if (phoneNumberError) {
+        return res.status(400).json({ error: phoneNumberError });
+      }
+    }
+
     const supabase = getSupabaseAdmin();
     const currentAuthUser = await getAuthUserById(supabase, req.authUser.id);
     const currentAvatarUrl = getProfileAvatarUrl(currentAuthUser || req.authUser);
@@ -162,6 +195,24 @@ router.put("/me", requireAuth, async (req, res, next) => {
       throw error;
     }
 
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, "address")) {
+      try {
+        await syncProfileDefaultAddress(supabase, data);
+      } catch (addressError) {
+        // Keep a failed address save retryable without reporting success.
+        let restoreQuery = supabase
+          .from("profiles")
+          .update({ address: req.profile?.address || null })
+          .eq("id", req.authUser.id);
+        restoreQuery = updates.address == null
+          ? restoreQuery.is("address", null)
+          : restoreQuery.eq("address", updates.address);
+        const { error: restoreError } = await restoreQuery;
+        if (restoreError) console.error("Unable to restore profile address:", restoreError);
+        throw addressError;
+      }
+    }
+
     const updatedAuthUser = await getAuthUserById(supabase, req.authUser.id);
     res.json(mapProfile(data, updatedAuthUser || {
       ...currentAuthUser,
@@ -174,6 +225,311 @@ router.put("/me", requireAuth, async (req, res, next) => {
         avatar_url: avatarUrl || "",
       },
     }));
+  } catch (error) {
+    next(error);
+  }
+});
+
+const syncProfileWithDefaultAddress = async (supabase, userId, address) => {
+  if (!address) {
+    return;
+  }
+
+  const { error } = await supabase
+    .from("profiles")
+    .update({
+      address: address.formatted_address || null,
+      phone_number: address.phone_number || null,
+    })
+    .eq("id", userId);
+
+  if (error) {
+    throw error;
+  }
+};
+
+const getOwnedAddress = async (supabase, userId, addressId) => {
+  const { data, error } = await supabase
+    .from("customer_addresses")
+    .select("*")
+    .eq("id", addressId)
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  if (error) {
+    throw error;
+  }
+
+  return data || null;
+};
+
+const clearDefaultAddress = async (supabase, userId, excludedAddressId = null) => {
+  let query = supabase
+    .from("customer_addresses")
+    .update({ is_default: false })
+    .eq("user_id", userId)
+    .eq("is_default", true);
+
+  if (excludedAddressId) {
+    query = query.neq("id", excludedAddressId);
+  }
+
+  const { error } = await query;
+  if (error) {
+    throw error;
+  }
+};
+
+router.get("/me/addresses", requireAuth, async (req, res, next) => {
+  try {
+    const supabase = getSupabaseAdmin();
+    const { data, error } = await supabase
+      .from("customer_addresses")
+      .select("*")
+      .eq("user_id", req.authUser.id)
+      .order("is_default", { ascending: false })
+      .order("updated_at", { ascending: false });
+
+    if (error) {
+      throw error;
+    }
+
+    res.json((data || []).map(mapCustomerAddress));
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post("/me/addresses", requireAuth, async (req, res, next) => {
+  try {
+    const supabase = getSupabaseAdmin();
+    const payload = normalizeCustomerAddressInput(req.body || {});
+    const validationError = getCustomerAddressValidationError(payload);
+    if (validationError) {
+      return res.status(400).json({ error: validationError });
+    }
+
+    const { data: currentDefault, error: defaultError } = await supabase
+      .from("customer_addresses")
+      .select("id")
+      .eq("user_id", req.authUser.id)
+      .eq("is_default", true)
+      .maybeSingle();
+
+    if (defaultError) {
+      throw defaultError;
+    }
+
+    const shouldBeDefault = payload.is_default || !currentDefault;
+    if (shouldBeDefault) {
+      await clearDefaultAddress(supabase, req.authUser.id);
+    }
+
+    const { data, error } = await supabase
+      .from("customer_addresses")
+      .insert({
+        ...payload,
+        user_id: req.authUser.id,
+        is_default: shouldBeDefault,
+      })
+      .select("*")
+      .single();
+
+    if (error) {
+      throw error;
+    }
+
+    if (data.is_default) {
+      await syncProfileWithDefaultAddress(supabase, req.authUser.id, data);
+    }
+
+    await writeAuditLog(supabase, req, {
+      action: "customer_address_created",
+      actorId: req.authUser.id,
+      actorRole: req.profile?.role,
+      targetId: data.id,
+      targetType: "customer_address",
+    });
+
+    res.status(201).json(mapCustomerAddress(data));
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.patch("/me/addresses/:addressId", requireAuth, async (req, res, next) => {
+  try {
+    const supabase = getSupabaseAdmin();
+    const currentAddress = await getOwnedAddress(supabase, req.authUser.id, req.params.addressId);
+    if (!currentAddress) {
+      return res.status(404).json({ error: "Saved address not found." });
+    }
+
+    const payload = normalizeCustomerAddressInput({
+      ...currentAddress,
+      ...(req.body || {}),
+      isDefault: req.body?.isDefault ?? req.body?.is_default ?? currentAddress.is_default,
+    });
+    // A default can be replaced by another saved address, but never silently removed.
+    payload.is_default = payload.is_default || currentAddress.is_default;
+    const validationError = getCustomerAddressValidationError(payload);
+    if (validationError) {
+      return res.status(400).json({ error: validationError });
+    }
+
+    if (payload.is_default) {
+      await clearDefaultAddress(supabase, req.authUser.id, currentAddress.id);
+    }
+
+    const { data, error } = await supabase
+      .from("customer_addresses")
+      .update(payload)
+      .eq("id", currentAddress.id)
+      .eq("user_id", req.authUser.id)
+      .select("*")
+      .single();
+
+    if (error) {
+      throw error;
+    }
+
+    if (data.is_default) {
+      await syncProfileWithDefaultAddress(supabase, req.authUser.id, data);
+    }
+
+    await writeAuditLog(supabase, req, {
+      action: "customer_address_updated",
+      actorId: req.authUser.id,
+      actorRole: req.profile?.role,
+      targetId: data.id,
+      targetType: "customer_address",
+    });
+
+    res.json(mapCustomerAddress(data));
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post("/me/addresses/:addressId/default", requireAuth, async (req, res, next) => {
+  try {
+    const supabase = getSupabaseAdmin();
+    const currentAddress = await getOwnedAddress(supabase, req.authUser.id, req.params.addressId);
+    if (!currentAddress) {
+      return res.status(404).json({ error: "Saved address not found." });
+    }
+
+    await clearDefaultAddress(supabase, req.authUser.id, currentAddress.id);
+    const { data, error } = await supabase
+      .from("customer_addresses")
+      .update({ is_default: true })
+      .eq("id", currentAddress.id)
+      .eq("user_id", req.authUser.id)
+      .select("*")
+      .single();
+
+    if (error) {
+      throw error;
+    }
+
+    await syncProfileWithDefaultAddress(supabase, req.authUser.id, data);
+    await writeAuditLog(supabase, req, {
+      action: "customer_address_set_default",
+      actorId: req.authUser.id,
+      actorRole: req.profile?.role,
+      targetId: data.id,
+      targetType: "customer_address",
+    });
+
+    res.json(mapCustomerAddress(data));
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.delete("/me/addresses/:addressId", requireAuth, async (req, res, next) => {
+  try {
+    const supabase = getSupabaseAdmin();
+    const currentAddress = await getOwnedAddress(supabase, req.authUser.id, req.params.addressId);
+    if (!currentAddress) {
+      return res.status(404).json({ error: "Saved address not found." });
+    }
+
+    const { data: linkedOrders, error: ordersError } = await supabase
+      .from("orders")
+      .select("id, order_status")
+      .eq("user_id", req.authUser.id)
+      .eq("delivery_address_id", currentAddress.id);
+
+    if (ordersError) {
+      throw ordersError;
+    }
+
+    const hasActiveOrder = (linkedOrders || []).some((order) => (
+      ACTIVE_ADDRESS_ORDER_STATUSES.has(String(order.order_status || "").toLowerCase())
+    ));
+    if (hasActiveOrder) {
+      return res.status(409).json({
+        error: "This address is being used by an active order and cannot be deleted yet.",
+      });
+    }
+
+    const { error } = await supabase
+      .from("customer_addresses")
+      .delete()
+      .eq("id", currentAddress.id)
+      .eq("user_id", req.authUser.id);
+
+    if (error) {
+      throw error;
+    }
+
+    if (currentAddress.is_default) {
+      const { data: replacement, error: replacementError } = await supabase
+        .from("customer_addresses")
+        .select("*")
+        .eq("user_id", req.authUser.id)
+        .order("updated_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (replacementError) {
+        throw replacementError;
+      }
+
+      if (replacement) {
+        const { data: defaultAddress, error: setDefaultError } = await supabase
+          .from("customer_addresses")
+          .update({ is_default: true })
+          .eq("id", replacement.id)
+          .select("*")
+          .single();
+
+        if (setDefaultError) {
+          throw setDefaultError;
+        }
+        await syncProfileWithDefaultAddress(supabase, req.authUser.id, defaultAddress);
+      } else {
+        const { error: profileError } = await supabase
+          .from("profiles")
+          .update({ address: null, phone_number: null })
+          .eq("id", req.authUser.id);
+
+        if (profileError) {
+          throw profileError;
+        }
+      }
+    }
+
+    await writeAuditLog(supabase, req, {
+      action: "customer_address_deleted",
+      actorId: req.authUser.id,
+      actorRole: req.profile?.role,
+      targetId: currentAddress.id,
+      targetType: "customer_address",
+    });
+
+    res.status(204).send();
   } catch (error) {
     next(error);
   }
@@ -218,6 +574,11 @@ router.post("/staff", requireAuth, requireRole("admin"), async (req, res, next) 
       return res.status(400).json({ error: "email, password, and username are required." });
     }
 
+    const passwordValidation = validatePasswordPolicy(password);
+    if (!passwordValidation.valid) {
+      return res.status(400).json({ error: passwordValidation.message });
+    }
+
     if (!["staff", "admin"].includes(role)) {
       return res.status(400).json({ error: "role must be staff or admin." });
     }
@@ -240,7 +601,9 @@ router.post("/staff", requireAuth, requireRole("admin"), async (req, res, next) 
       user_metadata: {
         username: normalizedUsername,
         full_name: full_name || "",
+        role,
         avatar_url: avatarUrl || "",
+        email_verified: true,
       },
     });
 
@@ -258,6 +621,8 @@ router.post("/staff", requireAuth, requireRole("admin"), async (req, res, next) 
         role,
         address: normalizeOptionalValue(address),
         phone_number: normalizeOptionalValue(phone_number),
+        email_verified: true,
+        email_verified_at: new Date().toISOString(),
       })
       .select("*")
       .single();
@@ -265,6 +630,19 @@ router.post("/staff", requireAuth, requireRole("admin"), async (req, res, next) 
     if (profileError) {
       throw profileError;
     }
+
+    await writeAuditLog(supabase, req, {
+      action: `${role}_account_created`,
+      actorId: req.authUser.id,
+      actorRole: req.profile?.role,
+      targetId: profile.id,
+      targetType: "profile",
+      metadata: {
+        email: normalizedEmail,
+        username: normalizedUsername,
+        role,
+      },
+    });
 
     res.status(201).json(mapProfile(profile, createdUser.user));
   } catch (error) {
@@ -280,8 +658,9 @@ router.post("/staff/:id/reset-password", requireAuth, requireRole("admin"), asyn
       return res.status(400).json({ error: "A new password is required." });
     }
 
-    if (password.length < 8) {
-      return res.status(400).json({ error: "The new password must be at least 8 characters long." });
+    const passwordValidation = validatePasswordPolicy(password);
+    if (!passwordValidation.valid) {
+      return res.status(400).json({ error: passwordValidation.message });
     }
 
     const supabase = getSupabaseAdmin();
@@ -306,6 +685,17 @@ router.post("/staff/:id/reset-password", requireAuth, requireRole("admin"), asyn
     if (authUpdateError) {
       throw authUpdateError;
     }
+
+    await writeAuditLog(supabase, req, {
+      action: "staff_password_reset",
+      actorId: req.authUser.id,
+      actorRole: req.profile?.role,
+      targetId: managedProfile.id,
+      targetType: "profile",
+      metadata: {
+        email: managedProfile.email,
+      },
+    });
 
     res.json({
       success: true,
@@ -343,6 +733,14 @@ router.delete("/staff/:id", requireAuth, requireRole("admin"), async (req, res, 
     if (avatarUrl) {
       await removeManagedProfileImage(avatarUrl);
     }
+
+    await writeAuditLog(supabase, req, {
+      action: "staff_account_deleted",
+      actorId: req.authUser.id,
+      actorRole: req.profile?.role,
+      targetId: req.params.id,
+      targetType: "profile",
+    });
 
     res.status(204).send();
   } catch (error) {
@@ -405,12 +803,19 @@ router.put("/staff/:id", requireAuth, requireRole("admin"), async (req, res, nex
         ...currentAuthUser.user_metadata,
         username: normalizedUsername || "",
         full_name: full_name || "",
+        role,
         avatar_url: avatarUrl || "",
+        email_verified: true,
       },
     };
 
     // Add password update if provided
     if (password) {
+      const passwordValidation = validatePasswordPolicy(password);
+      if (!passwordValidation.valid) {
+        return res.status(400).json({ error: passwordValidation.message });
+      }
+
       authUpdateData.password = password;
     }
 
@@ -433,6 +838,8 @@ router.put("/staff/:id", requireAuth, requireRole("admin"), async (req, res, nex
         role,
         address: normalizeOptionalValue(address),
         phone_number: normalizeOptionalValue(phone_number),
+        email_verified: true,
+        email_verified_at: currentProfile.email_verified_at || new Date().toISOString(),
       })
       .eq("id", req.params.id)
       .select("*")
@@ -441,6 +848,20 @@ router.put("/staff/:id", requireAuth, requireRole("admin"), async (req, res, nex
     if (profileUpdateError) {
       throw profileUpdateError;
     }
+
+    await writeAuditLog(supabase, req, {
+      action: "staff_account_updated",
+      actorId: req.authUser.id,
+      actorRole: req.profile?.role,
+      targetId: updatedProfile.id,
+      targetType: "profile",
+      metadata: {
+        email: normalizedEmail,
+        username: normalizedUsername,
+        role,
+        passwordChanged: Boolean(password),
+      },
+    });
 
     const updatedAuthUser = await getAuthUserById(supabase, req.params.id);
     res.json(mapProfile(updatedProfile, updatedAuthUser || currentAuthUser));

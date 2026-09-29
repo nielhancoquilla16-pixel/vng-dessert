@@ -1,3 +1,9 @@
+import {
+  getExpiryStatus,
+  normalizeExpiryAt,
+  splitExpiryAt,
+} from './expiry.js';
+
 const DEFAULT_EXPIRY_WARNING_DAYS = 5;
 
 const STATUS_PRIORITY = {
@@ -58,6 +64,7 @@ const buildFallbackBatchId = (id) => {
 export const getInventoryBatchStatus = ({
   dateCreated,
   expirationDate,
+  expirationAt,
   warningDays = DEFAULT_EXPIRY_WARNING_DAYS,
   referenceDate = new Date(),
 }) => {
@@ -68,24 +75,11 @@ export const getInventoryBatchStatus = ({
     return 'no date';
   }
 
-  const expiryDay = toDayNumber(normalizedExpiration);
-  const todayDay = toDayNumber(getTodayKey(referenceDate));
-  if (!Number.isFinite(expiryDay) || !Number.isFinite(todayDay)) {
-    return 'no date';
-  }
-
-  const daysUntilExpiry = expiryDay - todayDay;
-  const safeWarningDays = Math.max(1, Math.min(30, Number(warningDays) || DEFAULT_EXPIRY_WARNING_DAYS));
-
-  if (daysUntilExpiry < 0) {
-    return 'expired';
-  }
-
-  if (daysUntilExpiry <= safeWarningDays) {
-    return 'expiring soon';
-  }
-
-  return 'fresh';
+  return getExpiryStatus({
+    expirationAt: expirationAt || normalizeExpiryAt({ expirationDate: normalizedExpiration }),
+    warningDays,
+    referenceDate,
+  });
 };
 
 export const sanitizeInventoryPayload = (payload = {}, existingRow = null) => {
@@ -128,6 +122,11 @@ export const sanitizeInventoryPayload = (payload = {}, existingRow = null) => {
     ?? payload.expirationDate
     ?? existingRow?.expiration_date
   );
+  const expirationAt = normalizeExpiryAt({
+    expirationAt: payload.expiration_at ?? payload.expirationAt ?? existingRow?.expiration_at,
+    expirationDate,
+    expirationTime: payload.expiration_time ?? payload.expirationTime,
+  });
 
   const productId = payload.product_id ?? payload.productId ?? existingRow?.product_id ?? null;
 
@@ -138,10 +137,12 @@ export const sanitizeInventoryPayload = (payload = {}, existingRow = null) => {
     unit,
     dateCreated,
     expirationDate,
+    expirationAt,
     productId,
     status: getInventoryBatchStatus({
       dateCreated,
       expirationDate,
+      expirationAt,
     }),
   };
 };
@@ -152,6 +153,11 @@ export const mapInventoryItem = (row, options = {}) => {
   const quantity = Math.max(0, Number(row.stock_quantity ?? row.quantity) || 0);
   const dateCreated = normalizeDateString(row.date_created || row.created_at);
   const expirationDate = normalizeDateString(row.expiration_date);
+  const expirationAt = normalizeExpiryAt({
+    expirationAt: row.expiration_at,
+    expirationDate,
+  });
+  const { expirationTime } = splitExpiryAt(expirationAt);
 
   return {
     id: row.id,
@@ -164,10 +170,13 @@ export const mapInventoryItem = (row, options = {}) => {
     status: getInventoryBatchStatus({
       dateCreated,
       expirationDate,
+      expirationAt,
       warningDays: options.warningDays,
     }),
     dateCreated,
     expirationDate,
+    expirationAt,
+    expirationTime,
     imageUrl: row.image_url || null,
     productId: row.product_id || null,
     category: normalizeText(row.category) || null,

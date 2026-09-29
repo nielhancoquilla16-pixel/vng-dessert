@@ -1,13 +1,19 @@
 import React, { useState } from 'react';
 import { useCart } from '../context/CartContext';
 import { useAuth } from '../context/AuthContext';
-import { Trash2, CheckSquare, Square } from 'lucide-react';
+import { useShopSettings } from '../context/ShopSettingsContext';
+import { formatCurrency } from '../utils/currency';
+import { Trash2, CheckSquare, Square, ShoppingBag } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
 import './Cart.css';
 
 const Cart = () => {
   const { cartItems, updateQuantity, removeFromCart, clearCart } = useCart();
   const { loggedInCustomer, isAdmin } = useAuth();
+  const { isShopOpen, isShopSettingsLoading, shopSettingsError, operatingHoursLabel } = useShopSettings();
+  const [cartError, setCartError] = useState('');
+  const [isUpdating, setIsUpdating] = useState(false);
+  const canOrder = isShopOpen && !isShopSettingsLoading && !shopSettingsError;
   const [selectedIds, setSelectedIds] = useState(null);
   const navigate = useNavigate();
 
@@ -47,26 +53,39 @@ const Cart = () => {
   const finalTotal = selectedTotal + deliveryFee;
 
   const handleCheckout = () => {
-    if (selectedCount > 0) {
-      navigate('/checkout');
+    if (selectedCount > 0 && canOrder && !isUpdating) {
+      navigate('/checkout', { state: { selectedCartIds: activeSelectedIds } });
     }
+  };
+
+  const changeCart = async (action) => {
+    if (isUpdating) return;
+    setCartError('');
+    setIsUpdating(true);
+    try { await action(); }
+    catch (error) { setCartError(error.message || 'Unable to update your cart. Please try again.'); }
+    finally { setIsUpdating(false); }
   };
 
   if (cartItems.length === 0) {
     return (
-      <div className="cart-container" style={{ display: 'block', textAlign: 'center', padding: '4rem 0' }}>
-        <h2>Your Cart is Empty</h2>
-        <p className="page-subtitle" style={{ margin: '1rem 0 2rem' }}>Looks like you haven't added any desserts yet.</p>
+      <div className="cart-page cart-empty-state">
+        <ShoppingBag size={40} aria-hidden="true" />
+        <h1>Your cart is empty</h1>
+        <p>Find something sweet to add to your day.</p>
         <Link to="/products" className="btn-primary">Browse Products</Link>
       </div>
     );
   }
 
   return (
-    <div>
-      <div className="page-header" style={{ background: '#fef08a', padding: '2rem', borderRadius: '1rem', marginBottom: '2rem' }}>
-        <h1 className="page-title">Shopping Cart</h1>
-        <p className="page-subtitle">Review your items and proceed to checkout.</p>
+    <div className="cart-page">
+      <div className="cart-page-heading">
+        <h1>Shopping cart</h1>
+        <p>Choose your treats and review your order.</p>
+        <p>Ordering hours: {operatingHoursLabel}</p>
+        {!canOrder && <p role="status">{isShopSettingsLoading ? 'Checking shop hours…' : shopSettingsError || 'The shop is closed for orders. Your cart is saved for later.'}</p>}
+        {cartError && <p role="alert">{cartError}</p>}
       </div>
 
       <div className="cart-container">
@@ -74,16 +93,17 @@ const Cart = () => {
           <div className="cart-header-bar">
             <button
               onClick={toggleAll}
-              style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
+              className="cart-select-all"
+              aria-pressed={selectedCount === cartItems.length}
             >
               {selectedCount === cartItems.length ? (
-                <CheckSquare color="#0ea5e9" size={24} />
+                <CheckSquare color="#c2410c" size={22} />
               ) : (
-                <Square color="#cbd5e1" size={24} />
+                <Square color="#64748b" size={22} />
               )}
-              <span style={{ fontWeight: 600, color: 'var(--text-dark)' }}>Select all</span>
+              <span>Select all</span>
             </button>
-            <span style={{ color: 'var(--text-muted)' }}>{selectedCount} of {cartItems.length} selected</span>
+            <span className="cart-selection-count" aria-live="polite">{selectedCount} of {cartItems.length} selected</span>
           </div>
 
           <div className="cart-list">
@@ -91,37 +111,40 @@ const Cart = () => {
               <div key={item.id} className="cart-item">
                 <button
                   onClick={() => toggleItem(item.id)}
-                  style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
+                  className="cart-item-select"
+                  aria-label={`Select ${item.name}`}
+                  aria-pressed={activeSelectedIds.includes(item.id)}
                 >
                   {activeSelectedIds.includes(item.id) ? (
-                    <CheckSquare color="#0ea5e9" size={24} />
+                    <CheckSquare color="#c2410c" size={22} />
                   ) : (
-                    <Square color="#cbd5e1" size={24} />
+                    <Square color="#64748b" size={22} />
                   )}
                 </button>
                 <img src={item.image} alt={item.name} className="cart-item-image" />
 
                 <div className="cart-item-details">
                   <h3 className="cart-item-title">{item.name}</h3>
-                  <div className="cart-item-price">PHP {item.price.toFixed(2)} each</div>
-                  <div className="cart-item-stock">Stock: {item.stock}</div>
+                  <div className="cart-item-price">{formatCurrency(item.price)} each</div>
+                  <div className="cart-item-stock">{Number(item.stock) > 0 ? `${item.stock} available` : 'Out of stock'}</div>
 
-                  <div className="quantity-controls" style={{ width: 'fit-content', marginTop: '0.5rem' }}>
-                    <button className="qty-btn" onClick={() => updateQuantity(item.id, item.quantity - 1)}>-</button>
-                    <span className="qty-value">{item.quantity}</span>
+                  <div className="quantity-controls" role="group" aria-label={`Quantity for ${item.name}`}>
+                    <button className="qty-btn" aria-label={`Decrease quantity of ${item.name}`} disabled={item.quantity <= 1 || isUpdating} onClick={() => changeCart(() => updateQuantity(item.id, item.quantity - 1))}>−</button>
+                    <span className="qty-value" aria-live="polite">{item.quantity}</span>
                     <button
                       className="qty-btn"
-                      onClick={() => updateQuantity(item.id, item.quantity + 1)}
-                      disabled={item.quantity >= (Number(item.stock) || item.quantity)}
+                      aria-label={`Increase quantity of ${item.name}`}
+                      onClick={() => changeCart(() => updateQuantity(item.id, item.quantity + 1))}
+                      disabled={!canOrder || isUpdating || item.quantity >= (Number(item.stock) || item.quantity)}
                     >
                       +
                     </button>
                   </div>
                 </div>
 
-                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '1rem' }}>
-                  <div className="cart-item-total">PHP {(item.price * item.quantity).toFixed(2)}</div>
-                  <button className="btn-remove" onClick={() => removeFromCart(item.id)}>
+                <div className="cart-item-actions">
+                  <div className="cart-item-total">{formatCurrency(item.price * item.quantity)}</div>
+                  <button className="btn-remove" aria-label={`Remove ${item.name} from cart`} disabled={isUpdating} onClick={() => changeCart(() => removeFromCart(item.id))}>
                     <Trash2 size={16} /> Remove
                   </button>
                 </div>
@@ -135,25 +158,27 @@ const Cart = () => {
 
           <div className="summary-row">
             <span>Subtotal</span>
-            <span>PHP {selectedTotal.toFixed(2)}</span>
+            <span>{formatCurrency(selectedTotal)}</span>
           </div>
 
           <div className="summary-row">
-            <span>Delivery Fee</span>
-            <span>PHP {deliveryFee.toFixed(2)}</span>
+            <span>Estimated delivery</span>
+            <span>{formatCurrency(deliveryFee)}</span>
           </div>
 
           <div className="summary-total">
             <span>Total</span>
-            <span className="amount">PHP {finalTotal.toFixed(2)}</span>
+            <span className="amount">{formatCurrency(finalTotal)}</span>
           </div>
+
+          <p className="cart-delivery-note">Pick-up is free. Delivery is confirmed at checkout.</p>
 
           <div className="summary-actions">
             {isAuthenticated ? (
               <button
                 onClick={handleCheckout}
                 className={`btn-primary btn-block ${selectedCount === 0 ? 'disabled' : ''}`}
-                style={{ textAlign: 'center', opacity: selectedCount === 0 ? 0.5 : 1, pointerEvents: selectedCount === 0 ? 'none' : 'auto' }}
+                disabled={selectedCount === 0 || !canOrder || isUpdating}
               >
                 Proceed to Checkout
               </button>
@@ -171,7 +196,7 @@ const Cart = () => {
               Continue Shopping
             </Link>
 
-            <button className="btn-remove btn-block" style={{ justifyContent: 'center' }} onClick={clearCart}>
+            <button className="btn-remove btn-block" style={{ justifyContent: 'center' }} disabled={isUpdating} onClick={() => changeCart(clearCart)}>
               Clear Cart
             </button>
           </div>

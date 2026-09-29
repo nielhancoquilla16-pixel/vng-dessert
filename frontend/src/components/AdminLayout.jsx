@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import {
   BellRing,
@@ -24,8 +24,11 @@ import {
 
 import { useAuth } from '../context/AuthContext';
 import { useInventoryAlerts } from '../context/InventoryAlertContext';
+import { useOrders } from '../context/OrderContext';
+import { apiRequest } from '../lib/api';
 import { resolveAssetUrl } from '../lib/publicUrl';
 import './AdminLayout.css';
+import FloatingAI from './FloatingAI';
 
 const getInitials = (profile, userRole) => {
   const source = profile?.fullName || profile?.username || (userRole === 'admin' ? 'Administrator' : 'Staff Member');
@@ -46,6 +49,9 @@ const formatMobileTimestamp = (date) => {
 
   return `${weekdays[date.getDay()]} ${months[date.getMonth()]} ${String(date.getDate()).padStart(2, '0')} ${date.getFullYear()} ${hours}:${minutes}`;
 };
+
+const NOTIFICATION_PANEL_MAX_WIDTH = 360;
+const NOTIFICATION_VIEWPORT_GUTTER = 16;
 
 const AlertToast = ({ alert, onDismiss, onView }) => {
   useEffect(() => {
@@ -89,12 +95,117 @@ const AlertToast = ({ alert, onDismiss, onView }) => {
 const AdminLayout = () => {
   const location = useLocation();
   const navigate = useNavigate();
-  const { logout, userRole, profile } = useAuth();
+  const { logout, userRole, profile, session } = useAuth();
   const { activeAlerts, popupAlerts, dismissPopupAlert } = useInventoryAlerts();
+  const { orders } = useOrders();
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
+  const [invalidGmailRegistrationState, setInvalidGmailRegistrationState] = useState({ accessToken: '', entries: [] });
   const [mobileTimestamp, setMobileTimestamp] = useState(() => formatMobileTimestamp(new Date()));
+  const [notificationViewportWidth, setNotificationViewportWidth] = useState(() => window.innerWidth);
+  const [notificationPosition, setNotificationPosition] = useState(() => {
+    try {
+      const saved = JSON.parse(window.localStorage.getItem('vng_notification_position') || 'null');
+      if (Number.isFinite(saved?.left) && Number.isFinite(saved?.top)) return saved;
+    } catch {
+      // Use the default position when storage is unavailable.
+    }
+    return { left: Math.max(12, window.innerWidth - 70), top: 24 };
+  });
   const notificationPanelRef = useRef(null);
+  const notificationDragRef = useRef(null);
+  const notificationWasDraggedRef = useRef(false);
+  const notificationPositionRef = useRef(notificationPosition);
+
+  const notificationButtonSize = notificationViewportWidth <= 768 ? 52 : 58;
+  const availableNotificationSpaceLeft = Math.max(
+    0,
+    notificationPosition.left + notificationButtonSize - NOTIFICATION_VIEWPORT_GUTTER,
+  );
+  const availableNotificationSpaceRight = Math.max(
+    0,
+    notificationViewportWidth - notificationPosition.left - notificationButtonSize - NOTIFICATION_VIEWPORT_GUTTER,
+  );
+  const notificationPanelOpensLeft = availableNotificationSpaceLeft >= availableNotificationSpaceRight;
+  const notificationPanelWidth = Math.min(
+    NOTIFICATION_PANEL_MAX_WIDTH,
+    notificationPanelOpensLeft ? availableNotificationSpaceLeft : availableNotificationSpaceRight,
+  );
+  const invalidGmailRegistrations = userRole === 'admin'
+    && invalidGmailRegistrationState.accessToken === session?.access_token
+    ? invalidGmailRegistrationState.entries
+    : [];
+
+  const pendingReturnRefundRequests = useMemo(() => (
+    orders
+      .map((order) => ({
+        order,
+        request: order?.latestReturnRefundRequest
+          || (Array.isArray(order?.returnRefundRequests) ? order.returnRefundRequests[0] : null),
+        issueReport: order?.latestIssueReport
+          || (Array.isArray(order?.issueReports) ? order.issueReports[0] : null),
+      }))
+      .filter(({ request, issueReport }) => (
+        request?.status === 'pending'
+        || (!request && String(issueReport?.reviewStatus || issueReport?.review_status || '').toLowerCase() === 'under_review')
+      ))
+  ), [orders]);
+  const pendingNewOrderNotifications = useMemo(() => (
+    orders.flatMap((order) => (
+      ['pending', 'confirmed'].includes(String(order?.status || '').toLowerCase())
+        ? (Array.isArray(order?.notifications) ? order.notifications : [])
+          .filter((notification) => (
+            notification?.audience === 'admin_staff'
+            && ['new_order', 'order_confirmed'].includes(notification?.type)
+          ))
+          .map((notification) => ({ order, notification }))
+        : []
+    ))
+  ), [orders]);
+  const newFeedbackNotifications = useMemo(() => (
+    orders.flatMap((order) => (
+      (Array.isArray(order?.notifications) ? order.notifications : [])
+        .filter((notification) => (
+          notification?.audience === 'admin_staff'
+          && notification?.type === 'feedback_received'
+          && notification?.id
+        ))
+        .map((notification) => ({ order, notification }))
+    ))
+  ), [orders]);
+  const notificationCount = activeAlerts.length + pendingReturnRefundRequests.length + pendingNewOrderNotifications.length + newFeedbackNotifications.length
+    + (userRole === 'admin' ? invalidGmailRegistrations.length : 0);
+
+  useEffect(() => {
+    if (userRole !== 'admin' || !session?.access_token) {
+      return undefined;
+    }
+
+    let isActive = true;
+    const loadInvalidGmailRegistrations = async () => {
+      try {
+        const entries = await apiRequest('/api/auth/admin/invalid-gmail-registrations', {}, {
+          auth: true,
+          accessToken: session.access_token,
+        });
+        if (isActive) {
+          setInvalidGmailRegistrationState({
+            accessToken: session.access_token,
+            entries: Array.isArray(entries) ? entries : [],
+          });
+        }
+      } catch {
+        // A temporary notification-service error should not hide the existing admin alerts.
+      }
+    };
+
+    void loadInvalidGmailRegistrations();
+    const interval = window.setInterval(loadInvalidGmailRegistrations, 30000);
+    return () => {
+      isActive = false;
+      window.clearInterval(interval);
+    };
+  }, [session?.access_token, userRole]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -149,6 +260,46 @@ const AdminLayout = () => {
     return () => document.removeEventListener('mousedown', handleOutsideClick);
   }, [isNotificationsOpen]);
 
+  useEffect(() => {
+    const handlePointerMove = (event) => {
+      const drag = notificationDragRef.current;
+      if (!drag) return;
+
+      const nextLeft = Math.min(Math.max(12, event.clientX - drag.offsetX), Math.max(12, window.innerWidth - 70));
+      const nextTop = Math.min(Math.max(12, event.clientY - drag.offsetY), Math.max(12, window.innerHeight - 70));
+      if (Math.abs(nextLeft - drag.startLeft) > 3 || Math.abs(nextTop - drag.startTop) > 3) {
+        notificationWasDraggedRef.current = true;
+      }
+      const nextPosition = { left: nextLeft, top: nextTop };
+      notificationPositionRef.current = nextPosition;
+      setNotificationPosition(nextPosition);
+    };
+    const handlePointerUp = () => {
+      if (!notificationDragRef.current) return;
+      notificationDragRef.current = null;
+      if (notificationWasDraggedRef.current) {
+        try {
+          window.localStorage.setItem('vng_notification_position', JSON.stringify(notificationPositionRef.current));
+        } catch {
+          // Position persistence is optional.
+        }
+      }
+    };
+
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', handlePointerUp);
+    return () => {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', handlePointerUp);
+    };
+  }, []);
+
+  useEffect(() => {
+    const handleResize = () => setNotificationViewportWidth(window.innerWidth);
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
   const handleLogout = () => {
     setIsSidebarOpen(false);
     setIsNotificationsOpen(false);
@@ -161,8 +312,37 @@ const AdminLayout = () => {
     navigate(`/admin/inventory?focus=${encodeURIComponent(itemId)}`);
   };
 
+  const handleViewReturnRefundRequest = (orderId) => {
+    setIsNotificationsOpen(false);
+    navigate(`/admin/orders?request=${encodeURIComponent(orderId)}`);
+  };
+
+  const handleViewFeedback = (feedbackId) => {
+    setIsNotificationsOpen(false);
+    navigate(`/admin/feedback?feedback=${encodeURIComponent(feedbackId)}`);
+  };
+
+  const handleNotificationPointerDown = (event) => {
+    notificationWasDraggedRef.current = false;
+    notificationDragRef.current = {
+      offsetX: event.clientX - notificationPosition.left,
+      offsetY: event.clientY - notificationPosition.top,
+      startLeft: notificationPosition.left,
+      startTop: notificationPosition.top,
+    };
+  };
+
+  const handleNotificationClick = () => {
+    if (notificationWasDraggedRef.current) {
+      notificationWasDraggedRef.current = false;
+      return;
+    }
+    setIsNotificationsOpen((currentValue) => !currentValue);
+  };
+
   const allMenuItems = [
     { name: 'Dashboard', path: '/admin/dashboard', icon: LayoutDashboard, roles: ['admin'], color: '#6366f1' },
+    { name: 'Dashboard', path: '/staff/dashboard', icon: LayoutDashboard, roles: ['staff'], color: '#6366f1' },
     { name: 'Products', path: '/admin/products', icon: Package, roles: ['admin', 'staff'], color: '#f97316' },
     { name: 'Orders', path: '/admin/orders', icon: ShoppingBag, roles: ['admin', 'staff'], color: '#8b5cf6' },
     { name: 'Pre-Orders', path: '/admin/pre-orders', icon: CalendarClock, roles: ['admin', 'staff'], color: '#7c3aed' },
@@ -183,6 +363,7 @@ const AdminLayout = () => {
 
   return (
     <div className={`admin-layout ${isSidebarOpen ? 'sidebar-open' : ''}`}>
+      <FloatingAI />
       <div
         className={`admin-sidebar-backdrop ${isSidebarOpen ? 'visible' : ''}`}
         aria-hidden="true"
@@ -283,58 +464,115 @@ const AdminLayout = () => {
         </div>
       </aside>
 
-      {userRole === 'admin' && (
+      {['admin', 'staff'].includes(userRole) && (
         <>
-          <div className={`admin-alert-shell ${isNotificationsOpen ? 'open' : ''}`} ref={notificationPanelRef}>
+          <div
+            className={`admin-alert-shell ${isNotificationsOpen ? 'open' : ''} ${notificationPanelOpensLeft ? 'panel-opens-left' : 'panel-opens-right'}`}
+            ref={notificationPanelRef}
+            style={{
+              left: `${notificationPosition.left}px`,
+              top: `${notificationPosition.top}px`,
+              right: 'auto',
+              '--notification-panel-width': `${notificationPanelWidth}px`,
+            }}
+          >
             <button
               type="button"
               className="admin-notification-button"
-              aria-label="Open inventory alerts"
+              aria-label="Open notifications. Drag to move."
               aria-expanded={isNotificationsOpen}
-              onClick={() => setIsNotificationsOpen((currentValue) => !currentValue)}
+              onPointerDown={handleNotificationPointerDown}
+              onClick={handleNotificationClick}
             >
               <BellRing size={20} />
-              <span className="admin-notification-badge">{activeAlerts.length}</span>
+              {notificationCount > 0 && <span className="admin-notification-badge">{notificationCount}</span>}
             </button>
 
             {isNotificationsOpen && (
               <div className="admin-alert-dropdown">
                 <div className="admin-alert-dropdown-head">
                   <div>
-                    <strong>Inventory Alerts</strong>
-                    <span>{activeAlerts.length} active batch alerts</span>
+                    <strong>Notifications</strong>
+                    <span>{notificationCount} active notification{notificationCount === 1 ? '' : 's'}</span>
                   </div>
                 </div>
 
                 <div className="admin-alert-dropdown-body">
-                  {activeAlerts.length === 0 ? (
+                  {notificationCount === 0 ? (
                     <div className="admin-alert-empty">
                       <BellRing size={18} />
-                      <span>No expiring or expired batches right now.</span>
+                      <span>No pending orders, requests, feedback, invalid Gmail attempts, or inventory expiry alerts right now.</span>
                     </div>
                   ) : (
-                    activeAlerts.map((alert) => (
-                      <article
-                        key={alert.id}
-                        className={`admin-alert-row admin-alert-row--${alert.statusTone}`}
-                      >
-                        <div className="admin-alert-row-icon">
-                          <CircleAlert size={18} />
-                        </div>
-                        <div className="admin-alert-row-copy">
-                          <strong>{alert.productName}</strong>
-                          <span>{alert.batchId}</span>
-                          <small><Clock3 size={12} /> {alert.message}</small>
-                        </div>
-                        <button
-                          type="button"
-                          className="admin-alert-row-action"
-                          onClick={() => handleViewAlert(alert.itemId)}
-                        >
-                          View
-                        </button>
-                      </article>
-                    ))
+                    <>
+                      {pendingNewOrderNotifications.map(({ order, notification }) => (
+                        <article key={order.id + '-' + notification.createdAt} className="admin-alert-row admin-alert-row--info">
+                          <div className="admin-alert-row-icon"><ShoppingBag size={18} /></div>
+                          <div className="admin-alert-row-copy">
+                            <strong>New Order Received</strong>
+                            <span>{order.displayId || order.orderCode || order.id}</span>
+                            <small><Clock3 size={12} /> {notification.message}</small>
+                          </div>
+                          <button type="button" className="admin-alert-row-action" onClick={() => navigate('/admin/orders')}>View</button>
+                        </article>
+                      ))}
+                      {userRole === 'admin' && invalidGmailRegistrations.map((entry) => (
+                        <article key={entry.id} className="admin-alert-row admin-alert-row--warning">
+                          <div className="admin-alert-row-icon"><CircleAlert size={18} /></div>
+                          <div className="admin-alert-row-copy">
+                            <strong>
+                              {entry.status.toLowerCase().includes('unverified')
+                                ? 'Unverified Gmail Registration'
+                                : 'Invalid Gmail Registration'}
+                            </strong>
+                            <span>{entry.customerName} · {entry.email || 'Email not provided'}</span>
+                            <small>
+                              <Clock3 size={12} /> {entry.status} · {new Date(entry.createdAt).toLocaleString()}
+                              {entry.reason ? ' · ' + entry.reason : ''}
+                            </small>
+                          </div>
+                        </article>
+                      ))}
+                      {newFeedbackNotifications.map(({ order, notification }) => (
+                        <article key={notification.id} className="admin-alert-row admin-alert-row--info">
+                          <div className="admin-alert-row-icon"><MessageSquareText size={18} /></div>
+                          <div className="admin-alert-row-copy">
+                            <strong>New Customer Feedback Received</strong>
+                            <span>{order.displayId || order.orderCode || order.id}</span>
+                            <small><Clock3 size={12} /> {notification.message}</small>
+                          </div>
+                          <button type="button" className="admin-alert-row-action" onClick={() => handleViewFeedback(notification.id)}>View</button>
+                        </article>
+                      ))}
+                      {pendingReturnRefundRequests.map(({ order, request, issueReport }) => {
+                        const isIssueReport = !request && Boolean(issueReport);
+                        const itemId = request?.id || issueReport?.id || order.id;
+                        const reason = request?.reason || issueReport?.description || 'Customer submitted a damage report.';
+
+                        return (
+                        <article key={itemId} className="admin-alert-row admin-alert-row--warning">
+                          <div className="admin-alert-row-icon"><CircleAlert size={18} /></div>
+                          <div className="admin-alert-row-copy">
+                            <strong>{isIssueReport ? 'Return request under review' : 'Refund requested'}</strong>
+                            <span>{order.displayId || order.orderCode || order.id}</span>
+                            <small><Clock3 size={12} /> {order.customer || 'Customer'}: {reason}</small>
+                          </div>
+                          <button type="button" className="admin-alert-row-action" onClick={() => handleViewReturnRefundRequest(order.id)}>View</button>
+                        </article>
+                        );
+                      })}
+                      {activeAlerts.map((alert) => (
+                        <article key={alert.id} className={`admin-alert-row admin-alert-row--${alert.statusTone}`}>
+                          <div className="admin-alert-row-icon"><CircleAlert size={18} /></div>
+                          <div className="admin-alert-row-copy">
+                            <strong>{alert.productName}</strong>
+                            <span>{alert.batchId}</span>
+                            <small><Clock3 size={12} /> {alert.message}</small>
+                          </div>
+                          <button type="button" className="admin-alert-row-action" onClick={() => handleViewAlert(alert.itemId)}>View</button>
+                        </article>
+                      ))}
+                    </>
                   )}
                 </div>
               </div>

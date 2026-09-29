@@ -4,6 +4,7 @@ import { getSupabaseAdmin } from '../lib/supabaseAdmin.js';
 import { requireAuth } from '../middleware/requireAuth.js';
 import {
   DELIVERY_FEE,
+  ADDRESS_GEOCODE_ERROR,
   createFulfilledOrder,
   enrichItemsFromProducts,
   fetchProductsByIds,
@@ -12,7 +13,9 @@ import {
   hasLecheFlanItems,
   hydrateOrderById,
   hydrateOrderWithProfile,
+  isValidDeliveryCoordinates,
   mapOrder,
+  normalizeDeliveryAddressFields,
   normalizeNotifications,
   normalizeOrderStatus,
   normalizeRequestedItems,
@@ -28,6 +31,8 @@ import {
   retrievePayMongoCheckoutSession,
   verifyPayMongoWebhookSignature,
 } from '../lib/paymongo.js';
+import { assertShopOpen } from '../lib/shopSettings.js';
+import { getOwnedCustomerAddress, toOrderDeliveryAddress } from '../lib/customerAddresses.js';
 
 const router = express.Router();
 
@@ -70,6 +75,22 @@ const createFailureSummary = (shortages = []) => (
     .map((item) => `${item.productName} (${item.available} left, paid for ${item.requested})`)
     .join(', ')
 );
+
+const getDeliveryAddressValidationError = (deliveryAddress = {}) => {
+  if (!deliveryAddress.recipientName || !deliveryAddress.contactNumber) {
+    return 'Recipient name and contact number are required before booking delivery.';
+  }
+
+  if (!deliveryAddress.streetAddress || !deliveryAddress.city || !deliveryAddress.province) {
+    return 'Street address, city/municipality, and province are required before booking delivery.';
+  }
+
+  if (!isValidDeliveryCoordinates(deliveryAddress)) {
+    return ADDRESS_GEOCODE_ERROR;
+  }
+
+  return '';
+};
 
 const getCheckoutSessionAttributes = (payload) => (
   payload?.attributes
@@ -406,6 +427,17 @@ const finalizePaidCheckout = async (supabase, checkout) => {
     paymentMethod: checkout.payment_method,
     totalPrice: Number(checkout.amount) || 0,
     deliveryDistanceKm: Number.isFinite(deliveryDistanceKm) ? deliveryDistanceKm : null,
+    deliveryRecipientName: checkout.delivery_recipient_name || checkout.customer_name,
+    deliveryContactNumber: checkout.delivery_contact_number || checkout.phone_number,
+    deliveryStreetAddress: checkout.delivery_street_address || '',
+    deliveryBarangay: checkout.delivery_barangay || '',
+    deliveryCity: checkout.delivery_city || '',
+    deliveryProvince: checkout.delivery_province || '',
+    deliveryPostalCode: checkout.delivery_postal_code || '',
+    deliveryFormattedAddress: checkout.delivery_formatted_address || checkout.address,
+    deliveryPlaceId: checkout.delivery_place_id || '',
+    deliveryLatitude: Number.isFinite(Number(checkout.delivery_latitude)) ? Number(checkout.delivery_latitude) : null,
+    deliveryLongitude: Number.isFinite(Number(checkout.delivery_longitude)) ? Number(checkout.delivery_longitude) : null,
     orderStatus: 'confirmed',
     items: finalizedItems,
   });
@@ -512,6 +544,19 @@ router.post('/checkout-sessions', requireAuth, async (req, res, next) => {
       deliveryMethod = 'pickup',
       paymentMethod = 'online',
       deliveryDistanceKm,
+      deliveryLatitude,
+      deliveryLongitude,
+      deliveryRecipientName = '',
+      deliveryContactNumber = '',
+      deliveryStreetAddress = '',
+      deliveryBarangay = '',
+      deliveryCity = '',
+      deliveryProvince = '',
+      deliveryPostalCode = '',
+      deliveryFormattedAddress = '',
+      deliveryPlaceId = '',
+      deliveryInstructions = '',
+      deliveryAddressId = '',
     } = req.body || {};
 
     const normalizedItems = normalizeRequestedItems(lineItems);
@@ -522,6 +567,7 @@ router.post('/checkout-sessions', requireAuth, async (req, res, next) => {
 
     const productIds = [...new Set(normalizedItems.map((item) => item.product_id).filter(Boolean))];
     const supabase = getSupabaseAdmin();
+    await assertShopOpen(supabase);
     const productsById = await fetchProductsByIds(supabase, productIds);
     const shortages = getShortagesForItems(normalizedItems, productsById);
 
@@ -534,14 +580,65 @@ router.post('/checkout-sessions', requireAuth, async (req, res, next) => {
 
     const finalizedItems = enrichItemsFromProducts(normalizedItems, productsById);
     const distanceKm = Number(deliveryDistanceKm);
+    const destinationLatitude = Number(deliveryLatitude);
+    const destinationLongitude = Number(deliveryLongitude);
+    let deliveryAddress = normalizeDeliveryAddressFields({
+      ...(req.body || {}),
+      deliveryRecipientName,
+      deliveryContactNumber,
+      deliveryStreetAddress,
+      deliveryBarangay,
+      deliveryCity,
+      deliveryProvince,
+      deliveryPostalCode,
+      deliveryFormattedAddress,
+      deliveryPlaceId,
+      deliveryLatitude,
+      deliveryLongitude,
+    }, {
+      recipientName: customerName || req.profile?.full_name || req.profile?.username || '',
+      contactNumber: phoneNumber || req.profile?.phone_number || '',
+      formattedAddress: address || req.profile?.address || '',
+    });
+    const requestedDeliveryAddressId = String(deliveryAddressId || req.body?.delivery_address_id || '').trim();
+    let savedDeliveryAddress = null;
+
+    if (String(deliveryMethod || '').toLowerCase() === 'delivery' && requestedDeliveryAddressId) {
+      savedDeliveryAddress = await getOwnedCustomerAddress(
+        supabase,
+        req.authUser.id,
+        requestedDeliveryAddressId,
+      );
+
+      if (!savedDeliveryAddress) {
+        return res.status(400).json({ error: 'The selected saved delivery address was not found.' });
+      }
+
+      deliveryAddress = toOrderDeliveryAddress(savedDeliveryAddress);
+    }
+
     const containsLecheFlan = hasLecheFlanItems(finalizedItems);
     const restrictionMessage = String(deliveryMethod || '').toLowerCase() === 'delivery'
       ? getLecheFlanRestrictionMessage(distanceKm)
       : '';
 
+    if (String(deliveryMethod || '').toLowerCase() === 'delivery') {
+      const addressValidationError = getDeliveryAddressValidationError(deliveryAddress);
+      if (addressValidationError) {
+        return res.status(400).json({ error: addressValidationError });
+      }
+    }
+
     if (containsLecheFlan && restrictionMessage) {
       return res.status(409).json({ error: restrictionMessage });
     }
+
+    const resolvedDestinationLatitude = savedDeliveryAddress
+      ? Number(deliveryAddress.latitude)
+      : destinationLatitude;
+    const resolvedDestinationLongitude = savedDeliveryAddress
+      ? Number(deliveryAddress.longitude)
+      : destinationLongitude;
 
     const productSubtotal = finalizedItems.reduce((sum, item) => sum + ((Number(item.price) || 0) * item.quantity), 0);
     const deliveryCharge = deliveryMethod === 'delivery' ? DELIVERY_FEE : 0;
@@ -593,10 +690,22 @@ router.post('/checkout-sessions', requireAuth, async (req, res, next) => {
         currency: 'PHP',
         customer_name: customerName || req.profile?.full_name || req.profile?.username || 'Customer',
         customer_email: req.profile?.email || req.authUser?.email || '',
-        phone_number: phoneNumber || req.profile?.phone_number || '',
-        address: address || req.profile?.address || '',
+        phone_number: phoneNumber || deliveryAddress.contactNumber || req.profile?.phone_number || '',
+        address: deliveryAddress.address || address || req.profile?.address || '',
         delivery_method: deliveryMethod,
+        delivery_address_id: savedDeliveryAddress?.id || null,
         delivery_distance_km: Number.isFinite(distanceKm) ? distanceKm : null,
+        delivery_recipient_name: deliveryAddress.recipientName || null,
+        delivery_contact_number: deliveryAddress.contactNumber || null,
+        delivery_street_address: deliveryAddress.streetAddress || null,
+        delivery_barangay: deliveryAddress.barangay || null,
+        delivery_city: deliveryAddress.city || null,
+        delivery_province: deliveryAddress.province || null,
+        delivery_postal_code: deliveryAddress.postalCode || null,
+        delivery_formatted_address: deliveryAddress.formattedAddress || deliveryAddress.address || null,
+        delivery_place_id: deliveryAddress.placeId || null,
+        delivery_latitude: Number.isFinite(resolvedDestinationLatitude) ? resolvedDestinationLatitude : deliveryAddress.latitude,
+        delivery_longitude: Number.isFinite(resolvedDestinationLongitude) ? resolvedDestinationLongitude : deliveryAddress.longitude,
         line_items: finalizedItems.map((item) => ({
           product_id: item.product_id,
           quantity: item.quantity,
@@ -616,12 +725,26 @@ router.post('/checkout-sessions', requireAuth, async (req, res, next) => {
       userId: req.authUser.id,
       profile: req.profile,
       customerName: customerName || req.profile?.full_name || req.profile?.username || 'Customer',
-      phoneNumber: phoneNumber || req.profile?.phone_number || '',
-      address: address || req.profile?.address || '',
+      phoneNumber: phoneNumber || deliveryAddress.contactNumber || req.profile?.phone_number || '',
+      address: deliveryAddress.address || address || req.profile?.address || '',
       deliveryMethod,
       paymentMethod: String(paymentMethod || 'online').toLowerCase(),
       totalPrice: totalAmount,
+      deliveryAddressId: savedDeliveryAddress?.id || null,
       deliveryDistanceKm: Number.isFinite(distanceKm) ? distanceKm : null,
+      deliveryLatitude: Number.isFinite(resolvedDestinationLatitude) ? resolvedDestinationLatitude : null,
+      deliveryLongitude: Number.isFinite(resolvedDestinationLongitude) ? resolvedDestinationLongitude : null,
+      deliveryAddress,
+      deliveryRecipientName: deliveryAddress.recipientName,
+      deliveryContactNumber: deliveryAddress.contactNumber,
+      deliveryStreetAddress: deliveryAddress.streetAddress,
+      deliveryBarangay: deliveryAddress.barangay,
+      deliveryCity: deliveryAddress.city,
+      deliveryProvince: deliveryAddress.province,
+      deliveryPostalCode: deliveryAddress.postalCode,
+      deliveryFormattedAddress: deliveryAddress.formattedAddress,
+      deliveryPlaceId: deliveryAddress.placeId,
+      deliveryInstructions,
       orderStatus: 'pending',
       items: finalizedItems,
     });

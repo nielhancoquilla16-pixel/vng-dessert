@@ -1,3 +1,4 @@
+import { publicErrorMessage } from '../lib/publicErrors';
 /* eslint-disable react-refresh/only-export-components */
 import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
 import { apiRequest, isBackendIssueError } from '../lib/api';
@@ -20,6 +21,10 @@ const parseCurrencyAmount = (value) => {
   return Number.isFinite(parsed) ? parsed : 0;
 };
 
+const parseOptionalCoordinate = (value) => (
+  String(value ?? '').trim() ? Number(value) : Number.NaN
+);
+
 const normalizeLineItems = (items = []) => (
   items.map((item) => ({
     ...item,
@@ -33,6 +38,7 @@ const normalizeLineItems = (items = []) => (
 const normalizeNotifications = (notifications = []) => (
   Array.isArray(notifications)
     ? notifications.map((notification) => ({
+        id: String(notification?.id || notification?.notificationId || '').trim(),
         audience: String(notification?.audience || 'customer').toLowerCase(),
         type: String(notification?.type || 'info').toLowerCase(),
         message: String(notification?.message || '').trim(),
@@ -63,6 +69,37 @@ const normalizeIssueReports = (reports = []) => (
     : []
 );
 
+const RETURN_REFUND_STATUSES = new Set(['pending', 'approved', 'processing', 'refunded', 'completed', 'rejected']);
+
+const normalizeReturnRefundStatus = (value = '') => {
+  const normalized = String(value || '').trim().toLowerCase();
+  return RETURN_REFUND_STATUSES.has(normalized) ? normalized : 'none';
+};
+
+const normalizeReturnRefundRequests = (requests = []) => (
+  Array.isArray(requests)
+    ? requests.map((request) => ({
+        id: request.id,
+        orderId: request.orderId || request.order_id || '',
+        userId: request.userId || request.user_id || '',
+        type: String(request.type || request.requestType || request.request_type || 'refund').toLowerCase(),
+        reason: request.reason || '',
+        customerMessage: request.customerMessage || request.customer_message || '',
+        evidenceImageUrl: request.evidenceImageUrl || request.evidence_image_url || '',
+        status: normalizeReturnRefundStatus(request.status),
+        rejectionReason: request.rejectionReason || request.rejection_reason || '',
+        submittedAt: request.submittedAt || request.createdAt || request.created_at || '',
+        updatedAt: request.updatedAt || request.updated_at || '',
+        approvedAt: request.approvedAt || request.approved_at || null,
+        processingAt: request.processingAt || request.processing_at || null,
+        refundedAt: request.refundedAt || request.refunded_at || null,
+        completedAt: request.completedAt || request.completed_at || null,
+        rejectedAt: request.rejectedAt || request.rejected_at || null,
+        history: Array.isArray(request.history) ? request.history : (Array.isArray(request.status_history) ? request.status_history : []),
+      }))
+    : []
+);
+
 const normalizePaymentCheckouts = (checkouts = []) => (
   Array.isArray(checkouts)
     ? checkouts.map((checkout) => ({
@@ -86,6 +123,83 @@ const normalizePaymentCheckouts = (checkouts = []) => (
       ))
     : []
 );
+
+const LALAMOVE_STATUS_LABELS = {
+  BOOKING: 'Booking in Progress',
+  BOOKING_UNCONFIRMED: 'Booking Needs Review',
+  ASSIGNING_DRIVER: 'Pending Driver',
+  ON_GOING: 'Driver Assigned',
+  ONGOING: 'Driver Assigned',
+  PICKED_UP: 'Picked Up',
+  COMPLETED: 'Delivered',
+  CANCELED: 'Cancelled',
+  CANCELLED: 'Cancelled',
+  REJECTED: 'Cancelled',
+  EXPIRED: 'Cancelled',
+};
+
+const normalizeLalamoveStatus = (value = '') => (
+  String(value || '')
+    .trim()
+    .replace(/[\s-]+/g, '_')
+    .toUpperCase()
+);
+
+const getLalamoveStatusLabel = (value = '') => {
+  const normalized = normalizeLalamoveStatus(value);
+  return LALAMOVE_STATUS_LABELS[normalized] || (normalized ? normalized.replace(/_/g, ' ') : 'Not Booked');
+};
+
+const normalizeLalamoveDriver = (driver = {}) => {
+  const source = driver && typeof driver === 'object' ? driver : {};
+  const coordinates = source.coordinates && typeof source.coordinates === 'object'
+    ? source.coordinates
+    : {};
+
+  return {
+    driverId: source.driverId || source.driver_id || '',
+    name: source.name || '',
+    phone: source.phone || '',
+    plateNumber: source.plateNumber || source.plate_number || '',
+    photo: source.photo || '',
+    coordinates: {
+      latitude: coordinates.latitude || coordinates.lat || null,
+      longitude: coordinates.longitude || coordinates.lng || null,
+      updatedAt: coordinates.updatedAt || coordinates.updated_at || null,
+    },
+  };
+};
+
+const normalizeLalamoveTracking = (tracking = {}, source = {}) => {
+  const raw = tracking && typeof tracking === 'object' ? tracking : {};
+  const status = normalizeLalamoveStatus(raw.status || source.lalamoveStatus || source.lalamove_status || '');
+  const driver = normalizeLalamoveDriver(raw.driver || source.lalamoveDriver || source.lalamove_driver_info || {
+    driverId: raw.driverId || source.lalamove_driver_id || '',
+  });
+  const orderId = raw.orderId || source.lalamove_order_id || '';
+
+  return {
+    booked: Boolean(raw.booked ?? source.lalamoveBooked ?? orderId),
+    orderId,
+    quotationId: raw.quotationId || source.lalamove_quotation_id || '',
+    status,
+    statusLabel: raw.statusLabel || source.lalamoveStatusLabel || getLalamoveStatusLabel(status),
+    shareLink: raw.shareLink || source.lalamoveShareLink || source.lalamove_share_link || '',
+    driverId: raw.driverId || source.lalamove_driver_id || driver.driverId || '',
+    driver,
+    priceBreakdown: raw.priceBreakdown || source.lalamove_price_breakdown || null,
+    totalFee: raw.totalFee || source.lalamove_total_fee || raw.priceBreakdown?.total || '',
+    currency: raw.currency || raw.priceBreakdown?.currency || 'PHP',
+    distanceMeters: Number.isFinite(Number(raw.distanceMeters ?? source.lalamove_distance_meters))
+      ? Number(raw.distanceMeters ?? source.lalamove_distance_meters)
+      : null,
+    estimatedDeliveryAt: raw.estimatedDeliveryAt || source.lalamove_estimated_delivery_at || null,
+    bookedAt: raw.bookedAt || source.lalamove_booked_at || null,
+    lastSyncedAt: raw.lastSyncedAt || source.lalamove_last_synced_at || null,
+    bookingError: (raw.bookingError || source.lalamove_booking_error) ? publicErrorMessage('', 500) : '',
+    metadata: raw.metadata || source.lalamove_metadata || null,
+  };
+};
 
 const normalizeStatusTimestamps = (timestamps = {}) => (
   timestamps && typeof timestamps === 'object'
@@ -122,9 +236,32 @@ const normalizeOrder = (order) => {
   const reviewStatus = normalizeReviewStatus(order.reviewStatus || order.review_status || 'none');
   const notifications = normalizeNotifications(order.notifications || []);
   const issueReports = normalizeIssueReports(order.issueReports || order.order_issue_reports || []);
+  const returnRefundRequests = normalizeReturnRefundRequests(
+    order.returnRefundRequests || order.return_refund_requests || [],
+  );
+  const latestReturnRefundRequest = returnRefundRequests[0] || null;
+  const returnRefundStatus = normalizeReturnRefundStatus(
+    latestReturnRefundRequest?.status || order.returnRefundStatus || order.return_refund_status,
+  );
   const paymentCheckouts = normalizePaymentCheckouts(order.paymentCheckouts || order.payment_checkouts || []);
   const latestPaymentCheckout = paymentCheckouts[0] || null;
   const statusTimestamps = normalizeStatusTimestamps(order.statusTimestamps || order.status_timestamps || {});
+  const deliveryLatitude = parseOptionalCoordinate(order.deliveryLatitude ?? order.delivery_latitude);
+  const deliveryLongitude = parseOptionalCoordinate(order.deliveryLongitude ?? order.delivery_longitude);
+  const deliveryAddress = {
+    recipientName: order.deliveryRecipientName || order.delivery_recipient_name || order.customer_name || order.customer || '',
+    contactNumber: order.deliveryContactNumber || order.delivery_contact_number || order.phone_number || order.phoneNumber || '',
+    streetAddress: order.deliveryStreetAddress || order.delivery_street_address || '',
+    barangay: order.deliveryBarangay || order.delivery_barangay || '',
+    city: order.deliveryCity || order.delivery_city || '',
+    province: order.deliveryProvince || order.delivery_province || '',
+    postalCode: order.deliveryPostalCode || order.delivery_postal_code || '',
+    formattedAddress: order.deliveryFormattedAddress || order.delivery_formatted_address || order.address || '',
+    placeId: order.deliveryPlaceId || order.delivery_place_id || '',
+    latitude: Number.isFinite(deliveryLatitude) ? deliveryLatitude : null,
+    longitude: Number.isFinite(deliveryLongitude) ? deliveryLongitude : null,
+  };
+  const lalamoveTracking = normalizeLalamoveTracking(order.lalamove || order.lalamoveTracking || {}, order);
   const placedByRole = String(order.placedByRole || order.placed_by_role || order.profiles?.role || '').toLowerCase();
   const itemsText = typeof order.items === 'string'
     ? order.items
@@ -140,12 +277,20 @@ const normalizeOrder = (order) => {
   const qrToken = verificationRequired ? String(order.qrToken || order.qr_token || '').toUpperCase() : '';
   const feedbackToken = String(order.feedbackToken || order.feedback_token || '').toUpperCase();
   const qrPayload = String(order.qrPayload || order.qr_payload || (qrToken ? `vng-order:${qrToken}` : ''));
+  const qrGeneratedAt = order.qrGeneratedAt || order.qr_generated_at || null;
+  const qrGeneratedTime = Date.parse(qrGeneratedAt || '');
+  const qrExpiresAt = order.qrExpiresAt || order.qr_expires_at || (
+    Number.isFinite(qrGeneratedTime) ? new Date(qrGeneratedTime + (6 * 60 * 1000)).toISOString() : null
+  );
+  const qrExpiryTime = Date.parse(qrExpiresAt || '');
   const qrUsedAt = order.qrUsedAt || order.qr_used_at || order.qrClaimedAt || order.qr_claimed_at || null;
   const pickupPaymentLabel = paymentMethod === 'online' ? 'Online Payment' : 'Pay at Store';
   const qrActive = Boolean(order.qrActive ?? order.qr_active ?? (
     verificationRequired
     && Boolean(qrToken)
     && !qrUsedAt
+    && Number.isFinite(qrExpiryTime)
+    && qrExpiryTime > Date.now()
     && !['delivered', 'completed', 'cancelled', 'refunded'].includes(status)
   ));
   const isCodOrder = Boolean(order.isCodOrder ?? order.is_cod_order ?? (
@@ -166,6 +311,10 @@ const normalizeOrder = (order) => {
     reviewStatus,
     reviewReason: order.reviewReason || order.review_reason || '',
     reviewStatusUpdatedAt: order.reviewStatusUpdatedAt || order.review_status_updated_at || null,
+    returnRefundStatus,
+    returnRefundRequestId: order.returnRefundRequestId || order.return_refund_request_id || latestReturnRefundRequest?.id || null,
+    returnRefundRequests,
+    latestReturnRefundRequest,
     cancellationReason: order.cancellationReason || order.cancellation_reason || '',
     totalAmount,
     totalPrice: totalAmount,
@@ -177,10 +326,34 @@ const normalizeOrder = (order) => {
     isWalkInOrder,
     deliveryMethod,
     paymentMethod,
+    deliveryAddressId: order.deliveryAddressId || order.delivery_address_id || null,
+    cashReceived: Number.isFinite(Number(order.cashReceived ?? order.cash_received))
+      ? Number(order.cashReceived ?? order.cash_received)
+      : null,
+    changeAmount: Number.isFinite(Number(order.changeAmount ?? order.change_amount))
+      ? Number(order.changeAmount ?? order.change_amount)
+      : null,
     isCodOrder,
     deliveryDistanceKm: Number.isFinite(Number(order.deliveryDistanceKm || order.delivery_distance_km))
       ? Number(order.deliveryDistanceKm || order.delivery_distance_km)
       : null,
+    deliveryLatitude: Number.isFinite(deliveryLatitude) ? deliveryLatitude : null,
+    deliveryLongitude: Number.isFinite(deliveryLongitude) ? deliveryLongitude : null,
+    deliveryCoordinates: {
+      latitude: Number.isFinite(deliveryLatitude) ? deliveryLatitude : null,
+      longitude: Number.isFinite(deliveryLongitude) ? deliveryLongitude : null,
+    },
+    deliveryRecipientName: deliveryAddress.recipientName,
+    deliveryContactNumber: deliveryAddress.contactNumber,
+    deliveryStreetAddress: deliveryAddress.streetAddress,
+    deliveryBarangay: deliveryAddress.barangay,
+    deliveryCity: deliveryAddress.city,
+    deliveryProvince: deliveryAddress.province,
+    deliveryPostalCode: deliveryAddress.postalCode,
+    deliveryFormattedAddress: deliveryAddress.formattedAddress,
+    deliveryPlaceId: deliveryAddress.placeId,
+    deliveryAddress,
+    deliveryInstructions: order.deliveryInstructions || order.delivery_instructions || '',
     containsLecheFlan: Boolean(order.containsLecheFlan ?? order.contains_leche_flan),
     verificationRequired,
     verificationMethod: order.verificationMethod || order.verification_method || '',
@@ -190,7 +363,9 @@ const normalizeOrder = (order) => {
     feedbackToken,
     feedbackTokenGeneratedAt: order.feedbackTokenGeneratedAt || order.feedback_token_generated_at || null,
     qrPayload,
-    qrGeneratedAt: order.qrGeneratedAt || order.qr_generated_at || null,
+    qrGeneratedAt,
+    qrExpiresAt,
+    qrExpired: verificationRequired && Boolean(qrToken) && (!Number.isFinite(qrExpiryTime) || qrExpiryTime <= Date.now()),
     qrUsedAt,
     qrClaimedAt: order.qrClaimedAt || order.qr_claimed_at || null,
     readyNotifiedAt: order.readyNotifiedAt || order.ready_notified_at || null,
@@ -208,6 +383,13 @@ const normalizeOrder = (order) => {
       deliveryMethod,
       paymentCheckoutStatus: latestPaymentCheckout?.status || order.paymentCheckoutStatus || order.payment_checkout_status || '',
     }),
+    lalamove: lalamoveTracking,
+    lalamoveTracking,
+    lalamoveBooked: lalamoveTracking.booked,
+    lalamoveStatus: lalamoveTracking.status,
+    lalamoveStatusLabel: lalamoveTracking.statusLabel,
+    lalamoveShareLink: lalamoveTracking.shareLink,
+    lalamoveDriver: lalamoveTracking.driver,
     receiptImageUrl: order.receiptImageUrl || order.receipt_image_url || '',
     receiptReceivedAt: order.receiptReceivedAt || order.receipt_received_at || null,
     inventoryDeductedAt: order.inventoryDeductedAt || order.inventory_deducted_at || null,
@@ -307,21 +489,42 @@ export const OrderProvider = ({ children }) => {
 
     return subscribeToDatabaseChanges({
       channelName: `orders-sync-${userRole || 'guest'}`,
-      tables: ['orders', 'order_items', 'order_issue_reports', 'payment_checkouts'],
+      tables: ['orders', 'order_items', 'order_issue_reports', 'return_refund_requests', 'payment_checkouts'],
       onChange: refreshOrders,
     });
   }, [isAuthLoading, refreshOrders, session?.access_token, userRole]);
 
   const addOrder = useCallback(async (orderData) => {
+    const deliveryAddress = orderData.deliveryAddress || {};
     const payload = {
       customer_name: orderData.customer || '',
       phone_number: orderData.phoneNumber || '',
       address: orderData.address || '',
       delivery_method: orderData.deliveryMethod || 'pickup',
       payment_method: orderData.paymentMethod || 'cash',
+      delivery_address_id: orderData.deliveryAddressId || orderData.delivery_address_id || null,
+      cash_received: Number.isFinite(Number(orderData.cashReceived ?? orderData.cash_received))
+        ? Number(orderData.cashReceived ?? orderData.cash_received)
+        : null,
       delivery_distance_km: Number.isFinite(Number(orderData.deliveryDistanceKm))
         ? Number(orderData.deliveryDistanceKm)
         : null,
+      delivery_latitude: Number.isFinite(parseOptionalCoordinate(orderData.deliveryLatitude ?? deliveryAddress.latitude))
+        ? parseOptionalCoordinate(orderData.deliveryLatitude ?? deliveryAddress.latitude)
+        : null,
+      delivery_longitude: Number.isFinite(parseOptionalCoordinate(orderData.deliveryLongitude ?? deliveryAddress.longitude))
+        ? parseOptionalCoordinate(orderData.deliveryLongitude ?? deliveryAddress.longitude)
+        : null,
+      delivery_recipient_name: orderData.deliveryRecipientName || deliveryAddress.recipientName || orderData.customer || '',
+      delivery_contact_number: orderData.deliveryContactNumber || deliveryAddress.contactNumber || orderData.phoneNumber || '',
+      delivery_street_address: orderData.deliveryStreetAddress || deliveryAddress.streetAddress || '',
+      delivery_barangay: orderData.deliveryBarangay || deliveryAddress.barangay || '',
+      delivery_city: orderData.deliveryCity || deliveryAddress.city || '',
+      delivery_province: orderData.deliveryProvince || deliveryAddress.province || '',
+      delivery_postal_code: orderData.deliveryPostalCode || deliveryAddress.postalCode || '',
+      delivery_formatted_address: orderData.deliveryFormattedAddress || deliveryAddress.formattedAddress || orderData.address || '',
+      delivery_place_id: orderData.deliveryPlaceId || deliveryAddress.placeId || '',
+      delivery_instructions: orderData.deliveryInstructions || '',
       total_price: Number(orderData.totalAmount) || parseCurrencyAmount(orderData.total),
       order_status: normalizeOrderStatus(orderData.status || 'confirmed'),
       items: (orderData.lineItems || []).map((item) => ({
@@ -347,15 +550,36 @@ export const OrderProvider = ({ children }) => {
   }, [session]);
 
   const updateOrderItems = useCallback(async (orderId, orderData) => {
+    const deliveryAddress = orderData.deliveryAddress || {};
     const payload = {
       customer_name: orderData.customer || orderData.customerName || '',
       phone_number: orderData.phoneNumber || '',
       address: orderData.address || '',
       delivery_method: orderData.deliveryMethod || 'pickup',
       payment_method: orderData.paymentMethod || 'cash',
+      delivery_address_id: orderData.deliveryAddressId || orderData.delivery_address_id || null,
+      cash_received: Number.isFinite(Number(orderData.cashReceived ?? orderData.cash_received))
+        ? Number(orderData.cashReceived ?? orderData.cash_received)
+        : null,
       delivery_distance_km: Number.isFinite(Number(orderData.deliveryDistanceKm))
         ? Number(orderData.deliveryDistanceKm)
         : null,
+      delivery_latitude: Number.isFinite(parseOptionalCoordinate(orderData.deliveryLatitude ?? deliveryAddress.latitude))
+        ? parseOptionalCoordinate(orderData.deliveryLatitude ?? deliveryAddress.latitude)
+        : null,
+      delivery_longitude: Number.isFinite(parseOptionalCoordinate(orderData.deliveryLongitude ?? deliveryAddress.longitude))
+        ? parseOptionalCoordinate(orderData.deliveryLongitude ?? deliveryAddress.longitude)
+        : null,
+      delivery_recipient_name: orderData.deliveryRecipientName || deliveryAddress.recipientName || orderData.customer || orderData.customerName || '',
+      delivery_contact_number: orderData.deliveryContactNumber || deliveryAddress.contactNumber || orderData.phoneNumber || '',
+      delivery_street_address: orderData.deliveryStreetAddress || deliveryAddress.streetAddress || '',
+      delivery_barangay: orderData.deliveryBarangay || deliveryAddress.barangay || '',
+      delivery_city: orderData.deliveryCity || deliveryAddress.city || '',
+      delivery_province: orderData.deliveryProvince || deliveryAddress.province || '',
+      delivery_postal_code: orderData.deliveryPostalCode || deliveryAddress.postalCode || '',
+      delivery_formatted_address: orderData.deliveryFormattedAddress || deliveryAddress.formattedAddress || orderData.address || '',
+      delivery_place_id: orderData.deliveryPlaceId || deliveryAddress.placeId || '',
+      delivery_instructions: orderData.deliveryInstructions || '',
       items: (orderData.lineItems || []).map((item) => ({
         product_id: item.productId || item.product_id || item.id,
         quantity: Number(item.quantity) || 0,
@@ -418,6 +642,108 @@ export const OrderProvider = ({ children }) => {
     return normalizedOrder;
   }, [session]);
 
+  const bookLalamoveDelivery = useCallback(async (orderId, deliveryData = {}) => {
+    const bookedResult = await apiRequest(`/api/orders/${orderId}/lalamove/book`, {
+      method: 'POST',
+      body: JSON.stringify({
+        recipientName: deliveryData.recipientName || deliveryData.deliveryRecipientName || '',
+        contactNumber: deliveryData.contactNumber || deliveryData.deliveryContactNumber || '',
+        streetAddress: deliveryData.streetAddress || deliveryData.deliveryStreetAddress || '',
+        barangay: deliveryData.barangay || deliveryData.deliveryBarangay || '',
+        city: deliveryData.city || deliveryData.deliveryCity || '',
+        province: deliveryData.province || deliveryData.deliveryProvince || '',
+        postalCode: deliveryData.postalCode || deliveryData.deliveryPostalCode || '',
+        formattedAddress: deliveryData.formattedAddress || deliveryData.deliveryFormattedAddress || deliveryData.address || '',
+        placeId: deliveryData.placeId || deliveryData.deliveryPlaceId || '',
+        destinationLatitude: deliveryData.destinationLatitude ?? deliveryData.deliveryLatitude ?? '',
+        destinationLongitude: deliveryData.destinationLongitude ?? deliveryData.deliveryLongitude ?? '',
+        instructions: deliveryData.instructions || deliveryData.deliveryInstructions || '',
+      }),
+    }, {
+      auth: true,
+      accessToken: session?.access_token,
+    });
+
+    const lalamoveLaunch = bookedResult?.lalamoveLaunch || null;
+    const responseOrder = bookedResult?.order || bookedResult;
+    const normalizedOrder = normalizeOrder({
+      ...responseOrder,
+      lalamoveShareLink: responseOrder?.lalamoveShareLink || lalamoveLaunch?.shareLink || lalamoveLaunch?.launchUrls?.web || '',
+    });
+    if (normalizedOrder) {
+      setOrders((prev) => prev.map((order) => (
+        order.id === normalizedOrder.id ? normalizedOrder : order
+      )));
+    }
+    return {
+      order: normalizedOrder,
+      lalamoveLaunch,
+    };
+  }, [session]);
+
+  const syncLalamoveDelivery = useCallback(async (orderId) => {
+    const syncedOrder = await apiRequest(`/api/orders/${orderId}/lalamove/sync`, {
+      method: 'POST',
+    }, {
+      auth: true,
+      accessToken: session?.access_token,
+    });
+
+    const normalizedOrder = syncOrderFromResponse(syncedOrder);
+    setOrders((prev) => prev.map((order) => (
+      order.id === normalizedOrder.id ? normalizedOrder : order
+    )));
+    return normalizedOrder;
+  }, [session]);
+
+  const cancelLalamoveDelivery = useCallback(async (orderId) => {
+    const cancelledResult = await apiRequest(`/api/orders/${orderId}/lalamove/cancel`, {
+      method: 'POST',
+    }, {
+      auth: true,
+      accessToken: session?.access_token,
+    });
+
+    const normalizedOrder = syncOrderFromResponse(cancelledResult?.order);
+    if (!normalizedOrder?.id) {
+      throw new Error('Cancellation response is incomplete. Refresh tracking to check the booking status.');
+    }
+    setOrders((prev) => prev.map((order) => (
+      order.id === normalizedOrder.id ? normalizedOrder : order
+    )));
+    return normalizedOrder;
+  }, [session]);
+
+  const saveLalamoveReference = useCallback(async (orderId, referenceData = {}) => {
+    const savedOrder = await apiRequest(`/api/orders/${orderId}/lalamove/reference`, {
+      method: 'PATCH',
+      body: JSON.stringify({
+        lalamoveOrderId: referenceData.lalamoveOrderId || referenceData.orderId || referenceData.reference || '',
+        shareLink: referenceData.shareLink || '',
+      }),
+    }, {
+      auth: true,
+      accessToken: session?.access_token,
+    });
+
+    const normalizedOrder = syncOrderFromResponse(savedOrder);
+    setOrders((prev) => prev.map((order) => (
+      order.id === normalizedOrder.id ? normalizedOrder : order
+    )));
+    return normalizedOrder;
+  }, [session]);
+
+  const getLalamoveStatus = useCallback(async () => {
+    if (!session?.access_token || !['admin', 'staff'].includes(userRole)) {
+      return null;
+    }
+
+    return apiRequest('/api/orders/lalamove/status', {}, {
+      auth: true,
+      accessToken: session.access_token,
+    });
+  }, [session, userRole]);
+
   const confirmOrderReceipt = useCallback(async (orderId, receiptImageDataUrl = '') => {
     const confirmedOrder = await apiRequest(`/api/orders/${orderId}/confirm-receipt`, {
       method: 'POST',
@@ -478,6 +804,50 @@ export const OrderProvider = ({ children }) => {
     return normalizedOrder;
   }, [session]);
 
+  const submitReturnRefundRequest = useCallback(async (orderId, requestData = {}) => {
+    const response = await apiRequest(`/api/orders/${orderId}/return-refund-requests`, {
+      method: 'POST',
+      body: JSON.stringify({
+        request_type: requestData.type || requestData.requestType || 'refund',
+        reason: requestData.reason || '',
+        customer_message: requestData.customerMessage || requestData.customer_message || '',
+        evidence_image_data_url: requestData.evidenceImageDataUrl || requestData.evidence_image_data_url || '',
+      }),
+    }, {
+      auth: true,
+      accessToken: session?.access_token,
+    });
+
+    const normalizedOrder = syncOrderFromResponse(response);
+    if (normalizedOrder) {
+      setOrders((prev) => prev.map((order) => (
+        order.id === normalizedOrder.id ? normalizedOrder : order
+      )));
+    }
+    return normalizedOrder;
+  }, [session]);
+
+  const updateReturnRefundRequest = useCallback(async (requestId, status, reason = '') => {
+    const response = await apiRequest(`/api/orders/return-refund-requests/${requestId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({
+        status,
+        ...(reason ? { reason } : {}),
+      }),
+    }, {
+      auth: true,
+      accessToken: session?.access_token,
+    });
+
+    const normalizedOrder = syncOrderFromResponse(response);
+    if (normalizedOrder) {
+      setOrders((prev) => prev.map((order) => (
+        order.id === normalizedOrder.id ? normalizedOrder : order
+      )));
+    }
+    return normalizedOrder;
+  }, [session]);
+
   const cancelOrder = useCallback(async (orderId, reason = '') => {
     const normalizedRole = String(userRole || '').toLowerCase();
     const isPrivileged = ['admin', 'staff'].includes(normalizedRole);
@@ -518,10 +888,17 @@ export const OrderProvider = ({ children }) => {
         updateOrderItems,
         updateOrderStatus,
         markOrderAsDelivered,
+        bookLalamoveDelivery,
+        syncLalamoveDelivery,
+        cancelLalamoveDelivery,
+        saveLalamoveReference,
+        getLalamoveStatus,
         confirmOrderReceipt,
         markOrderAsReceived,
         submitOrderIssue,
         reviewOrderIssue,
+        submitReturnRefundRequest,
+        updateReturnRefundRequest,
         cancelOrder,
         refreshOrders,
       }}

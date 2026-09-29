@@ -1,8 +1,15 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Camera, Mail, MapPin, Phone, Save, UserRound, X } from 'lucide-react';
+import { Camera, Mail, MapPin, Phone, Save, ShieldCheck, UserRound, X } from 'lucide-react';
 import LoadingButton from '../components/LoadingButton';
+import SavedAddressManager from '../components/SavedAddressManager';
 import { useAuth } from '../context/AuthContext';
+import { useCustomerAddresses } from '../context/CustomerAddressesContext';
+import {
+  getPhoneNumberValidationMessage,
+  PHONE_NUMBER_VALIDATION_MESSAGE,
+  sanitizePhoneNumber,
+} from '../utils/phoneNumber';
 import './CustomerProfile.css';
 
 const MAX_PROFILE_IMAGE_BYTES = 2 * 1024 * 1024;
@@ -42,7 +49,7 @@ const validateImageFile = (file) => {
 const mapCustomerToForm = (customer) => ({
   username: customer?.username || '',
   fullName: customer?.fullName || '',
-  phoneNumber: customer?.phoneNumber || '',
+  phoneNumber: sanitizePhoneNumber(customer?.phoneNumber),
   address: customer?.address || '',
   avatarUrl: customer?.avatarUrl || '',
 });
@@ -59,6 +66,7 @@ const AvatarPreview = ({ avatarUrl, label }) => (
 
 const CustomerProfile = () => {
   const { loggedInCustomer, profile, isAuthLoading, updateMyProfile } = useAuth();
+  const { refreshAddresses } = useCustomerAddresses();
   const [formData, setFormData] = useState(() => mapCustomerToForm(loggedInCustomer));
   const [saveError, setSaveError] = useState('');
   const [saveNotice, setSaveNotice] = useState('');
@@ -113,12 +121,48 @@ const CustomerProfile = () => {
 
   const handleFieldChange = (event) => {
     const { name, value } = event.target;
+    const nextValue = name === 'phoneNumber' ? sanitizePhoneNumber(value) : value;
+    if (name === 'phoneNumber') event.target.setCustomValidity('');
     setSaveError('');
     setSaveNotice('');
     setFormData((current) => ({
       ...current,
-      [name]: value,
+      [name]: nextValue,
     }));
+  };
+
+  const handlePhoneKeyDown = (event) => {
+    if (event.ctrlKey || event.metaKey || event.altKey || event.key.length !== 1) return;
+    if (!/^\d$/.test(event.key)) {
+      event.preventDefault();
+      return;
+    }
+
+    const input = event.currentTarget;
+    const selectedLength = (input.selectionEnd || 0) - (input.selectionStart || 0);
+    if (input.value.length - selectedLength >= 11) event.preventDefault();
+  };
+
+  const handlePhonePaste = (event) => {
+    event.preventDefault();
+    const input = event.currentTarget;
+    const currentValue = sanitizePhoneNumber(input.value);
+    const selectionStart = input.selectionStart ?? currentValue.length;
+    const selectionEnd = input.selectionEnd ?? currentValue.length;
+    const start = Math.min(selectionStart, selectionEnd);
+    const end = Math.max(selectionStart, selectionEnd);
+    const availableDigits = 11 - (currentValue.length - (end - start));
+    const pastedDigits = sanitizePhoneNumber(event.clipboardData?.getData('text') || '')
+      .slice(0, Math.max(0, availableDigits));
+    const nextValue = `${currentValue.slice(0, start)}${pastedDigits}${currentValue.slice(end)}`;
+
+    setFormData((current) => ({ ...current, phoneNumber: nextValue }));
+    setSaveError('');
+    setSaveNotice('');
+    input.setCustomValidity('');
+    requestAnimationFrame(() => {
+      input.setSelectionRange(start + pastedDigits.length, start + pastedDigits.length);
+    });
   };
 
   const handleReset = () => {
@@ -143,7 +187,14 @@ const CustomerProfile = () => {
       });
 
       setFormData(mapCustomerToForm(updatedProfile));
-      setSaveNotice('Your customer profile was updated.');
+      try {
+        await refreshAddresses();
+        setSaveNotice(updatedProfile.address?.trim()
+          ? 'Your profile and default address were saved.'
+          : 'Your customer profile was updated.');
+      } catch {
+        setSaveError('Your profile was saved, but Saved Addresses could not refresh. Please reload the page.');
+      }
     } catch (error) {
       setSaveError(error.message || 'Unable to update your profile right now.');
     } finally {
@@ -180,8 +231,7 @@ const CustomerProfile = () => {
     <div className="customer-profile-page">
       <section className="customer-profile-hero">
         <div>
-          <p className="customer-profile-eyebrow">My Account</p>
-          <h1>Your Profile</h1>
+          <h1>My Account</h1>
         </div>
         <div className="customer-profile-summary-chip">
           <span>Joined</span>
@@ -202,8 +252,8 @@ const CustomerProfile = () => {
                 <span>{loggedInCustomer.email || 'No email saved'}</span>
               </div>
               <div>
-                <UserRound size={16} />
-                <span>Nickname is used for your account greeting and login name.</span>
+                <ShieldCheck size={16} />
+                <span>Email status: {profile?.emailVerified ? 'Verified' : 'Not Verified'}</span>
               </div>
             </div>
           </div>
@@ -228,19 +278,6 @@ const CustomerProfile = () => {
                 }}
               />
             </label>
-
-            <div className="customer-profile-form-group">
-              <label htmlFor="avatarUrl">Or paste image link</label>
-              <input
-                id="avatarUrl"
-                name="avatarUrl"
-                type="url"
-                className="customer-profile-input"
-                placeholder="https://example.com/my-photo.jpg"
-                value={formData.avatarUrl.startsWith('data:') ? '' : formData.avatarUrl}
-                onChange={handleFieldChange}
-              />
-            </div>
 
             {formData.avatarUrl.startsWith('data:') && (
               <p className="customer-profile-helper">
@@ -279,6 +316,7 @@ const CustomerProfile = () => {
                   id="username"
                   name="username"
                   type="text"
+                  autoComplete="nickname"
                   className="customer-profile-input"
                   placeholder="Enter your nickname"
                   value={formData.username}
@@ -293,6 +331,7 @@ const CustomerProfile = () => {
                   id="fullName"
                   name="fullName"
                   type="text"
+                  autoComplete="name"
                   className="customer-profile-input"
                   placeholder="Enter your full name"
                   value={formData.fullName}
@@ -320,11 +359,23 @@ const CustomerProfile = () => {
                   <input
                     id="phoneNumber"
                     name="phoneNumber"
-                    type="text"
+                    type="tel"
+                    autoComplete="tel"
+                    inputMode="numeric"
+                    pattern="[0-9]{11}"
+                    maxLength={11}
+                    required
                     className="customer-profile-input customer-profile-input-plain"
                     placeholder="09123456789"
                     value={formData.phoneNumber}
                     onChange={handleFieldChange}
+                    onKeyDown={handlePhoneKeyDown}
+                    onPaste={handlePhonePaste}
+                    onInvalid={(event) => {
+                      const message = getPhoneNumberValidationMessage(event.currentTarget.value);
+                      event.currentTarget.setCustomValidity(message);
+                      setSaveError(PHONE_NUMBER_VALIDATION_MESSAGE);
+                    }}
                   />
                 </div>
               </div>
@@ -337,17 +388,22 @@ const CustomerProfile = () => {
                 <textarea
                   id="address"
                   name="address"
+                  autoComplete="street-address"
                   className="customer-profile-input customer-profile-input-plain"
                   placeholder="House/Unit No., Street, Barangay, City"
                   value={formData.address}
                   onChange={handleFieldChange}
                   rows={4}
+                  aria-describedby="default-address-help"
                 />
               </div>
+              <p id="default-address-help" className="customer-profile-helper">
+                Save your profile to add this address to Saved Addresses.
+              </p>
             </div>
 
-            {saveError && <div className="customer-profile-feedback error">{saveError}</div>}
-            {saveNotice && <div className="customer-profile-feedback success">{saveNotice}</div>}
+            {saveError && <div className="customer-profile-feedback error" role="alert">{saveError}</div>}
+            {saveNotice && <div className="customer-profile-feedback success" role="status">{saveNotice}</div>}
 
             <div className="customer-profile-actions">
               <button
@@ -369,6 +425,8 @@ const CustomerProfile = () => {
             </div>
           </form>
         </section>
+
+        <SavedAddressManager />
       </div>
     </div>
   );

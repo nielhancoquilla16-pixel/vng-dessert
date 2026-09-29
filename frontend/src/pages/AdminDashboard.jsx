@@ -23,7 +23,9 @@ import {
 import { useOrders } from '../context/OrderContext';
 import { useProducts } from '../context/ProductContext';
 import { buildWeeklySalesData, getOrderRevenueEvents } from '../utils/orderAnalytics';
+import { formatCurrency } from '../utils/currency';
 import { getOrderStatusLabel } from '../utils/orderWorkflow';
+import ShopSettingsPanel from '../components/ShopSettingsPanel';
 import './AdminDashboard.css';
 
 const CATEGORY_RESET_STORAGE_KEY = 'vng_dashboard_category_reset_at';
@@ -67,11 +69,6 @@ const parseCurrencyAmount = (value) => {
   const parsed = parseFloat(value.replace(/[^0-9.]/g, ''));
   return Number.isFinite(parsed) ? parsed : 0;
 };
-
-const formatCurrency = (amount) => `PHP ${amount.toLocaleString(undefined, {
-  minimumFractionDigits: 2,
-  maximumFractionDigits: 2
-})}`;
 
 const getOrderTimestamp = (order) => {
   const status = String(order?.status || order?.orderStatus || '').toLowerCase();
@@ -381,7 +378,7 @@ const AdminDashboard = () => {
                 <BarChart data={weeklySalesData} margin={{ top: 20, right: 30, left: 0, bottom: 20 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
                   <XAxis dataKey="day" stroke="#64748b" />
-                  <YAxis stroke="#64748b" />
+                  <YAxis stroke="#64748b" tickFormatter={formatCurrency} />
                   <Tooltip content={<DashboardTooltip />} />
                   <Bar
                     dataKey="sales"
@@ -503,6 +500,7 @@ const AdminDashboard = () => {
           </table>
         )}
       </div>
+      <ShopSettingsPanel />
 
       {pendingResetAction && (
         <div className="modal-overlay" onClick={closeResetDialog}>

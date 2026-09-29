@@ -11,7 +11,15 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { apiRequest } from '../lib/api';
-import { getOrderStatusLabel, getPaymentStatusLabel, getReviewStatusLabel } from '../utils/orderWorkflow';
+import {
+  canConfirmPickupOrder,
+  getOrderStatusLabel,
+  getPaymentStatusLabel,
+  getReviewStatusLabel,
+  isPickupOrder,
+  normalizeOrderStatus,
+} from '../utils/orderWorkflow';
+import { formatCurrency } from '../utils/currency';
 import './AdminQR.css';
 
 const getStatusLabel = (status = '') => getOrderStatusLabel(status, 'admin');
@@ -43,6 +51,7 @@ const AdminQR = () => {
   const [activeOrder, setActiveOrder] = useState(null);
   const [isSearching, setIsSearching] = useState(false);
   const [isConfirming, setIsConfirming] = useState(false);
+  const [clock, setClock] = useState(Date.now());
   const [lookupError, setLookupError] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
   const [lastVerification, setLastVerification] = useState(null);
@@ -51,12 +60,22 @@ const AdminQR = () => {
   const videoRef = useRef(null);
   const scannerControlsRef = useRef(null);
   const scannerReaderRef = useRef(null);
+  const confirmInFlightRef = useRef(false);
+  const qrExpiry = Date.parse(activeOrder?.qrExpiresAt || '');
+  const isOrderCredentialExpired = Boolean(
+    activeOrder?.verificationRequired
+    && (!Number.isFinite(qrExpiry) || qrExpiry <= clock),
+  );
 
-  const canConfirmPickup = useMemo(() => (
-    Boolean(activeOrder)
-    && String(activeOrder.deliveryMethod || '').toLowerCase() === 'pickup'
-    && activeOrder.status === 'ready'
-  ), [activeOrder]);
+  useEffect(() => {
+    const interval = window.setInterval(() => setClock(Date.now()), 1000);
+    return () => window.clearInterval(interval);
+  }, []);
+
+  const canConfirmPickup = useMemo(
+    () => Boolean(activeOrder && canConfirmPickupOrder(activeOrder, clock)),
+    [activeOrder, clock],
+  );
 
   useEffect(() => () => {
     try {
@@ -253,10 +272,11 @@ const AdminQR = () => {
   };
 
   const confirmPickup = async () => {
-    if (!activeOrder) {
+    if (!activeOrder || confirmInFlightRef.current || !canConfirmPickup) {
       return;
     }
 
+    confirmInFlightRef.current = true;
     setIsConfirming(true);
     setLookupError('');
     setSuccessMessage('');
@@ -274,6 +294,7 @@ const AdminQR = () => {
     } catch (error) {
       setLookupError(error.message || 'Unable to confirm this pickup right now.');
     } finally {
+      confirmInFlightRef.current = false;
       setIsConfirming(false);
     }
   };
@@ -428,7 +449,7 @@ const AdminQR = () => {
                 </div>
                 <div>
                   <span>Total</span>
-                  <strong>{activeOrder.total}</strong>
+                  <strong>{formatCurrency(activeOrder.total)}</strong>
                 </div>
                 <div>
                   <span>Payment</span>
@@ -442,7 +463,9 @@ const AdminQR = () => {
                   <span>QR Status</span>
                   <strong>
                     {activeOrder.verificationRequired
-                      ? (activeOrder.qrUsedAt ? 'Used / Invalid' : (activeOrder.qrActive ? 'Active' : 'Not available'))
+                      ? (isOrderCredentialExpired
+                        ? 'Expired'
+                        : (activeOrder.qrUsedAt ? 'Used / Invalid' : (activeOrder.qrActive ? 'Active' : 'Not available')))
                       : 'Optional (COD/manual)'}
                   </strong>
                 </div>
@@ -467,9 +490,9 @@ const AdminQR = () => {
                   <div key={`${activeOrder.id}-${item.id || item.productId || item.name}`} className="lookup-item-row">
                     <div>
                       <strong>{item.name}</strong>
-                      <p>{item.quantity} x PHP {Number(item.price || 0).toFixed(2)}</p>
+                      <p>{item.quantity} x {formatCurrency(item.price)}</p>
                     </div>
-                    <span>PHP {Number(item.lineTotal || (item.quantity * item.price) || 0).toFixed(2)}</span>
+                    <span>{formatCurrency(item.lineTotal || (item.quantity * item.price) || 0)}</span>
                   </div>
                 ))}
               </div>
@@ -498,12 +521,16 @@ const AdminQR = () => {
 
               {!canConfirmPickup && (
                 <p className="lookup-footnote">
-                  {String(activeOrder.deliveryMethod || '').toLowerCase() !== 'pickup'
+                  {isOrderCredentialExpired
+                    ? 'This QR Code/Order ID has expired. Please generate a new one.'
+                    : !isPickupOrder(activeOrder)
                     ? 'This order is not a pickup order. Process it from the Orders workflow.'
-                    : ['delivered', 'completed', 'cancelled', 'refunded'].includes(String(activeOrder.status || '').toLowerCase())
+                    : ['delivered', 'completed', 'cancelled', 'refunded'].includes(normalizeOrderStatus(activeOrder.status))
                       ? 'This order has already been confirmed or verified.'
-                      : activeOrder.status !== 'ready'
-                        ? 'Pickup confirmation is available once the order reaches Ready status.'
+                      : normalizeOrderStatus(activeOrder.status) === 'confirmed'
+                        ? 'Scan and verify this order’s QR code before confirming it.'
+                        : normalizeOrderStatus(activeOrder.status) !== 'ready'
+                          ? 'Pickup confirmation is available once the order reaches Ready status.'
                         : 'This order has already been confirmed or verified.'}
                 </p>
               )}

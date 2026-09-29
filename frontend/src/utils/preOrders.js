@@ -1,5 +1,15 @@
 export const PRE_ORDER_STATUSES = ['pending', 'confirmed', 'completed', 'rejected'];
 
+// Future pre-orders use their own schedule; today's stock does not limit them.
+export const getPreOrderUnavailableReason = (product, { isShopOpen, isShopSettingsLoading, shopSettingsError }) => {
+  if (product?.availability === 'expired' || product?.isExpired) return 'This product has expired.';
+  if (product?.availability === 'hidden') return 'Unavailable for pre-order.';
+  if (isShopSettingsLoading) return 'Checking shop hours…';
+  if (shopSettingsError) return 'Shop hours are currently unavailable.';
+  if (!isShopOpen) return 'Shop closed. Pre-order during opening hours.';
+  return '';
+};
+
 const PRE_ORDER_STATUS_LABELS = {
   pending: 'Pending',
   confirmed: 'Confirmed',

@@ -3,10 +3,18 @@ import { getSupabaseAdmin, getSupabaseAnon, hasSupabaseAdminConfig } from '../li
 import { requireAuth } from '../middleware/requireAuth.js';
 import { requireRole } from '../middleware/requireRole.js';
 import { sanitizeInventoryPayload } from '../lib/inventoryUtils.js';
+import { removeManagedProductImage, resolveProductImageValue } from '../lib/productImages.js';
+import {
+  getExpiryStatus,
+  normalizeExpiryAt,
+  splitExpiryAt,
+} from '../lib/expiry.js';
 
 const router = express.Router();
 
 const normalizeText = (value = '') => String(value ?? '').trim();
+
+const getRequestBaseUrl = (req) => `${req.protocol}://${req.get('host')}`;
 
 const normalizeNameKey = (value = '') => normalizeText(value).toLowerCase();
 
@@ -46,6 +54,17 @@ const getDefaultExpiryDate = () => {
   return date.toISOString().slice(0, 10);
 };
 
+const parsePrice = (value) => {
+  const text = String(value ?? '').trim();
+  const parsed = Number(text);
+  if (!text || !Number.isFinite(parsed) || parsed < 0 || !/^\d+(?:\.\d{1,2})?$/.test(text)) {
+    const error = new Error('Price must be a non-negative number with up to two decimal places.');
+    error.status = 400;
+    throw error;
+  }
+  return parsed;
+};
+
 const isPastDate = (value) => {
   const normalizedDate = normalizeDateString(value);
   if (!normalizedDate) {
@@ -66,6 +85,7 @@ const syncProductInventoryBatch = async (supabase, {
   stockQuantity,
   dateCreated,
   expirationDate,
+  expirationAt,
   imageUrl,
   category,
 }) => {
@@ -73,7 +93,7 @@ const syncProductInventoryBatch = async (supabase, {
 
   const { data: linkedInventoryRows, error: linkedInventoryError } = await supabase
     .from('inventory')
-    .select('id, batch_id, product_id, product_name, date_created, expiration_date, unit')
+    .select('id, batch_id, product_id, product_name, date_created, expiration_date, expiration_at, unit')
     .eq('product_id', productId);
 
   if (linkedInventoryError) {
@@ -82,7 +102,7 @@ const syncProductInventoryBatch = async (supabase, {
 
   const { data: namedInventoryRows, error: namedInventoryError } = await supabase
     .from('inventory')
-    .select('id, batch_id, product_id, product_name, date_created, expiration_date, unit')
+    .select('id, batch_id, product_id, product_name, date_created, expiration_date, expiration_at, unit')
     .ilike('product_name', normalizeText(productName));
 
   if (namedInventoryError) {
@@ -112,6 +132,7 @@ const syncProductInventoryBatch = async (supabase, {
     unit: primaryInventoryRow?.unit || 'pcs',
     date_created: normalizeDateString(dateCreated) || primaryInventoryRow?.date_created || null,
     expiration_date: normalizeDateString(expirationDate) || primaryInventoryRow?.expiration_date || null,
+    expiration_at: expirationAt || primaryInventoryRow?.expiration_at || null,
   });
 
   const inventoryRow = {
@@ -123,6 +144,7 @@ const syncProductInventoryBatch = async (supabase, {
     unit: normalizedInventory.unit,
     date_created: normalizedInventory.dateCreated || null,
     expiration_date: normalizedInventory.expirationDate || null,
+    expiration_at: normalizedInventory.expirationAt || null,
     status: normalizedInventory.status,
     image_url: imageUrl || null,
     category: category || null,
@@ -174,25 +196,53 @@ const deleteProductInventoryBatch = async (supabase, productId) => {
   }
 };
 
-const getAvailabilityForStock = (stockQuantity, explicitAvailability) => {
+const getAvailabilityForStock = (stockQuantity, explicitAvailability, expirationAt = '') => {
   if (explicitAvailability === 'hidden') return 'hidden';
-  return stockQuantity <= 0 ? 'out of stock' : (explicitAvailability || 'available');
+  if (getExpiryStatus({ expirationAt }) === 'expired') return 'expired';
+  return stockQuantity <= 0 ? 'out of stock' : (explicitAvailability === 'expired' ? 'available' : (explicitAvailability || 'available'));
 };
 
-const mapProduct = (row) => ({
-  id: row.id,
-  productName: row.product_name,
-  description: row.description,
-  price: Number(row.price) || 0,
-  category: row.category,
-  stockQuantity: Number(row.stock_quantity) || 0,
-  availability: row.availability,
-  imageUrl: row.image_url,
-  dateCreated: row.date_created,
-  expirationDate: row.expiration_date,
-  createdAt: row.created_at,
-  updatedAt: row.updated_at,
-});
+const mapProduct = (row) => {
+  const expirationAt = normalizeExpiryAt({
+    expirationAt: row.expiration_at,
+    expirationDate: row.expiration_date,
+  });
+  const { expirationDate, expirationTime } = splitExpiryAt(expirationAt);
+  const expiryStatus = getExpiryStatus({ expirationAt });
+
+  return {
+    id: row.id,
+    productName: row.product_name,
+    description: row.description,
+    price: Number(row.price) || 0,
+    category: row.category,
+    stockQuantity: Number(row.stock_quantity) || 0,
+    availability: row.availability === 'hidden'
+      ? 'hidden'
+      : getAvailabilityForStock(Number(row.stock_quantity) || 0, row.availability, expirationAt),
+    expiryStatus,
+    isExpired: expiryStatus === 'expired',
+    imageUrl: row.image_url,
+    dateCreated: row.date_created,
+    expirationDate: expirationDate || row.expiration_date || '',
+    expirationTime,
+    expirationAt: expirationAt || null,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+};
+
+const refreshExpiredProductAvailability = async (supabase) => {
+  const { error } = await supabase
+    .from('products')
+    .update({ availability: 'expired' })
+    .lte('expiration_at', new Date().toISOString())
+    .in('availability', ['available', 'out of stock']);
+
+  if (error) {
+    throw error;
+  }
+};
 
 const mapProductRecipeItem = (row) => ({
   id: row.id,
@@ -396,6 +446,9 @@ const getProductsClient = () => (
 router.get('/', async (req, res, next) => {
   try {
     const supabase = getProductsClient();
+    if (hasSupabaseAdminConfig()) {
+      await refreshExpiredProductAvailability(getSupabaseAdmin());
+    }
     const { data, error } = await supabase
       .from('products')
       .select('*')
@@ -529,13 +582,22 @@ router.post('/', requireAuth, requireRole('admin', 'staff'), async (req, res, ne
       dateCreated,
       expiration_date,
       expirationDate,
+      expiration_at,
+      expirationAt,
+      expiration_time,
+      expirationTime,
     } = req.body;
 
     const resolvedProductName = product_name || productName;
-    const resolvedImageUrl = image_url || imageUrl;
+    const imageInput = image_url ?? imageUrl;
     const resolvedStockQuantity = stock_quantity ?? stockQuantity ?? 0;
     const resolvedDateCreated = normalizeDateString(date_created || dateCreated) || getTodayDateKey();
     const resolvedExpirationDate = normalizeDateString(expiration_date || expirationDate) || getDefaultExpiryDate();
+    const resolvedExpirationAt = normalizeExpiryAt({
+      expirationAt: expiration_at || expirationAt,
+      expirationDate: resolvedExpirationDate,
+      expirationTime: expiration_time || expirationTime,
+    });
 
     if (!resolvedProductName || !category) {
       return res.status(400).json({ error: 'product_name and category are required.' });
@@ -545,19 +607,25 @@ router.post('/', requireAuth, requireRole('admin', 'staff'), async (req, res, ne
       return res.status(400).json({ error: 'Expiration date must be on or after the product creation date.' });
     }
 
+    const resolvedImageUrl = await resolveProductImageValue({
+      imageInput,
+      requestBaseUrl: getRequestBaseUrl(req),
+    });
+
     const supabase = getSupabaseAdmin();
     const { data, error } = await supabase
       .from('products')
       .insert({
         product_name: resolvedProductName,
         description: description || null,
-        price: Number(price) || 0,
+        price: parsePrice(price),
         category,
         stock_quantity: Math.max(0, Number(resolvedStockQuantity) || 0),
-        availability: getAvailabilityForStock(Math.max(0, Number(resolvedStockQuantity) || 0), availability),
+        availability: getAvailabilityForStock(Math.max(0, Number(resolvedStockQuantity) || 0), availability, resolvedExpirationAt),
         image_url: resolvedImageUrl || null,
         date_created: resolvedDateCreated,
         expiration_date: resolvedExpirationDate,
+        expiration_at: resolvedExpirationAt || null,
       })
       .select('*')
       .single();
@@ -573,6 +641,7 @@ router.post('/', requireAuth, requireRole('admin', 'staff'), async (req, res, ne
         stockQuantity: Math.max(0, Number(resolvedStockQuantity) || 0),
         dateCreated: resolvedDateCreated,
         expirationDate: resolvedExpirationDate,
+        expirationAt: resolvedExpirationAt,
         imageUrl: resolvedImageUrl,
         category: category,
       });
@@ -603,13 +672,17 @@ router.patch('/:id', requireAuth, requireRole('admin', 'staff'), async (req, res
       imageUrl: 'image_url',
       dateCreated: 'date_created',
       expirationDate: 'expiration_date',
+      expirationAt: 'expiration_at',
+      expirationTime: 'expiration_time',
     };
-    const allowedFields = ['product_name', 'description', 'price', 'category', 'stock_quantity', 'availability', 'image_url', 'date_created', 'expiration_date'];
+    const allowedFields = ['product_name', 'description', 'price', 'category', 'stock_quantity', 'availability', 'image_url', 'date_created', 'expiration_date', 'expiration_at'];
 
     Object.entries(req.body || {}).forEach(([rawField, value]) => {
       const field = fieldAliases[rawField] || rawField;
       if (allowedFields.includes(field)) {
-        if (field === 'price' || field === 'stock_quantity') {
+        if (field === 'price') {
+          updates[field] = parsePrice(value);
+        } else if (field === 'stock_quantity') {
           updates[field] = Math.max(0, Number(value) || 0);
         } else if (field === 'date_created' || field === 'expiration_date') {
           updates[field] = normalizeDateString(value) || null;
@@ -642,6 +715,12 @@ router.patch('/:id', requireAuth, requireRole('admin', 'staff'), async (req, res
       || Object.prototype.hasOwnProperty.call(req.body || {}, 'dateCreated');
     const hasExpirationDateInput = Object.prototype.hasOwnProperty.call(req.body || {}, 'expiration_date')
       || Object.prototype.hasOwnProperty.call(req.body || {}, 'expirationDate');
+    const hasExpirationAtInput = Object.prototype.hasOwnProperty.call(req.body || {}, 'expiration_at')
+      || Object.prototype.hasOwnProperty.call(req.body || {}, 'expirationAt')
+      || Object.prototype.hasOwnProperty.call(req.body || {}, 'expiration_time')
+      || Object.prototype.hasOwnProperty.call(req.body || {}, 'expirationTime');
+    const hasImageInput = Object.prototype.hasOwnProperty.call(req.body || {}, 'image_url')
+      || Object.prototype.hasOwnProperty.call(req.body || {}, 'imageUrl');
 
     const resolvedDateCreated = hasDateCreatedInput
       ? normalizeDateString(req.body?.date_created ?? req.body?.dateCreated) || null
@@ -649,9 +728,38 @@ router.patch('/:id', requireAuth, requireRole('admin', 'staff'), async (req, res
     const resolvedExpirationDate = hasExpirationDateInput
       ? normalizeDateString(req.body?.expiration_date ?? req.body?.expirationDate) || null
       : normalizeDateString(existingProduct.expiration_date) || null;
+    const resolvedExpirationAt = hasExpirationAtInput || hasExpirationDateInput
+      ? normalizeExpiryAt({
+          expirationAt: req.body?.expiration_at ?? req.body?.expirationAt,
+          expirationDate: resolvedExpirationDate,
+          expirationTime: req.body?.expiration_time ?? req.body?.expirationTime,
+        })
+      : normalizeExpiryAt({
+          expirationAt: existingProduct.expiration_at,
+          expirationDate: resolvedExpirationDate,
+        });
+
+    if (hasExpirationAtInput || hasExpirationDateInput) {
+      updates.expiration_at = resolvedExpirationAt || null;
+    }
 
     if (resolvedExpirationDate && resolvedDateCreated && resolvedExpirationDate < resolvedDateCreated) {
       return res.status(400).json({ error: 'Expiration date must be on or after the product creation date.' });
+    }
+
+    if (hasImageInput) {
+      updates.image_url = await resolveProductImageValue({
+        imageInput: req.body?.image_url ?? req.body?.imageUrl,
+        requestBaseUrl: getRequestBaseUrl(req),
+      });
+    }
+
+    if ('availability' in updates || 'stock_quantity' in updates || hasExpirationAtInput || hasExpirationDateInput) {
+      updates.availability = getAvailabilityForStock(
+        updates.stock_quantity ?? existingProduct.stock_quantity,
+        updates.availability ?? existingProduct.availability,
+        resolvedExpirationAt,
+      );
     }
 
     const { data, error } = await supabase
@@ -675,9 +783,14 @@ router.patch('/:id', requireAuth, requireRole('admin', 'staff'), async (req, res
       stockQuantity: data.stock_quantity,
       dateCreated: resolvedDateCreated,
       expirationDate: resolvedExpirationDate,
+      expirationAt: resolvedExpirationAt,
       imageUrl: data.image_url,
       category: data.category,
     });
+
+    if (hasImageInput && existingProduct.image_url !== data.image_url) {
+      await removeManagedProductImage(existingProduct.image_url);
+    }
 
     res.json(mapProduct(data));
   } catch (error) {

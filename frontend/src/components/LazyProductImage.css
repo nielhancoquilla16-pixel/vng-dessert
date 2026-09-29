@@ -1,0 +1,38 @@
+.lazy-product-media {
+  position: absolute;
+  inset: 0;
+  display: block;
+  overflow: hidden;
+  background: #fff0d5;
+}
+
+.lazy-product-placeholder {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(135deg, #fff3dc 0%, #f7e9cf 48%, #fff5e4 100%);
+}
+
+.lazy-product-fallback {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 16px;
+  color: #87633f;
+  background: #fff0d5;
+  font-size: 0.8rem;
+  text-align: center;
+}
+
+.lazy-product-media .shop-product-image {
+  position: relative;
+  z-index: 1;
+  opacity: 0;
+}
+
+.lazy-product-media .shop-product-image.is-loaded {
+  opacity: 1;
+}

@@ -7,6 +7,7 @@ import {
 } from '../lib/inventoryUtils.js';
 import { requireAuth } from '../middleware/requireAuth.js';
 import { requireRole } from '../middleware/requireRole.js';
+import { getExpiryStatus } from '../lib/expiry.js';
 
 const router = express.Router();
 
@@ -19,19 +20,23 @@ const isIngredientBatchId = (value = '') => {
   return normalizedValue.startsWith('ING-');
 };
 
-const getAvailabilityForStock = (stockQuantity, explicitAvailability) => {
+const getAvailabilityForStock = (stockQuantity, explicitAvailability, expirationAt = '', expirationDate = '') => {
   if (explicitAvailability === 'hidden') {
     return 'hidden';
   }
 
-  return stockQuantity <= 0 ? 'out of stock' : (explicitAvailability || 'available');
+  if (getExpiryStatus({ expirationAt, expirationDate }) === 'expired') {
+    return 'expired';
+  }
+
+  return stockQuantity <= 0 ? 'out of stock' : (explicitAvailability === 'expired' ? 'available' : (explicitAvailability || 'available'));
 };
 
 const findLinkedProduct = async (supabase, { productId, productName, batchId } = {}) => {
   if (productId) {
     const { data, error } = await supabase
       .from('products')
-      .select('id, product_name, availability, image_url, category')
+      .select('id, product_name, availability, image_url, category, expiration_at, expiration_date')
       .eq('id', productId)
       .maybeSingle();
 
@@ -51,7 +56,7 @@ const findLinkedProduct = async (supabase, { productId, productName, batchId } =
 
   const { data, error } = await supabase
     .from('products')
-    .select('id, product_name, availability, image_url, category')
+    .select('id, product_name, availability, image_url, category, expiration_at, expiration_date')
     .ilike('product_name', normalizeText(productName));
 
   if (error) {
@@ -108,7 +113,12 @@ const syncLinkedProductStock = async (supabase, productRef) => {
     .from('products')
     .update({
       stock_quantity: nextStockQuantity,
-      availability: getAvailabilityForStock(nextStockQuantity, linkedProduct.availability),
+      availability: getAvailabilityForStock(
+        nextStockQuantity,
+        linkedProduct.availability,
+        linkedProduct.expiration_at,
+        linkedProduct.expiration_date,
+      ),
     })
     .eq('id', linkedProduct.id)
     .select('id')
@@ -179,6 +189,7 @@ router.post('/', requireAuth, requireRole('admin', 'staff'), async (req, res, ne
         unit: payload.unit,
         date_created: payload.dateCreated || null,
         expiration_date: payload.expirationDate || null,
+        expiration_at: payload.expirationAt || null,
         product_id: linkedProduct?.id || payload.productId || null,
         status: payload.status,
         image_url: linkedProduct?.image_url || null,
@@ -242,6 +253,7 @@ router.patch('/:id', requireAuth, requireRole('admin', 'staff'), async (req, res
         unit: payload.unit,
         date_created: payload.dateCreated || null,
         expiration_date: payload.expirationDate || null,
+        expiration_at: payload.expirationAt || null,
         product_id: linkedProduct?.id || payload.productId || null,
         status: payload.status,
         image_url: linkedProduct?.image_url ?? existingItem.image_url ?? null,

@@ -15,6 +15,9 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { usePreOrders } from '../context/PreOrderContext';
+import { useShopSettings } from '../context/ShopSettingsContext';
+import useDialogFocus from '../hooks/useDialogFocus';
+import { isAvailablePreorderTime } from '../utils/shopHours';
 import {
   formatPreOrderDateTime,
   getPreOrderMethodLabel,
@@ -39,23 +42,14 @@ const buildInitialFormState = (product, customer) => ({
 const PreOrderModal = ({ product, isOpen, onClose }) => {
   const { loggedInCustomer, updateLoggedInCustomer } = useAuth();
   const { createPreOrder } = usePreOrders();
+  const { shopSettings, isShopOpen } = useShopSettings();
   const [formData, setFormData] = useState(() => buildInitialFormState(product, loggedInCustomer));
   const [formError, setFormError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submittedPreOrder, setSubmittedPreOrder] = useState(null);
   const tomorrowDate = useMemo(() => getTomorrowDateValue(), []);
 
-  useEffect(() => {
-    if (!isOpen) {
-      document.body.style.overflow = '';
-      return undefined;
-    }
-
-    document.body.style.overflow = 'hidden';
-    return () => {
-      document.body.style.overflow = '';
-    };
-  }, [isOpen]);
+  const dialogRef = useDialogFocus({ isOpen: isOpen && Boolean(product), onClose, closeDisabled: isSubmitting });
 
   useEffect(() => {
     if (!isOpen) {
@@ -89,6 +83,10 @@ const PreOrderModal = ({ product, isOpen, onClose }) => {
   };
 
   const validateForm = () => {
+    if (!isShopOpen) {
+      return `The shop is closed. Pre-orders are accepted from ${shopSettings.openingTime} to ${shopSettings.closingTime} PHT.`;
+    }
+
     if (!formData.fullName.trim()) {
       return 'Full name is required.';
     }
@@ -118,6 +116,11 @@ const PreOrderModal = ({ product, isOpen, onClose }) => {
       return 'Preferred time is required.';
     }
 
+    const isAvailableTime = (value) => isAvailablePreorderTime(shopSettings, value);
+    if (!isAvailableTime(formData.preferredOrderTime)) {
+      return `Choose a time between ${shopSettings.openingTime} and ${shopSettings.closingTime} PHT.`;
+    }
+
     if (formData.deliveryMethod === 'pickup') {
       if (!formData.pickupDate || formData.pickupDate < tomorrowDate) {
         return 'Pickup date must be at least 1 day ahead.';
@@ -125,6 +128,9 @@ const PreOrderModal = ({ product, isOpen, onClose }) => {
 
       if (!formData.pickupTime) {
         return 'Pickup time is required when pickup is selected.';
+      }
+      if (!isAvailableTime(formData.pickupTime)) {
+        return `Choose a pickup time between ${shopSettings.openingTime} and ${shopSettings.closingTime} PHT.`;
       }
     }
 
@@ -194,7 +200,7 @@ const PreOrderModal = ({ product, isOpen, onClose }) => {
         }
       }}
     >
-      <div className="preorder-shell">
+      <div ref={dialogRef} tabIndex={-1} className="preorder-shell" role="dialog" aria-modal="true" aria-labelledby="preorder-title">
         <button
           type="button"
           className="preorder-close"
@@ -211,7 +217,7 @@ const PreOrderModal = ({ product, isOpen, onClose }) => {
               <CheckCircle2 size={42} />
             </div>
             <p className="preorder-kicker">Pre-Order</p>
-            <h2>Pre-Order Successful!</h2>
+            <h2 id="preorder-title">Pre-Order Successful!</h2>
             <p className="preorder-success-copy">{confirmationText}</p>
 
             <div className="preorder-summary-card">
@@ -243,7 +249,7 @@ const PreOrderModal = ({ product, isOpen, onClose }) => {
             <div className="preorder-header">
               <div>
                 <p className="preorder-kicker">Advance Orders</p>
-                <h2>Pre-Order</h2>
+                <h2 id="preorder-title">Pre-Order</h2>
               </div>
               <p className="preorder-header-copy">
                 Schedule your dessert in advance for bulk orders, events, or planned pickup and delivery.
@@ -267,6 +273,7 @@ const PreOrderModal = ({ product, isOpen, onClose }) => {
                     <input
                       type="text"
                       name="fullName"
+                      autoComplete="name"
                       value={formData.fullName}
                       onChange={handleChange}
                       placeholder="Enter your full name"
@@ -281,6 +288,7 @@ const PreOrderModal = ({ product, isOpen, onClose }) => {
                     <MapPin size={16} />
                     <textarea
                       name="address"
+                      autoComplete="street-address"
                       value={formData.address}
                       onChange={handleChange}
                       placeholder="Enter your complete address"
@@ -297,6 +305,7 @@ const PreOrderModal = ({ product, isOpen, onClose }) => {
                     <input
                       type="tel"
                       name="phoneNumber"
+                      autoComplete="tel"
                       value={formData.phoneNumber}
                       onChange={handleChange}
                       placeholder="09123456789"
@@ -325,6 +334,7 @@ const PreOrderModal = ({ product, isOpen, onClose }) => {
                   <input
                     type="number"
                     name="quantity"
+                    inputMode="numeric"
                     value={formData.quantity}
                     onChange={handleChange}
                     min="1"
@@ -355,7 +365,7 @@ const PreOrderModal = ({ product, isOpen, onClose }) => {
                 </label>
 
                 <label className="preorder-field">
-                  <span>Preferred Time</span>
+                  <span>Preferred Time ({shopSettings.openingTime}-{shopSettings.closingTime} PHT)</span>
                   <div className="preorder-input-wrap">
                     <Clock3 size={16} />
                     <input
@@ -363,6 +373,9 @@ const PreOrderModal = ({ product, isOpen, onClose }) => {
                       name="preferredOrderTime"
                       value={formData.preferredOrderTime}
                       onChange={handleChange}
+                      min={shopSettings.openingTime < shopSettings.closingTime ? shopSettings.openingTime : undefined}
+                      max={shopSettings.openingTime < shopSettings.closingTime ? shopSettings.closingTime : undefined}
+                      step="900"
                       required
                     />
                   </div>
@@ -421,7 +434,7 @@ const PreOrderModal = ({ product, isOpen, onClose }) => {
                       </label>
 
                       <label className="preorder-field">
-                        <span>Pickup Time</span>
+                        <span>Pickup Time ({shopSettings.openingTime}-{shopSettings.closingTime} PHT)</span>
                         <div className="preorder-input-wrap">
                           <Clock3 size={16} />
                           <input
@@ -429,6 +442,9 @@ const PreOrderModal = ({ product, isOpen, onClose }) => {
                             name="pickupTime"
                             value={formData.pickupTime}
                             onChange={handleChange}
+                            min={shopSettings.openingTime < shopSettings.closingTime ? shopSettings.openingTime : undefined}
+                            max={shopSettings.openingTime < shopSettings.closingTime ? shopSettings.closingTime : undefined}
+                            step="900"
                             required
                           />
                         </div>

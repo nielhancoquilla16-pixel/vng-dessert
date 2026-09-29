@@ -4,7 +4,13 @@ import { apiRequest, isBackendIssueError } from '../lib/api';
 import { subscribeToDatabaseChanges } from '../lib/realtime';
 import { useAuth } from './AuthContext';
 import { resolveAssetUrl } from '../lib/publicUrl';
-import { DEFAULT_EXPIRY_WARNING_DAYS, getInventoryBatchStatus, normalizeInventoryDate } from '../utils/inventoryBatches';
+import {
+  DEFAULT_EXPIRY_WARNING_DAYS,
+  getExpirationTime,
+  getInventoryBatchStatus,
+  normalizeExpirationAt,
+  normalizeInventoryDate,
+} from '../utils/inventoryBatches';
 
 const ProductContext = createContext();
 const DEFAULT_IMAGE = resolveAssetUrl('logo.png');
@@ -22,6 +28,16 @@ const getProductStatus = (stock) => {
 
 const mapProduct = (product) => {
   const stock = Math.max(0, normalizeNumber(product.stockQuantity ?? product.stock_quantity));
+  const expirationDate = normalizeInventoryDate(product.expirationDate || product.expiration_date);
+  const expirationAt = normalizeExpirationAt(product.expirationAt || product.expiration_at, expirationDate);
+  const expiryStatus = product.expiryStatus || product.expiry_status || getInventoryBatchStatus({
+    dateCreated: product.dateCreated || product.date_created || product.createdAt,
+    expirationDate,
+    expirationAt,
+  });
+  const availability = product.availability === 'hidden'
+    ? 'hidden'
+    : (expiryStatus === 'expired' ? 'expired' : (product.availability || 'available'));
 
   return {
     id: product.id,
@@ -32,7 +48,9 @@ const mapProduct = (product) => {
     category: product.category || 'Uncategorized',
     stock,
     stockQuantity: stock,
-    availability: product.availability || 'available',
+    availability,
+    expiryStatus,
+    isExpired: availability === 'expired',
     status: getProductStatus(stock),
     imageUrl: resolveAssetUrl(product.imageUrl || product.image_url || product.image, 'logo.png'),
     image: resolveAssetUrl(product.imageUrl || product.image_url || product.image, 'logo.png'),
@@ -41,7 +59,9 @@ const mapProduct = (product) => {
     createdAt: product.createdAt || product.created_at || '',
     updatedAt: product.updatedAt || product.updated_at || '',
     dateCreated: normalizeInventoryDate(product.dateCreated || product.date_created),
-    expirationDate: normalizeInventoryDate(product.expirationDate || product.expiration_date),
+    expirationDate,
+    expirationAt,
+    expirationTime: product.expirationTime || product.expiration_time || getExpirationTime(expirationAt),
   };
 };
 
@@ -50,6 +70,7 @@ const mapInventoryItem = (item) => {
   const productName = item.productName || item.product_name || item.ingredientName || item.ingredient_name || '';
   const dateCreated = normalizeInventoryDate(item.dateCreated || item.date_created || item.createdAt || item.created_at);
   const expirationDate = normalizeInventoryDate(item.expirationDate || item.expiration_date);
+  const expirationAt = normalizeExpirationAt(item.expirationAt || item.expiration_at, expirationDate);
 
   return {
     id: item.id,
@@ -63,9 +84,12 @@ const mapInventoryItem = (item) => {
     unit: item.unit || '',
     dateCreated,
     expirationDate,
+    expirationAt,
+    expirationTime: item.expirationTime || item.expiration_time || getExpirationTime(expirationAt),
     status: item.status || getInventoryBatchStatus({
       dateCreated,
       expirationDate,
+      expirationAt,
     }, DEFAULT_EXPIRY_WARNING_DAYS),
     image: resolveAssetUrl(item.imageUrl || item.image_url || '', DEFAULT_IMAGE),
     imageUrl: resolveAssetUrl(item.imageUrl || item.image_url || '', DEFAULT_IMAGE),
@@ -240,8 +264,10 @@ export const ProductProvider = ({ children }) => {
         stock_quantity: Math.max(0, normalizeNumber(product.stock)),
         availability: product.availability,
         image_url: product.image || product.imageUrl || '',
-        date_created: product.dateCreated || new Date().toISOString().split('T')[0],
-        expiration_date: product.expirationDate,
+      date_created: product.dateCreated || new Date().toISOString().split('T')[0],
+      expiration_date: product.expirationDate,
+      expiration_time: product.expirationTime,
+      expiration_at: product.expirationAt,
       }),
     }, {
       auth: true,
@@ -269,6 +295,8 @@ export const ProductProvider = ({ children }) => {
         image_url: updatedProduct.image || updatedProduct.imageUrl || '',
         date_created: updatedProduct.dateCreated,
         expiration_date: updatedProduct.expirationDate,
+        expiration_time: updatedProduct.expirationTime,
+        expiration_at: updatedProduct.expirationAt,
       }),
     }, {
       auth: true,
@@ -299,6 +327,17 @@ export const ProductProvider = ({ children }) => {
     const nextExpirationDate = 'expirationDate' in updates
       ? updates.expirationDate
       : existingProduct.expirationDate;
+    const nextExpirationTime = 'expirationTime' in updates
+      ? updates.expirationTime
+      : existingProduct.expirationTime;
+    const nextExpirationAt = 'expirationAt' in updates
+      ? updates.expirationAt
+      : existingProduct.expirationAt;
+    const nextExpiryStatus = getInventoryBatchStatus({
+      dateCreated: nextDateCreated,
+      expirationDate: nextExpirationDate,
+      expirationAt: nextExpirationAt,
+    }, DEFAULT_EXPIRY_WARNING_DAYS);
 
     const optimisticProduct = {
       ...existingProduct,
@@ -306,7 +345,9 @@ export const ProductProvider = ({ children }) => {
       stockQuantity: nextStock,
       dateCreated: nextDateCreated || existingProduct.dateCreated || '',
       expirationDate: nextExpirationDate || existingProduct.expirationDate || '',
-      status: getProductStatus(nextStock),
+      expirationTime: nextExpirationTime || existingProduct.expirationTime || '',
+      expirationAt: nextExpirationAt || existingProduct.expirationAt || '',
+      status: nextExpiryStatus === 'expired' ? 'expired' : getProductStatus(nextStock),
     };
 
     setProducts((prev) => prev.map((product) => (
@@ -324,6 +365,14 @@ export const ProductProvider = ({ children }) => {
 
       if (nextExpirationDate) {
         requestBody.expiration_date = nextExpirationDate;
+      }
+
+      if (nextExpirationTime) {
+        requestBody.expiration_time = nextExpirationTime;
+      }
+
+      if (nextExpirationAt) {
+        requestBody.expiration_at = nextExpirationAt;
       }
 
       const savedProduct = await apiRequest(`/api/products/${productId}`, {
@@ -361,6 +410,8 @@ export const ProductProvider = ({ children }) => {
       stock: nextStock,
       dateCreated: options.dateCreated ?? existingProduct.dateCreated,
       expirationDate: options.expirationDate ?? existingProduct.expirationDate,
+      expirationTime: options.expirationTime ?? existingProduct.expirationTime,
+      expirationAt: options.expirationAt ?? existingProduct.expirationAt,
     });
   }, [products, updateFinishedProductInventory]);
 
@@ -389,6 +440,8 @@ export const ProductProvider = ({ children }) => {
           unit: item.unit || 'pcs',
           date_created: item.dateCreated || null,
           expiration_date: item.expirationDate || null,
+          expiration_time: item.expirationTime || null,
+          expiration_at: item.expirationAt || null,
           product_id: item.productId,
         }),
       }, {
@@ -424,6 +477,8 @@ export const ProductProvider = ({ children }) => {
           unit: updatedItem.unit || 'pcs',
           date_created: updatedItem.dateCreated || null,
           expiration_date: updatedItem.expirationDate || null,
+          expiration_time: updatedItem.expirationTime || null,
+          expiration_at: updatedItem.expirationAt || null,
           product_id: updatedItem.productId,
         }),
       }, {
@@ -475,12 +530,12 @@ export const ProductProvider = ({ children }) => {
       ));
 
       const availableStock = Math.max(0, normalizeNumber(matchingProduct?.stock));
-      if (!matchingProduct || availableStock < quantity) {
+      if (!matchingProduct || matchingProduct.availability === 'expired' || matchingProduct.availability === 'hidden' || availableStock < quantity) {
         shortages.push({
           id: matchingProduct?.id || item.productId || item.product_id || item.name,
           name: matchingProduct?.name || item.name || 'Unknown product',
           requested: quantity,
-          available: availableStock,
+          available: matchingProduct?.availability === 'expired' ? 0 : availableStock,
         });
       }
     });

@@ -10,6 +10,7 @@ import {
   CheckCircle2,
   CircleAlert,
   Clock3,
+  ExternalLink,
   History,
   Loader2,
   PackageCheck,
@@ -19,16 +20,20 @@ import {
   RotateCcw,
   ShieldAlert,
   ShieldCheck,
+  Truck,
   Upload,
   XCircle,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useOrders } from '../context/OrderContext';
+import { apiRequest } from '../lib/api';
+import { formatCurrency } from '../utils/currency';
 import {
   buildOrderWorkflowProgress,
   canCustomerCancelOrder,
   canCustomerConfirmReceipt,
-  canCustomerReportIssue,
+  canCustomerRequestReturnRefund,
+  getReturnRefundStatusLabel,
   getOrderStatusLabel,
   getPaymentStatusLabel,
   getReviewStatusLabel,
@@ -38,6 +43,8 @@ import {
   hasCustomerConfirmationPending,
 } from '../utils/orderWorkflow';
 import { generateQrDataUrl } from '../utils/qrCode';
+import { appUrl } from '../lib/appUrl';
+import useDialogFocus from '../hooks/useDialogFocus';
 import './Orders.css';
 
 const ORDER_PRIORITY = {
@@ -48,8 +55,6 @@ const ORDER_PRIORITY = {
   'out-for-delivery': 4,
   delivered: 5,
 };
-
-const formatCurrency = (value) => `PHP ${Number(value || 0).toFixed(2)}`;
 
 const formatDateTime = (value) => {
   if (!value) return 'Not available';
@@ -64,6 +69,21 @@ const formatDateTime = (value) => {
   });
 };
 
+const formatMeters = (value) => {
+  const meters = Number(value);
+  if (!Number.isFinite(meters) || meters <= 0) {
+    return 'Not available';
+  }
+
+  if (meters >= 1000) {
+    return `${(meters / 1000).toFixed(1)} km`;
+  }
+
+  return `${Math.round(meters)} m`;
+};
+
+const getLalamoveTracking = (order) => order?.lalamoveTracking || order?.lalamove || {};
+
 const readFileAsDataUrl = (file) => new Promise((resolve, reject) => {
   const reader = new FileReader();
 
@@ -73,15 +93,56 @@ const readFileAsDataUrl = (file) => new Promise((resolve, reject) => {
 });
 
 const OrderVerificationPanel = ({ order }) => {
+  const { session } = useAuth();
+  const { refreshOrders } = useOrders();
+  const [clock, setClock] = useState(Date.now());
+  const [isRegeneratingQr, setIsRegeneratingQr] = useState(false);
+  const [qrActionError, setQrActionError] = useState('');
+  const [qrActionMessage, setQrActionMessage] = useState('');
   const hasQrPayload = Boolean(order?.verificationRequired && order?.qrPayload);
   const isAwaitingOnlinePayment = String(order?.paymentMethod || '').toLowerCase() === 'online'
     && String(order?.paymentCheckoutStatus || '').toLowerCase() === 'created'
     && Boolean(order?.paymentCheckout?.checkoutUrl);
+  const orderQrPayload = order?.qrPayload || '';
+  const orderQrUsedAt = order?.qrUsedAt || null;
+  const orderQrExpiryTime = Date.parse(order?.qrExpiresAt || '');
+  const orderQrExpired = hasQrPayload
+    && (!Number.isFinite(orderQrExpiryTime) || orderQrExpiryTime <= clock);
+  const isFinalOrder = ['delivered', 'completed', 'cancelled', 'refunded']
+    .includes(String(order?.status || '').toLowerCase());
+  const canRegenerateQr = hasQrPayload && (orderQrExpired || orderQrUsedAt) && !isFinalOrder;
   const qrImage = useMemo(() => (
-    hasQrPayload && !order?.qrUsedAt
-      ? generateQrDataUrl(order.qrPayload, 220)
+    hasQrPayload && !orderQrUsedAt && !orderQrExpired
+      ? generateQrDataUrl(orderQrPayload, 220)
       : ''
-  ), [hasQrPayload, order?.qrPayload, order?.qrUsedAt]);
+  ), [hasQrPayload, orderQrPayload, orderQrUsedAt, orderQrExpired]);
+
+  useEffect(() => {
+    if (!hasQrPayload) return undefined;
+    const interval = window.setInterval(() => setClock(Date.now()), 1000);
+    return () => window.clearInterval(interval);
+  }, [hasQrPayload, order?.qrExpiresAt]);
+
+  const regenerateQr = async () => {
+    if (!order?.id || isRegeneratingQr) return;
+    setIsRegeneratingQr(true);
+    setQrActionError('');
+    setQrActionMessage('');
+    try {
+      await apiRequest('/api/orders/' + encodeURIComponent(order.id) + '/qr/regenerate', {
+        method: 'POST',
+      }, {
+        auth: true,
+        accessToken: session?.access_token,
+      });
+      await refreshOrders();
+      setQrActionMessage('A new QR Code/Order ID is ready and will expire in six minutes.');
+    } catch (error) {
+      setQrActionError(error.message || 'Unable to generate a new QR Code/Order ID.');
+    } finally {
+      setIsRegeneratingQr(false);
+    }
+  };
 
   if (!order) {
     return null;
@@ -132,14 +193,37 @@ const OrderVerificationPanel = ({ order }) => {
           <p className="order-qr-code-label">Order ID</p>
           <strong>{order.orderCode || order.orderId || order.id}</strong>
           <p className="order-qr-note">
-            {order.qrUsedAt
+            {orderQrExpired
+              ? 'This QR Code/Order ID has expired. Please generate a new one.'
+              : order.qrUsedAt
               ? 'This QR code has already been used and cannot be scanned again.'
               : isAwaitingOnlinePayment
                 ? 'Your QR and Order ID are ready. Complete the online payment to continue processing this order.'
                 : isWalkInOrder(order)
-                  ? 'This QR code is for feedback purposes only. You may scan it to share your experience. It cannot be used to check order status.'
-                  : 'Please present your QR code or Order ID when claiming your order. QR codes are valid for one-time use only.'}
+                  ? 'Show this QR code or Order ID to staff when your pickup order is ready.'
+                  : 'Please present your QR code or Order ID when claiming your order. QR codes are valid for six minutes and one-time use only.'}
           </p>
+          {!orderQrExpired && !orderQrUsedAt && Number.isFinite(orderQrExpiryTime) && (
+            <p className="order-qr-note" aria-live="polite">
+              Expires in {String(Math.floor(Math.max(0, orderQrExpiryTime - clock) / 60000)).padStart(2, '0')}:
+              {String(Math.floor((Math.max(0, orderQrExpiryTime - clock) % 60000) / 1000)).padStart(2, '0')}
+            </p>
+          )}
+          {qrActionError && <p className="order-qr-note" role="alert">{qrActionError}</p>}
+          {qrActionMessage && <p className="order-qr-note" role="status">{qrActionMessage}</p>}
+          {canRegenerateQr && (
+            <div className="order-qr-actions">
+              <button
+                type="button"
+                className="order-button order-button--primary"
+                onClick={regenerateQr}
+                disabled={isRegeneratingQr}
+              >
+                <RotateCcw size={16} />
+                {isRegeneratingQr ? 'Generating…' : 'Generate a New QR / Order ID'}
+              </button>
+            </div>
+          )}
           {isAwaitingOnlinePayment && (
             <div className="order-qr-actions">
               <a
@@ -157,18 +241,73 @@ const OrderVerificationPanel = ({ order }) => {
   );
 };
 
+const OrderFeedbackPanel = ({ order }) => {
+  const status = String(order?.status || '').toLowerCase();
+  const feedbackToken = String(order?.feedbackToken || '').trim();
+  const feedbackUrl = feedbackToken ? appUrl(`/feedback/${feedbackToken}`) : '';
+  const qrImage = useMemo(() => (
+    feedbackUrl ? generateQrDataUrl(feedbackUrl, 220) : ''
+  ), [feedbackUrl]);
+
+  if (!['delivered', 'completed'].includes(status) || !feedbackToken) {
+    return null;
+  }
+
+  return (
+    <div className="order-qr-panel order-feedback-panel">
+      <div className="order-qr-header">
+        <div>
+          <p className="order-panel-kicker">Feedback QR</p>
+          <h3>Rate your experience</h3>
+        </div>
+        <QrCode size={20} />
+      </div>
+
+      <div className="order-qr-body">
+        <img
+          src={qrImage}
+          alt={`Feedback QR for order ${order.orderCode || order.id}`}
+          className="order-qr-image"
+        />
+        <div>
+          <p className="order-qr-code-label">Order Feedback</p>
+          <strong>{order.orderCode || order.displayId || order.id}</strong>
+          <p className="order-qr-note">We value your feedback. Scan this QR code to rate your experience.</p>
+          <div className="order-qr-actions">
+            <a className="order-button order-button--primary" href={feedbackUrl}>
+              Open Feedback Form
+            </a>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const Orders = () => {
   const location = useLocation();
   const { loggedInCustomer, isAuthLoading } = useAuth();
-  const { orders, isOrdersLoading, confirmOrderReceipt, submitOrderIssue, cancelOrder } = useOrders();
+  const {
+    orders,
+    isOrdersLoading,
+    confirmOrderReceipt,
+    submitReturnRefundRequest,
+    cancelOrder,
+  } = useOrders();
   const [pageNotice, setPageNotice] = useState('');
   const [pageError, setPageError] = useState('');
   const [loadingAction, setLoadingAction] = useState(null);
   const [receiptDrafts, setReceiptDrafts] = useState({});
-  const [issueDrafts, setIssueDrafts] = useState({});
-  const [openIssueOrderId, setOpenIssueOrderId] = useState('');
   const [cancelDrafts, setCancelDrafts] = useState({});
   const [openCancelOrderId, setOpenCancelOrderId] = useState('');
+  const [returnRefundDrafts, setReturnRefundDrafts] = useState({});
+  const [openReturnRefundOrderId, setOpenReturnRefundOrderId] = useState('');
+  const [confirmReturnRefundOrderId, setConfirmReturnRefundOrderId] = useState('');
+  const confirmationDialogRef = useDialogFocus({
+    isOpen: Boolean(confirmReturnRefundOrderId),
+    onClose: () => setConfirmReturnRefundOrderId(''),
+    closeDisabled: loadingAction?.type === 'return-refund',
+  });
   const [isHistoryExpanded, setIsHistoryExpanded] = useState(false);
   const confirmOrderId = useMemo(() => (
     new URLSearchParams(location.search).get('confirm') || ''
@@ -280,32 +419,29 @@ const Orders = () => {
     }));
   };
 
-  const setIssueDraft = (orderId, patch) => {
-    const customerName = loggedInCustomer?.fullName || loggedInCustomer?.username || '';
-
-    setIssueDrafts((current) => ({
-      ...current,
-      [orderId]: {
-        ...(current[orderId] || {
-          customerName,
-          description: '',
-          issueType: 'damage',
-          evidenceImageDataUrl: '',
-          evidenceImageName: '',
-          error: '',
-          success: '',
-        }),
-        ...patch,
-      },
-    }));
-  };
-
   const setCancelDraft = (orderId, patch) => {
     setCancelDrafts((current) => ({
       ...current,
       [orderId]: {
         ...(current[orderId] || {
           reason: '',
+          error: '',
+        }),
+        ...patch,
+      },
+    }));
+  };
+
+  const setReturnRefundDraft = (orderId, patch) => {
+    setReturnRefundDrafts((current) => ({
+      ...current,
+      [orderId]: {
+        ...(current[orderId] || {
+          type: 'refund',
+          reason: 'Product quality concern',
+          customerMessage: '',
+          evidenceImageDataUrl: '',
+          evidenceImageName: '',
           error: '',
         }),
         ...patch,
@@ -341,34 +477,6 @@ const Orders = () => {
     }
   };
 
-  const handleIssueFileChange = async (orderId, event) => {
-    const file = event.target.files?.[0];
-
-    if (!file) {
-      setIssueDraft(orderId, {
-        evidenceImageDataUrl: '',
-        evidenceImageName: '',
-        error: '',
-      });
-      return;
-    }
-
-    try {
-      const imageDataUrl = await readFileAsDataUrl(file);
-      setIssueDraft(orderId, {
-        evidenceImageDataUrl: imageDataUrl,
-        evidenceImageName: file.name,
-        error: '',
-      });
-    } catch (error) {
-      setIssueDraft(orderId, {
-        evidenceImageDataUrl: '',
-        evidenceImageName: '',
-        error: error.message || 'Unable to load that image.',
-      });
-    }
-  };
-
   const handleConfirmReceipt = async (order) => {
     const draft = receiptDrafts[order.id] || {};
 
@@ -394,58 +502,6 @@ const Orders = () => {
     }
   };
 
-  const handleSubmitIssue = async (order) => {
-    const draft = issueDrafts[order.id] || {};
-    const customerName = String(draft.customerName || '').trim();
-    const description = String(draft.description || '').trim();
-    const evidenceImageDataUrl = String(draft.evidenceImageDataUrl || '').trim();
-    const issueType = String(draft.issueType || 'damage').trim() || 'damage';
-
-    if (!customerName) {
-      setIssueDraft(order.id, { error: 'Customer name is required.' });
-      return;
-    }
-
-    if (!description) {
-      setIssueDraft(order.id, { error: 'Description of the issue is required.' });
-      return;
-    }
-
-    if (!evidenceImageDataUrl) {
-      setIssueDraft(order.id, { error: 'Photographic evidence is required.' });
-      return;
-    }
-
-    setLoadingAction({ type: 'issue', orderId: order.id });
-    setPageError('');
-
-    try {
-      await submitOrderIssue(order.id, {
-        customerName,
-        description,
-        issueType,
-        evidenceImageDataUrl,
-      });
-
-      setIssueDraft(order.id, {
-        description: '',
-        evidenceImageDataUrl: '',
-        evidenceImageName: '',
-        error: '',
-        success: 'Your return request has been sent to the admin team for review.',
-      });
-      setOpenIssueOrderId('');
-      setPageNotice(`Return request submitted for order ${order.displayId || order.orderCode || order.id}.`);
-    } catch (error) {
-      setIssueDraft(order.id, {
-        error: error.message || 'Unable to send this issue report right now.',
-      });
-      setPageError(error.message || 'Unable to send this issue report right now.');
-    } finally {
-      setLoadingAction(null);
-    }
-  };
-
   const handleCancelOrder = async (order) => {
     const draft = cancelDrafts[order.id] || {};
     const cancellationReason = String(draft.reason || '').trim();
@@ -466,6 +522,68 @@ const Orders = () => {
         error: error.message || 'Unable to cancel this order right now.',
       });
       setPageError(error.message || 'Unable to cancel this order right now.');
+    } finally {
+      setLoadingAction(null);
+    }
+  };
+
+  const handleReturnRefundFileChange = async (orderId, event) => {
+    const file = event.target.files?.[0];
+
+    if (!file) {
+      setReturnRefundDraft(orderId, {
+        evidenceImageDataUrl: '',
+        evidenceImageName: '',
+        error: '',
+      });
+      return;
+    }
+
+    try {
+      const imageDataUrl = await readFileAsDataUrl(file);
+      setReturnRefundDraft(orderId, {
+        evidenceImageDataUrl: imageDataUrl,
+        evidenceImageName: file.name,
+        error: '',
+      });
+    } catch (error) {
+      setReturnRefundDraft(orderId, {
+        evidenceImageDataUrl: '',
+        evidenceImageName: '',
+        error: error.message || 'Unable to load that image.',
+      });
+    }
+  };
+
+  const handleConfirmReturnRefund = async (order) => {
+    const draft = returnRefundDrafts[order.id] || {};
+    const reason = String(draft.reason || '').trim();
+    const evidenceImageDataUrl = String(draft.evidenceImageDataUrl || '').trim();
+
+    if (!reason) {
+      setReturnRefundDraft(order.id, { error: 'Please select or enter a reason for the request.' });
+      setConfirmReturnRefundOrderId('');
+      return;
+    }
+
+    setLoadingAction({ type: 'return-refund', orderId: order.id });
+    setPageError('');
+
+    try {
+      await submitReturnRefundRequest(order.id, {
+        type: draft.type || 'refund',
+        reason,
+        customerMessage: String(draft.customerMessage || '').trim(),
+        evidenceImageDataUrl,
+      });
+      setReturnRefundDrafts((current) => ({ ...current, [order.id]: undefined }));
+      setOpenReturnRefundOrderId('');
+      setConfirmReturnRefundOrderId('');
+      setPageNotice(`Your ${draft.type || 'refund'} request for order ${order.displayId || order.orderCode || order.id} was submitted.`);
+    } catch (error) {
+      setReturnRefundDraft(order.id, { error: error.message || 'Unable to submit the request right now.' });
+      setPageError(error.message || 'Unable to submit the request right now.');
+      setConfirmReturnRefundOrderId('');
     } finally {
       setLoadingAction(null);
     }
@@ -497,6 +615,79 @@ const Orders = () => {
       );
     } catch (error) {
       console.error('Error rendering workflow rail:', error);
+      return null;
+    }
+  };
+
+  const renderLalamoveTrackingPanel = (order) => {
+    try {
+      if (!order || String(order.deliveryMethod || '').toLowerCase() !== 'delivery') {
+        return null;
+      }
+
+      const tracking = getLalamoveTracking(order);
+      const isBooked = Boolean(tracking.booked);
+
+      return (
+        <div className="customer-delivery-panel">
+          <div className="customer-delivery-header">
+            <div>
+              <p className="order-panel-kicker">Delivery Tracking</p>
+              <h3>{isBooked ? 'Lalamove Delivery' : 'Waiting for Courier Booking'}</h3>
+            </div>
+            <Truck size={20} />
+          </div>
+
+          {!isBooked ? (
+            <p className="order-panel-copy">
+              Your order is waiting for admin or staff to book a Lalamove delivery after confirmation.
+            </p>
+          ) : (
+            <>
+              <div className="customer-delivery-grid">
+                <div>
+                  <span>Status</span>
+                  <strong>{tracking.statusLabel || 'Booked'}</strong>
+                </div>
+                <div>
+                  <span>ETA</span>
+                  <strong>{formatDateTime(tracking.estimatedDeliveryAt)}</strong>
+                </div>
+                <div>
+                  <span>Driver</span>
+                  <strong>{tracking.driver?.name || 'Waiting'}</strong>
+                </div>
+                <div>
+                  <span>Plate</span>
+                  <strong>{tracking.driver?.plateNumber || 'N/A'}</strong>
+                </div>
+                <div>
+                  <span>Distance</span>
+                  <strong>{formatMeters(tracking.distanceMeters)}</strong>
+                </div>
+                <div>
+                  <span>Last Update</span>
+                  <strong>{formatDateTime(tracking.lastSyncedAt)}</strong>
+                </div>
+              </div>
+
+              {tracking.shareLink && (
+                <a
+                  className="order-button order-button--primary order-button--compact customer-delivery-link"
+                  href={tracking.shareLink}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  <ExternalLink size={16} />
+                  Track with Lalamove
+                </a>
+              )}
+            </>
+          )}
+        </div>
+      );
+    } catch (error) {
+      console.error('Error rendering Lalamove tracking panel:', error);
       return null;
     }
   };
@@ -566,6 +757,7 @@ const Orders = () => {
     }
   };
 
+  /*
   const renderIssuePanel = (order, isOpen) => {
     try {
       if (!order || !canCustomerReportIssue(order) || !isOpen) {
@@ -612,8 +804,8 @@ const Orders = () => {
 
         <div className="order-form-grid">
           <div className="order-form-field">
-            <label>Customer Name</label>
-            <input
+            <label htmlFor={`order-customer-name-${order.id}`}>Customer Name</label>
+            <input id={`order-customer-name-${order.id}`}
               type="text"
               className="order-input"
               value={draft.customerName || ''}
@@ -623,8 +815,8 @@ const Orders = () => {
           </div>
 
           <div className="order-form-field">
-            <label>Order ID</label>
-            <input
+            <label htmlFor={`order-order-id-${order.id}`}>Order ID</label>
+            <input id={`order-order-id-${order.id}`}
               type="text"
               className="order-input"
               value={order.displayId || order.orderCode || order.id}
@@ -634,8 +826,8 @@ const Orders = () => {
         </div>
 
         <div className="order-form-field">
-          <label>Issue Type</label>
-          <select
+          <label htmlFor={`order-issue-type-${order.id}`}>Issue Type</label>
+          <select id={`order-issue-type-${order.id}`}
             className="order-input"
             value={draft.issueType || 'damage'}
             onChange={(event) => setIssueDraft(order.id, { issueType: event.target.value })}
@@ -649,8 +841,8 @@ const Orders = () => {
         </div>
 
         <div className="order-form-field">
-          <label>Description</label>
-          <textarea
+          <label htmlFor={`order-description-${order.id}`}>Description</label>
+          <textarea id={`order-description-${order.id}`}
             className="order-textarea"
             value={draft.description || ''}
             onChange={(event) => setIssueDraft(order.id, { description: event.target.value })}
@@ -711,6 +903,7 @@ const Orders = () => {
       return null;
     }
   };
+  */
 
   const renderCancelPanel = (order, isOpen) => {
     try {
@@ -745,8 +938,8 @@ const Orders = () => {
           </p>
 
           <div className="order-form-field">
-            <label>Reason (optional)</label>
-            <textarea
+            <label htmlFor={`order-cancel-reason-${order.id}`}>Reason (optional)</label>
+            <textarea id={`order-cancel-reason-${order.id}`}
               className="order-textarea"
               value={draft.reason || ''}
               onChange={(event) => setCancelDraft(order.id, { reason: event.target.value, error: '' })}
@@ -773,6 +966,157 @@ const Orders = () => {
     }
   };
 
+  const renderReturnRefundPanel = (order, isOpen) => {
+    if (!order || !canCustomerRequestReturnRefund(order) || !isOpen) {
+      return null;
+    }
+
+    const draft = returnRefundDrafts[order.id] || {
+      type: 'refund',
+      reason: 'Product quality concern',
+      customerMessage: '',
+      evidenceImageDataUrl: '',
+      evidenceImageName: '',
+      error: '',
+    };
+    const isLoading = loadingAction?.type === 'return-refund' && loadingAction.orderId === order.id;
+
+    return (
+      <div className="order-action-panel order-action-panel--issue">
+        <div className="order-action-panel-header">
+          <div>
+            <p className="order-panel-kicker">Return or Refund</p>
+            <h3>Submit a request</h3>
+          </div>
+          <button
+            type="button"
+            className="order-button order-button--ghost order-button--compact"
+            onClick={() => setOpenReturnRefundOrderId('')}
+          >
+            Hide form
+          </button>
+        </div>
+
+        <p className="order-panel-copy">
+          Your request will be linked to this order and appear immediately in the admin or staff orders dashboard.
+        </p>
+
+        <div className="order-form-grid">
+          <div className="order-form-field">
+            <label htmlFor={`order-request-type-${order.id}`}>Request Type</label>
+            <select id={`order-request-type-${order.id}`}
+              className="order-input"
+              value={draft.type || 'refund'}
+              onChange={(event) => setReturnRefundDraft(order.id, { type: event.target.value, error: '' })}
+            >
+              <option value="refund">Refund</option>
+              <option value="return">Return</option>
+            </select>
+          </div>
+          <div className="order-form-field">
+            <label htmlFor={`order-refund-reason-${order.id}`}>Reason</label>
+            <select id={`order-refund-reason-${order.id}`}
+              className="order-input"
+              value={draft.reason || ''}
+              onChange={(event) => setReturnRefundDraft(order.id, { reason: event.target.value, error: '' })}
+            >
+              <option value="">Select a reason</option>
+              <option value="Product quality concern">Product quality concern</option>
+              <option value="Damaged or incorrect item">Damaged or incorrect item</option>
+              <option value="Missing item">Missing item</option>
+              <option value="Order was not received">Order was not received</option>
+              <option value="Other">Other</option>
+            </select>
+          </div>
+        </div>
+
+        <div className="order-form-field">
+          <label htmlFor={`order-refund-message-${order.id}`}>Additional Message</label>
+          <textarea id={`order-refund-message-${order.id}`}
+            className="order-textarea"
+            value={draft.customerMessage || ''}
+            onChange={(event) => setReturnRefundDraft(order.id, { customerMessage: event.target.value, error: '' })}
+            placeholder="Add any detail that will help the team review your request."
+          />
+        </div>
+
+        <div className="order-form-field">
+          <label>Photo Proof <span className="order-field-optional">Optional</span></label>
+          <label className="order-upload-card">
+            <input
+              type="file"
+              accept="image/png,image/jpeg"
+              capture="environment"
+              onChange={(event) => void handleReturnRefundFileChange(order.id, event)}
+              className="order-hidden-input"
+            />
+            <Camera size={18} />
+            <div>
+              <strong>{draft.evidenceImageName || 'Add photo proof of the damaged item'}</strong>
+              <span>PNG or JPG/JPEG, up to 5 MB.</span>
+            </div>
+          </label>
+        </div>
+
+        {draft.evidenceImageDataUrl && (
+          <img
+            src={draft.evidenceImageDataUrl}
+            alt="Return or refund evidence preview"
+            className="order-image-preview"
+          />
+        )}
+
+        {draft.error && <div className="order-inline-error">{draft.error}</div>}
+
+        <button
+          type="button"
+          className="order-button order-button--primary"
+          onClick={() => setConfirmReturnRefundOrderId(order.id)}
+          disabled={isLoading}
+        >
+          {isLoading ? <Loader2 size={16} className="spin" /> : <RotateCcw size={16} />}
+          {isLoading ? 'Submitting...' : 'Request Return/Refund'}
+        </button>
+      </div>
+    );
+  };
+
+  const renderReturnRefundStatus = (order) => {
+    const request = order?.latestReturnRefundRequest;
+    if (!request) return null;
+
+    return (
+      <div className="order-action-panel order-action-panel--issue">
+        <div className="order-action-panel-header">
+          <div>
+            <p className="order-panel-kicker">{request.type === 'return' ? 'Return' : 'Refund'} Request</p>
+            <h3>{getReturnRefundStatusLabel(request.status)}</h3>
+          </div>
+          <span className="customer-order-badge customer-order-badge--review">
+            {getReturnRefundStatusLabel(request.status)}
+          </span>
+        </div>
+        <p className="order-panel-copy"><strong>Reason:</strong> {request.reason}</p>
+        {request.customerMessage && <p className="order-panel-copy">{request.customerMessage}</p>}
+        {request.evidenceImageUrl && (
+          <a href={request.evidenceImageUrl} target="_blank" rel="noreferrer" className="order-evidence-link">
+            <img src={request.evidenceImageUrl} alt="Photo proof supplied with the request" className="order-image-preview" />
+          </a>
+        )}
+        {request.rejectionReason && <div className="order-inline-error">Rejection reason: {request.rejectionReason}</div>}
+        <div className="order-form-meta">
+          {(request.history || []).map((entry, index) => (
+            <div key={`${entry.createdAt || entry.created_at || index}-${index}`} className="order-form-meta-item">
+              <span>{getReturnRefundStatusLabel(entry.status)}</span>
+              <strong>{formatDateTime(entry.createdAt || entry.created_at)}</strong>
+              {entry.note && <small>{entry.note}</small>}
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  };
+
   const renderOrderCard = (order, variant = 'active') => {
     // Guard: Ensure order data is valid
     if (!order || typeof order !== 'object') {
@@ -782,14 +1126,14 @@ const Orders = () => {
 
     const statusLabel = getOrderStatusLabel(order.status);
     const reviewStatusLabel = getReviewStatusLabel(order.reviewStatus);
-    const workflowSteps = buildOrderWorkflowProgress(order.status);
     const latestReport = order.latestIssueReport;
     const isUnderReview = normalizeReviewStatus(order.reviewStatus) === 'under_review';
     const isHistoryCard = variant === 'history';
     const isCancelled = order.status === 'cancelled';
     const isRefunded = order.status === 'refunded';
-    const isIssueOpen = openIssueOrderId === order.id;
     const isCancelOpen = openCancelOrderId === order.id;
+    const isReturnRefundOpen = openReturnRefundOrderId === order.id;
+    const latestReturnRefundRequest = order.latestReturnRefundRequest;
     const loadingCancel = loadingAction?.type === 'cancel' && loadingAction.orderId === order.id;
     const isTargetedForConfirmation = confirmOrderId === order.id && hasCustomerConfirmationPending(order);
 
@@ -812,6 +1156,11 @@ const Orders = () => {
             <span className={`customer-order-badge customer-order-badge--${order.status}`}>{statusLabel}</span>
             {isUnderReview && <span className="customer-order-badge customer-order-badge--review">{reviewStatusLabel}</span>}
             {isRefunded && <span className="customer-order-badge customer-order-badge--refunded">Returned</span>}
+            {latestReturnRefundRequest && (
+              <span className="customer-order-badge customer-order-badge--review">
+                {getReturnRefundStatusLabel(latestReturnRefundRequest.status)}
+              </span>
+            )}
           </div>
         </div>
 
@@ -822,7 +1171,7 @@ const Orders = () => {
           </div>
           <div>
             <span>Total</span>
-            <strong>{order.total || formatCurrency(order.totalAmount)}</strong>
+            <strong>{formatCurrency(order.total || order.totalAmount)}</strong>
           </div>
           <div>
             <span>Payment</span>
@@ -888,6 +1237,30 @@ const Orders = () => {
                 <p>
                   {latestReport.description}
                 </p>
+                {latestReport.evidenceImageUrl && (
+                  <a
+                    href={latestReport.evidenceImageUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="order-evidence-link"
+                  >
+                    <img
+                      src={latestReport.evidenceImageUrl}
+                      alt="Photo proof submitted for this order"
+                      className="order-image-preview"
+                    />
+                  </a>
+                )}
+              </div>
+            </div>
+          )}
+
+          {!isUnderReview && latestReport?.reviewStatus === 'rejected' && (
+            <div className="customer-order-note customer-order-note--warning">
+              <ShieldAlert size={16} />
+              <div>
+                <strong>Return request rejected</strong>
+                <p>{latestReport.reviewReason || 'The return request was not approved.'}</p>
               </div>
             </div>
           )}
@@ -904,7 +1277,13 @@ const Orders = () => {
 
         {variant === 'active' && <OrderVerificationPanel order={order} />}
 
+        <OrderFeedbackPanel order={order} />
+
+        {variant === 'active' && renderLalamoveTrackingPanel(order)}
+
         {variant === 'active' && renderWorkflowRail(order)}
+
+        {renderReturnRefundStatus(order)}
 
         {variant === 'active' && isTargetedForConfirmation && (
           <div className="customer-order-note customer-order-note--confirmation">
@@ -916,8 +1295,9 @@ const Orders = () => {
           </div>
         )}
 
-        {variant === 'active' && (
-          <div className="customer-order-actions">
+        <div className="customer-order-actions">
+          {variant === 'active' && (
+            <>
             {canCustomerCancelOrder(order) && (
               <button
                 type="button"
@@ -929,28 +1309,33 @@ const Orders = () => {
                 {isCancelOpen ? 'Hide Cancel Form' : 'Cancel Order'}
               </button>
             )}
-            {canCustomerReportIssue(order) && (
-              <button
-                type="button"
-                className={`order-button order-button--refund ${isIssueOpen ? 'is-active' : ''}`}
-                onClick={() => setOpenIssueOrderId((current) => (current === order.id ? '' : order.id))}
-              >
-                <RotateCcw size={16} />
-                {isIssueOpen ? 'Hide Return Form' : 'Request Return'}
-              </button>
-            )}
-          </div>
-        )}
+            </>
+          )}
+          {canCustomerRequestReturnRefund(order) && (
+            <button
+              type="button"
+              className={`order-button order-button--refund ${isReturnRefundOpen ? 'is-active' : ''}`}
+              onClick={() => setOpenReturnRefundOrderId((current) => (current === order.id ? '' : order.id))}
+            >
+              <RotateCcw size={16} />
+              {isReturnRefundOpen ? 'Hide Request Form' : 'Request Return/Refund'}
+            </button>
+          )}
+        </div>
 
         {variant === 'active' && renderReceiptPanel(order)}
         {variant === 'active' && renderCancelPanel(order, isCancelOpen)}
-        {variant === 'active' && renderIssuePanel(order, isIssueOpen)}
+        {renderReturnRefundPanel(order, isReturnRefundOpen)}
       </article>
     );
   };
 
   return (
     <div className="orders-workflow-page">
+      <header className="orders-customer-heading">
+        <h1>My orders</h1>
+        <p>Track your treats and find your order history.</p>
+      </header>
       {(pageNotice || pageError) && (
         <section className="orders-alert-stack" aria-live="polite">
           {pageNotice && (
@@ -1022,7 +1407,7 @@ const Orders = () => {
         <div className="orders-section-header">
           <div>
             <p className="orders-eyebrow">Active Orders</p>
-            <h2>Workflow in progress</h2>
+            <h2>Track your order</h2>
           </div>
           <span className="orders-section-chip">{activeOrders.length} open</span>
         </div>
@@ -1050,7 +1435,7 @@ const Orders = () => {
         <div className="orders-section-header">
           <div>
             <p className="orders-eyebrow">History</p>
-            <h2>Completed, cancelled, and returned orders</h2>
+            <h2>Past orders</h2>
           </div>
           <div className="orders-section-actions">
             <span className="orders-section-chip">{historyOrders.length} archived</span>
@@ -1087,6 +1472,27 @@ const Orders = () => {
           </div>
         )}
       </section>
+
+      {confirmReturnRefundOrderId && (() => {
+        const order = orders.find((item) => item.id === confirmReturnRefundOrderId);
+        const draft = order ? (returnRefundDrafts[order.id] || {}) : {};
+        if (!order) return null;
+
+        return (
+          <div className="order-confirmation-backdrop" role="presentation">
+            <section ref={confirmationDialogRef} tabIndex={-1} className="order-confirmation-dialog" role="dialog" aria-modal="true" aria-labelledby="return-refund-confirm-title">
+              <p className="order-panel-kicker">Confirm Request</p>
+              <h2 id="return-refund-confirm-title">Submit {draft.type === 'return' ? 'return' : 'refund'} request?</h2>
+              <p>Are you sure you want to submit this refund request for {order.displayId || order.orderCode || order.id}?</p>
+              <p><strong>Reason:</strong> {draft.reason}</p>
+              <div className="order-confirmation-actions">
+                <button type="button" className="order-button order-button--ghost" disabled={loadingAction?.type === 'return-refund'} onClick={() => setConfirmReturnRefundOrderId('')}>Cancel</button>
+                <button type="button" className="order-button order-button--primary" disabled={loadingAction?.type === 'return-refund'} onClick={() => void handleConfirmReturnRefund(order)}>{loadingAction?.type === 'return-refund' ? 'Submitting…' : 'Confirm Request'}</button>
+              </div>
+            </section>
+          </div>
+        );
+      })()}
     </div>
   );
 };

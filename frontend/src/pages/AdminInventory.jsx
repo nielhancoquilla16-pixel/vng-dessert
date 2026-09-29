@@ -18,6 +18,7 @@ import { useProducts } from '../context/ProductContext';
 import { useInventoryAlerts } from '../context/InventoryAlertContext';
 import {
   formatInventoryDate,
+  formatInventoryDateTime,
   getInventoryBatchStatus,
 } from '../utils/inventoryBatches';
 import LoadingButton from '../components/LoadingButton';
@@ -83,6 +84,7 @@ const createBatchDraft = (type = 'product', name = '') => ({
   unit: type === 'ingredient' ? 'pcs' : 'pcs',
   dateCreated: getTodayInputValue(),
   expirationDate: '',
+  expirationTime: '23:59',
 });
 
 const createFinishedProductDraft = (product) => ({
@@ -92,6 +94,7 @@ const createFinishedProductDraft = (product) => ({
   unit: 'pcs',
   dateCreated: product.dateCreated || '',
   expirationDate: product.expirationDate || '',
+  expirationTime: product.expirationTime || '23:59',
 });
 
 const normalizeProductNameKey = (value = '') => String(value ?? '').trim().toLowerCase();
@@ -326,6 +329,7 @@ const AdminInventory = () => {
     {
       dateCreated: draftBatch.dateCreated,
       expirationDate: draftBatch.expirationDate,
+      expirationAt: draftBatch.expirationAt,
     },
     warningDays,
   );
@@ -363,6 +367,8 @@ const AdminInventory = () => {
       unit: item.unit || 'pcs',
       dateCreated: item.dateCreated || '',
       expirationDate: item.expirationDate || '',
+      expirationTime: item.expirationTime || '23:59',
+      expirationAt: item.expirationAt || '',
     });
     setFormError('');
     setIsModalOpen(true);
@@ -432,6 +438,8 @@ const AdminInventory = () => {
         await updateProductStock(item.productId || item.id, adjustment, {
           dateCreated: item.dateCreated || null,
           expirationDate: item.expirationDate || null,
+          expirationTime: item.expirationTime || null,
+          expirationAt: item.expirationAt || null,
         });
         return;
       }
@@ -480,6 +488,8 @@ const AdminInventory = () => {
           stock: payload.quantity,
           dateCreated: payload.dateCreated || null,
           expirationDate: payload.expirationDate || null,
+          expirationTime: payload.expirationTime || null,
+          expirationAt: payload.expirationAt || null,
         });
       } else if (editingBatchId) {
         await editInventoryItem({
@@ -625,7 +635,7 @@ const AdminInventory = () => {
                                 <strong>{product.productName}</strong>
                                 {product.status !== 'fresh' && product.expirationDate ? (
                                   <small style={{ color: product.status === 'expired' ? '#dc2626' : '#f59e0b' }}>
-                                    Expiry: {product.expirationDate}
+                                    Expiry: {formatInventoryDateTime(product.expirationAt || product.expirationDate)}
                                   </small>
                                 ) : (
                                   product.dateCreated && <small>{product.dateCreated}</small>
@@ -651,7 +661,7 @@ const AdminInventory = () => {
                           <td className="inventory-table-expiration">
                             {product.expirationDate ? (
                               <span style={{ fontSize: '0.875rem', color: product.status === 'expired' ? '#dc2626' : product.status === 'expiring soon' ? '#f59e0b' : '#64748b' }}>
-                                {product.expirationDate}
+                                {formatInventoryDateTime(product.expirationAt || product.expirationDate)}
                               </span>
                             ) : (
                               <span style={{ fontSize: '0.875rem', color: '#cbd5e1' }}>No Date</span>
@@ -736,7 +746,7 @@ const AdminInventory = () => {
                                 <strong>{item.productName}</strong>
                                 {item.status !== 'fresh' && item.expirationDate ? (
                                   <small style={{ color: item.status === 'expired' ? '#dc2626' : '#f59e0b' }}>
-                                    Expiry: {item.expirationDate}
+                                    Expiry: {formatInventoryDateTime(item.expirationAt || item.expirationDate)}
                                   </small>
                                 ) : (
                                   <small>{item.batchId}</small>
@@ -762,7 +772,7 @@ const AdminInventory = () => {
                           <td className="inventory-table-expiration">
                             {item.expirationDate ? (
                               <span style={{ fontSize: '0.875rem', color: item.status === 'expired' ? '#dc2626' : item.status === 'expiring soon' ? '#f59e0b' : '#64748b' }}>
-                                {item.expirationDate}
+                                {formatInventoryDateTime(item.expirationAt || item.expirationDate)}
                               </span>
                             ) : (
                               <span style={{ fontSize: '0.875rem', color: '#cbd5e1' }}>No Date</span>
@@ -869,6 +879,7 @@ const AdminInventory = () => {
                     id="inventory-quantity"
                     type="number"
                     min="0"
+                    step="0.0001"
                     className="modal-input"
                     value={draftBatch.quantity}
                     onChange={(event) => setDraftBatch((current) => ({ ...current, quantity: event.target.value }))}
@@ -919,6 +930,16 @@ const AdminInventory = () => {
                     className="modal-input"
                     value={draftBatch.expirationDate}
                     onChange={(event) => setDraftBatch((current) => ({ ...current, expirationDate: event.target.value }))}
+                  />
+                </div>
+                <div className="modal-form-group">
+                  <label htmlFor="inventory-expiration-time">Expiration time</label>
+                  <input
+                    id="inventory-expiration-time"
+                    type="time"
+                    className="modal-input"
+                    value={draftBatch.expirationTime || ''}
+                    onChange={(event) => setDraftBatch((current) => ({ ...current, expirationTime: event.target.value, expirationAt: '' }))}
                   />
                 </div>
               </div>

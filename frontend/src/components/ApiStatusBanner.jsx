@@ -2,7 +2,6 @@ import React, { useEffect, useState } from 'react';
 import { AlertTriangle } from 'lucide-react';
 import {
   getApiStatus,
-  isBackendUnavailableMessage,
   probeApiHealth,
   subscribeToApiStatus,
 } from '../lib/api';
@@ -15,7 +14,7 @@ const ApiStatusBanner = () => {
   ), []);
 
   useEffect(() => {
-    if (!status?.message || !isBackendUnavailableMessage(status.message)) {
+    if (!status?.message || status.source !== 'network') {
       return undefined;
     }
 
@@ -41,9 +40,15 @@ const ApiStatusBanner = () => {
   }
 
   return (
-    <div className="api-status-banner" role="status" aria-live="polite">
-      <AlertTriangle size={18} />
-      <span>{status.message}</span>
+    <div className="api-status-banner" role="alert">
+      <AlertTriangle size={20} aria-hidden="true" />
+      <div className="api-status-banner-copy">
+        <strong>Error {status.code || 503}</strong>
+        <span>{status.message}</span>
+      </div>
+      <button type="button" className="api-status-retry" onClick={() => window.location.reload()}>
+        Try Again
+      </button>
     </div>
   );
 };

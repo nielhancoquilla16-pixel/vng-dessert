@@ -57,6 +57,46 @@ export const normalizeInventoryDate = (value) => {
   return `${year}-${month}-${day}`;
 };
 
+export const normalizeExpirationAt = (value, fallbackDate = '') => {
+  const rawValue = String(value || '').trim();
+  const parsed = rawValue ? new Date(rawValue) : null;
+  if (parsed && !Number.isNaN(parsed.getTime())) {
+    return parsed.toISOString();
+  }
+
+  const date = normalizeInventoryDate(fallbackDate);
+  return date ? new Date(`${date}T23:59:00+08:00`).toISOString() : '';
+};
+
+export const getExpirationTime = (expirationAt = '') => {
+  const parsed = new Date(expirationAt);
+  if (Number.isNaN(parsed.getTime())) return '';
+
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Manila',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(parsed);
+  const read = (type) => parts.find((part) => part.type === type)?.value || '';
+  return `${read('hour')}:${read('minute')}`;
+};
+
+export const formatInventoryDateTime = (value, fallbackDate = '') => {
+  const expirationAt = normalizeExpirationAt(value, fallbackDate);
+  const parsed = new Date(expirationAt);
+  if (Number.isNaN(parsed.getTime())) return 'Not set';
+
+  return parsed.toLocaleString(undefined, {
+    timeZone: 'Asia/Manila',
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+};
+
 const getLocalDateKey = (referenceDate = new Date()) => {
   const year = referenceDate.getFullYear();
   const month = String(referenceDate.getMonth() + 1).padStart(2, '0');
@@ -92,8 +132,17 @@ export const getDaysUntilExpiry = (expirationDate, referenceDate = new Date()) =
   return expiryDay - todayDay;
 };
 
+export const getHoursUntilExpiry = (expirationAt, expirationDate, referenceDate = new Date()) => {
+  const normalizedExpiryAt = normalizeExpirationAt(expirationAt, expirationDate);
+  const expiryTime = new Date(normalizedExpiryAt).getTime();
+  const referenceTime = new Date(referenceDate).getTime();
+  return Number.isFinite(expiryTime) && Number.isFinite(referenceTime)
+    ? (expiryTime - referenceTime) / 3600000
+    : null;
+};
+
 export const getInventoryBatchStatus = (
-  { dateCreated, expirationDate },
+  { dateCreated, expirationDate, expirationAt },
   warningDays = DEFAULT_EXPIRY_WARNING_DAYS,
   referenceDate = new Date(),
 ) => {
@@ -104,17 +153,17 @@ export const getInventoryBatchStatus = (
     return 'no date';
   }
 
-  const daysUntilExpiry = getDaysUntilExpiry(normalizedExpiration, referenceDate);
-  if (daysUntilExpiry === null) {
+  const hoursUntilExpiry = getHoursUntilExpiry(expirationAt, normalizedExpiration, referenceDate);
+  if (hoursUntilExpiry === null) {
     return 'no date';
   }
 
   const safeWarningDays = clampWarningDays(warningDays);
-  if (daysUntilExpiry < 0) {
+  if (hoursUntilExpiry <= 0) {
     return 'expired';
   }
 
-  if (daysUntilExpiry <= safeWarningDays) {
+  if (hoursUntilExpiry <= safeWarningDays * 24) {
     return 'expiring soon';
   }
 
@@ -173,10 +222,12 @@ export const annotateInventoryBatch = (
 ) => {
   const normalizedDateCreated = normalizeInventoryDate(item.dateCreated || item.createdAt);
   const normalizedExpirationDate = normalizeInventoryDate(item.expirationDate);
+  const expirationAt = normalizeExpirationAt(item.expirationAt, normalizedExpirationDate);
   const status = getInventoryBatchStatus(
     {
       dateCreated: normalizedDateCreated,
       expirationDate: normalizedExpirationDate,
+      expirationAt,
     },
     warningDays,
     referenceDate,
@@ -192,6 +243,8 @@ export const annotateInventoryBatch = (
     unit: item.unit || 'pcs',
     dateCreated: normalizedDateCreated,
     expirationDate: normalizedExpirationDate,
+    expirationAt,
+    expirationTime: getExpirationTime(expirationAt),
     status,
     statusLabel: statusMeta.label,
     statusTone: statusMeta.tone,

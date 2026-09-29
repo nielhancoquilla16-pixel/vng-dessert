@@ -53,6 +53,17 @@ export const normalizeReviewStatus = (value = '') => {
   return 'none';
 };
 
+export const normalizeDeliveryMethod = (value = '') => {
+  const normalized = String(value || '').trim().toLowerCase().replace(/[ _]+/g, '-');
+  if (['pickup', 'pick-up', 'collection', 'in-store'].includes(normalized)) {
+    return 'pickup';
+  }
+  if (normalized === 'home-delivery') {
+    return 'delivery';
+  }
+  return normalized;
+};
+
 export const getOrderStatusLabel = (status = '', audience = 'customer') => {
   const normalized = normalizeOrderStatus(status);
   if (audience === 'admin') {
@@ -115,9 +126,9 @@ export const isTerminalOrderStatus = (status = '') => {
 
 export const isHistoryOrderStatus = (status = '') => isTerminalOrderStatus(status);
 
-export const isDeliveryOrder = (order = {}) => String(order.deliveryMethod || order.delivery_method || '').toLowerCase() === 'delivery';
+export const isDeliveryOrder = (order = {}) => normalizeDeliveryMethod(order.deliveryMethod || order.delivery_method) === 'delivery';
 
-export const isPickupOrder = (order = {}) => String(order.deliveryMethod || order.delivery_method || '').toLowerCase() === 'pickup';
+export const isPickupOrder = (order = {}) => normalizeDeliveryMethod(order.deliveryMethod || order.delivery_method) === 'pickup';
 
 export const isWalkInOrder = (order) => {
   // Handle null/undefined
@@ -141,7 +152,7 @@ export const isWalkInOrder = (order) => {
     || order.profiles?.role
     || '',
   ).toLowerCase();
-  const deliveryMethod = String(order.deliveryMethod || order.delivery_method || '').toLowerCase();
+  const deliveryMethod = normalizeDeliveryMethod(order.deliveryMethod || order.delivery_method);
   const paymentMethod = String(order.paymentMethod || order.payment_method || '').toLowerCase();
 
   return ['admin', 'staff'].includes(placedByRole)
@@ -161,6 +172,28 @@ export const hasLecheFlanItems = (items = []) => (
 
 export const canCustomerCancelOrder = (order = {}) => normalizeOrderStatus(order.status || order.orderStatus) === 'pending';
 
+export const canConfirmPickupOrder = (order = {}, now = Date.now()) => {
+  const status = normalizeOrderStatus(order.status || order.orderStatus || order.order_status);
+  const verificationMethod = String(order.verificationMethod || order.verification_method || '').toLowerCase();
+  const qrUsedAt = order.qrUsedAt || order.qr_used_at;
+  const verifiedAt = order.verifiedAt || order.verified_at;
+  const scannedConfirmedPickup = status === 'confirmed'
+    && verificationMethod === 'qr'
+    && Boolean(qrUsedAt)
+    && Boolean(verifiedAt);
+
+  if (!isPickupOrder(order) || (status !== 'ready' && !scannedConfirmedPickup)) {
+    return false;
+  }
+
+  if (order.verificationRequired === false || order.verification_required === false) {
+    return status === 'ready';
+  }
+
+  const expiresAt = Date.parse(order.qrExpiresAt || order.qr_expires_at || '');
+  return Number.isFinite(expiresAt) && expiresAt > now;
+};
+
 export const canStaffCancelOrder = (order = {}) => !['delivered', 'completed', 'refunded', 'cancelled'].includes(normalizeOrderStatus(order.status || order.orderStatus));
 
 export const hasCustomerConfirmationPending = (order = {}) => (
@@ -179,6 +212,25 @@ export const canCustomerReportIssue = (order = {}) => (
   && normalizeReviewStatus(order.reviewStatus || order.review_status) !== 'under_review'
   && !order.receiptReceivedAt
   && !order.receipt_received_at
+);
+
+export const normalizeReturnRefundStatus = (value = '') => {
+  const normalized = String(value || '').trim().toLowerCase();
+  return ['pending', 'approved', 'processing', 'refunded', 'completed', 'rejected'].includes(normalized)
+    ? normalized
+    : 'none';
+};
+
+export const getReturnRefundStatusLabel = (value = '') => {
+  const status = normalizeReturnRefundStatus(value);
+  if (status === 'none') return 'No request';
+  if (status === 'pending') return 'Refund Requested';
+  return status.charAt(0).toUpperCase() + status.slice(1);
+};
+
+export const canCustomerRequestReturnRefund = (order = {}) => (
+  ['delivered', 'completed'].includes(normalizeOrderStatus(order.status || order.orderStatus))
+  && normalizeReturnRefundStatus(order.returnRefundStatus || order.return_refund_status) === 'none'
 );
 
 export const buildOrderWorkflowProgress = (status = '') => {

@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { resolveAssetUrl } from '../lib/publicUrl';
+import { useShopSettings } from '../context/ShopSettingsContext';
 import './About.css';
 
 const flipCards = [
@@ -52,6 +53,7 @@ const FlipCard = ({ card, isFlipped, onToggle }) => (
 );
 
 const About = () => {
+  const { shopSettings, operatingHoursLabel } = useShopSettings();
   const [flippedCards, setFlippedCards] = useState({
     story: false,
     mission: false,
@@ -87,6 +89,7 @@ const About = () => {
             deserve a treat.
           </p>
           <p>Come by, grab your favorites, and taste what everyone&apos;s lining up for!</p>
+          <p><strong>Visit us:</strong> {shopSettings.address}. {operatingHoursLabel}.</p>
         </div>
 
         {showStoreImage && (

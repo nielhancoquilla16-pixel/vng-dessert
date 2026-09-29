@@ -1,11 +1,14 @@
 import express from "express";
+import { publicErrorResponses } from "./middleware/publicErrorResponses.js";
+import { httpErrorStatus } from "./lib/publicErrors.js";
 import cors from "cors";
 import dotenv from "dotenv";
 import fetch from "node-fetch";
+import { lookup } from "node:dns/promises";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
 import authRoute from "./routes/auth.js";
-import aiRoute, { getAiStatusPayload } from "./routes/ai.js";
+import aiRoute from "./routes/ai.js";
 import chatMessagesRoute from "./routes/chatMessages.js";
 import cartsRoute from "./routes/carts.js";
 import feedbackRoute from "./routes/feedback.js";
@@ -16,8 +19,8 @@ import preOrdersRoute from "./routes/preOrders.js";
 import productsRoute from "./routes/products.js";
 import profilesRoute from "./routes/profiles.js";
 import salesReportsRoute from "./routes/salesReports.js";
+import shopSettingsRoute from "./routes/shopSettings.js";
 import { getProfileUploadsDirectory } from "./lib/profileImages.js";
-import { getPayMongoStatusPayload } from "./lib/paymongo.js";
 import {
   getSupabaseAdmin,
   getSupabaseAnon,
@@ -33,7 +36,30 @@ const clientDir = join(__dirname, "../client");
 const app = express();
 const PORT = process.env.PORT || 3001;
 const profileUploadsDir = getProfileUploadsDirectory();
-app.use(cors({ origin: "*" })); // Allow all origins in development
+const isProduction = process.env.NODE_ENV === "production";
+
+app.set("trust proxy", 1);
+app.use((req, res, next) => {
+  const forwardedProto = String(req.headers["x-forwarded-proto"] || "").split(",")[0].trim();
+  const isSecureRequest = req.secure || forwardedProto === "https";
+  const isHealthCheckRequest = req.path === "/api/health" || req.path === "/api/health/database";
+
+  if (isProduction && !isHealthCheckRequest && forwardedProto === "http" && !isSecureRequest) {
+    return res.redirect(301, `https://${req.get("host")}${req.originalUrl}`);
+  }
+
+  if (isProduction) {
+    res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains; preload");
+  }
+
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+  res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=(self)");
+  next();
+});
+app.use(cors({ origin: process.env.CORS_ORIGIN || "*" }));
+app.use(publicErrorResponses);
 app.use(express.json({
   limit: "15mb",
   verify: (req, res, buffer) => {
@@ -44,18 +70,7 @@ app.use(express.static(clientDir));
 app.use("/uploads", express.static(join(profileUploadsDir, "..")));
 
 app.get("/api/health", (req, res) => {
-  const aiStatus = getAiStatusPayload();
-  const payMongoStatus = getPayMongoStatusPayload();
-
-  res.json({
-    status: "ok",
-    message: "Server is running.",
-    services: {
-      ai: aiStatus,
-      groq: aiStatus.groqConfigured ? "configured" : "local-fallback",
-      paymongo: payMongoStatus,
-    },
-  });
+  res.json({ status: "ok" });
 });
 
 const probeTable = async (client, table) => {
@@ -67,57 +82,58 @@ const probeTable = async (client, table) => {
   return {
     table,
     ok: !error,
-    error: error?.message || null,
+    error: error || null,
   };
+};
+
+const checkSupabaseHostname = async () => {
+  const rawUrl = String(process.env.SUPABASE_URL || "").trim();
+
+  try {
+    const hostname = new URL(rawUrl).hostname;
+    await lookup(hostname);
+    return { ok: true, hostname, error: null };
+  } catch (error) {
+    return {
+      ok: false,
+      hostname: rawUrl,
+      error: error?.code === "ENOTFOUND"
+        ? "SUPABASE_URL host does not resolve. The Supabase project may be inactive/deleted, or the project ref may be wrong."
+        : (error?.message || "SUPABASE_URL host could not be checked."),
+    };
+  }
 };
 
 app.get("/api/health/database", async (req, res, next) => {
   try {
     const publicConfigured = hasSupabasePublicConfig();
     const adminConfigured = hasSupabaseAdminConfig();
-
-    if (!publicConfigured) {
-      return res.status(503).json({
-        status: "error",
-        message: "Supabase public config is incomplete. Update SUPABASE_URL and SUPABASE_ANON_KEY in dessert-ai-system/server/.env.",
-        config: {
-          publicConfigured,
-          adminConfigured,
-        },
-        checks: [],
-      });
+    if (!publicConfigured || !adminConfigured) {
+      console.error("Database health configuration is incomplete.", { publicConfigured, adminConfigured });
+      res.locals.errorLogged = true;
+      return res.status(503).json({ error: "Service unavailable." });
     }
 
-    const checks = [];
-    const publicClient = getSupabaseAnon();
-    checks.push(await probeTable(publicClient, "products"));
+    const hostnameCheck = await checkSupabaseHostname();
+    if (!hostnameCheck.ok) {
+      console.error("Database health hostname check failed:", hostnameCheck);
+      res.locals.errorLogged = true;
+      return res.status(503).json({ error: "Service unavailable." });
+    }
 
-    if (adminConfigured) {
-      const adminClient = getSupabaseAdmin();
-      for (const table of ["profiles", "inventory", "orders", "pre_orders", "order_items", "order_issue_reports", "order_feedback", "sales_reports", "sales_report_items", "product_recipes", "product_recipe_items", "carts", "cart_items", "payment_checkouts"]) {
-        checks.push(await probeTable(adminClient, table));
-      }
+    const checks = [await probeTable(getSupabaseAnon(), "products")];
+    const adminClient = getSupabaseAdmin();
+    for (const table of ["profiles", "inventory", "orders", "pre_orders", "order_items", "order_issue_reports", "return_refund_requests", "shop_settings", "order_feedback", "sales_reports", "sales_report_items", "product_recipes", "product_recipe_items", "carts", "cart_items", "payment_checkouts", "customer_addresses"]) {
+      checks.push(await probeTable(adminClient, table));
     }
 
     const failingChecks = checks.filter((check) => !check.ok);
-    const status = failingChecks.length > 0
-      ? "error"
-      : (adminConfigured ? "ready" : "degraded");
-    const message = failingChecks.length > 0
-      ? "Some required Supabase tables are not reachable. Apply supabase/schema.sql and verify table names."
-      : (!adminConfigured
-        ? "Public Supabase access is working, but admin-only features still need SUPABASE_SERVICE_ROLE_KEY."
-        : "Supabase database is reachable and required tables responded.");
-
-    res.status(failingChecks.length > 0 ? 503 : 200).json({
-      status,
-      message,
-      config: {
-        publicConfigured,
-        adminConfigured,
-      },
-      checks,
-    });
+    if (failingChecks.length) {
+      console.error("Database health checks failed:", failingChecks);
+      res.locals.errorLogged = true;
+      return res.status(503).json({ error: "Service unavailable." });
+    }
+    res.json({ status: "ready" });
   } catch (error) {
     next(error);
   }
@@ -135,6 +151,11 @@ app.use("/api/pre-orders", preOrdersRoute);
 app.use("/api/products", productsRoute);
 app.use("/api/profiles", profilesRoute);
 app.use("/api/sales-reports", salesReportsRoute);
+app.use("/api/shop-settings", shopSettingsRoute);
+
+app.use("/api", (req, res) => {
+  res.status(404).json({ error: "We could not find what you requested." });
+});
 
 app.get("/", (req, res) => {
   res.sendFile(join(clientDir, "index.html"));
@@ -150,32 +171,21 @@ const isMalformedJsonError = (error) => (
 );
 
 app.use((error, req, res, next) => {
-  if (res.headersSent) {
-    return next(error);
-  }
+  if (res.headersSent) return next(error);
 
   if (isMalformedJsonError(error)) {
-    const requestPath = req.originalUrl || req.url || "/";
-    console.warn(`Rejected malformed JSON request on ${requestPath}.`);
-
-    return res.status(400).json({
-      error: "Malformed JSON body. Use valid JSON syntax with double-quoted property names.",
-    });
+    // Do not log the submitted body: it may contain passwords or other private input.
+    console.warn("Rejected malformed JSON request:", { method: req.method, path: req.path });
+    res.locals.errorLogged = true;
+    return res.status(400).json({ error: "Please check your information and try again." });
   }
 
-  console.error(error);
-
-  const rawMessage = error?.message || 'Internal server error.';
-  const normalizedMessage = (
-    /TypeError: fetch failed|getaddrinfo ENOTFOUND/i.test(rawMessage)
-      ? 'Backend could not reach Supabase. Check the values in dessert-ai-system/server/.env and restart the backend.'
-      : rawMessage
-  );
-  const status = error.status || (/Supabase configuration is incomplete|could not reach Supabase/i.test(normalizedMessage) ? 503 : 500);
-
-  res.status(status).json({
-    error: normalizedMessage,
-  });
+  console.error("Request exception:", { method: req.method, path: req.path, error });
+  res.locals.errorLogged = true;
+  const diagnostic = [error?.message, error?.details, error?.cause?.code].filter(Boolean).join(" ");
+  const unavailable = /fetch failed|ENOTFOUND|ECONN\w*|ETIMEDOUT|EACCES|configuration is incomplete/i.test(diagnostic);
+  const status = httpErrorStatus(error?.status || error?.statusCode, unavailable ? 503 : 500);
+  res.status(status).json({ error: error?.message, errorCode: error?.errorCode });
 });
 
 const startServer = async () => {

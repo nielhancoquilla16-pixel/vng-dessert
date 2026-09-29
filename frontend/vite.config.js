@@ -6,6 +6,7 @@ import tailwindcss from '@tailwindcss/vite'
 export default defineConfig({
   plugins: [tailwindcss(), react()],
   server: {
+    host: '0.0.0.0',
     port: 5173,
     proxy: {
       '/api': {
@@ -20,7 +21,8 @@ export default defineConfig({
             }
 
             res.end(JSON.stringify({
-              error: 'Backend server is unavailable. Start dessert-ai-system on port 3001.',
+              code: 503,
+              error: 'This service is temporarily unavailable. Please try again shortly.',
             }))
           })
         },

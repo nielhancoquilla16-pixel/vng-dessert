@@ -3,12 +3,11 @@ import { QrCode, ReceiptText } from 'lucide-react';
 import { generateQrDataUrl } from '../utils/qrCode';
 import { appUrl } from '../lib/appUrl';
 import { getPaymentStatusLabel, isWalkInOrder } from '../utils/orderWorkflow';
+import { formatCurrency } from '../utils/currency';
 import './ReceiptSlip.css';
 
 const RECEIPT_TAX_RATE = 0.12;
 const logoSrc = `${import.meta.env.BASE_URL || '/'}logo.png`;
-
-const formatCurrency = (value) => `PHP ${Number(value || 0).toFixed(2)}`;
 
 const formatDateTime = (value) => {
   if (!value) {
@@ -109,10 +108,10 @@ const ReceiptSlip = ({
   const paymentReceivedLabel = paymentSummary?.receivedLabel || 'Payment received';
   const changeLabel = paymentSummary?.changeLabel || 'Change';
   const receiptQrNote = isPendingOnlineReference
-    ? 'Feedback QR becomes available after order confirmation.'
+    ? 'We value your feedback. This QR can be used after the order is received.'
     : isWalkInReceiptOrder
-      ? 'Scan to rate your walk-in experience and send suggestions.'
-      : 'Scan to rate your order experience and send suggestions.';
+      ? 'We value your feedback. Scan this QR code to rate your experience after receiving your order.'
+      : 'We value your feedback. Scan this QR code to rate your experience after receiving your order.';
 
   const receiptDate = paidAt
     || order?.paymentCheckoutPaidAt

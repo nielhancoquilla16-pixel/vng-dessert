@@ -35,7 +35,7 @@ const Footer = () => {
           <h3>Follow Us</h3>
           <ul className="footer-links">
             <li>
-              <a href="https://www.facebook.com/VnG.LecheFlan" className="footer-social-link">
+              <a href="https://www.facebook.com/VnG.LecheFlan" target="_blank" rel="noopener noreferrer" className="footer-social-link">
                 <Facebook size={20} color="#1877f2" /> Facebook
               </a>
             </li>

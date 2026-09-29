@@ -10,10 +10,7 @@ export const parseCurrencyAmount = (value) => {
   return Number.isFinite(parsed) ? parsed : 0;
 };
 
-export const formatCurrency = (amount) => `PHP ${Number(amount || 0).toLocaleString(undefined, {
-  minimumFractionDigits: 2,
-  maximumFractionDigits: 2,
-})}`;
+export { formatCurrency } from './currency';
 
 const getOrderStatusTimestamps = (order = {}) => (
   order?.statusTimestamps || order?.status_timestamps || {}

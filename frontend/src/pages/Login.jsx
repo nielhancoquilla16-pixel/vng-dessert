@@ -1,763 +1,455 @@
-import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { Eye, EyeOff, Mail, Lock } from 'lucide-react';
-import { useAuth } from '../context/AuthContext';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
+import { CheckCircle2, Eye, EyeOff, Link2, Lock, Mail, RefreshCw, UserPlus } from 'lucide-react';
+import { getDashboardPathForRole, useAuth } from '../context/AuthContext';
+import useDialogFocus from '../hooks/useDialogFocus';
 import {
   TERMS_ACCEPTANCE_LABEL,
   TERMS_LAST_UPDATED_LABEL,
   TERMS_SECTIONS,
   TERMS_VERSION,
 } from '../content/termsAndConditions';
+import { apiRequest } from '../lib/api';
 import { getRememberMePreference, passwordRecoveryMode } from '../lib/supabase';
+import { PASSWORD_REQUIREMENTS, validatePassword } from '../utils/passwordValidation';
 import './Login.css';
 
-const panelStyle = {
-  maxWidth: '450px',
-  margin: '4rem auto',
-  background: 'white',
-  padding: '3rem',
-  borderRadius: '1rem',
-  boxShadow: '0 10px 30px rgba(0,0,0,0.1)',
+const initialCaptcha = {
+  id: '',
+  question: '',
+  answer: '',
+  isLoading: false,
+  error: '',
 };
 
-const fieldLabelStyle = {
-  display: 'block',
-  marginBottom: '0.5rem',
-  fontWeight: 600,
-  color: '#334155',
-  fontSize: '0.9rem',
+const getInitialView = (search = '') => {
+  const params = new URLSearchParams(search);
+  const mode = String(params.get('mode') || params.get('view') || '').toLowerCase();
+  return mode === 'signup' || mode === 'register' ? 'signup' : 'login';
 };
 
-const textInputStyle = {
-  width: '100%',
-  borderRadius: '0.75rem',
-  padding: '0.75rem 1rem',
-};
+const getMessageClass = (type) => (
+  type === 'success' ? 'auth-alert auth-alert-success' : 'auth-alert auth-alert-error'
+);
 
-const primaryButtonStyle = {
-  width: '100%',
-  marginTop: '0.5rem',
-  background: '#ff9800',
-  border: 'none',
-  padding: '0.75rem',
-  borderRadius: '9999px',
-  fontSize: '1rem',
-  fontWeight: 600,
-  color: 'white',
-  cursor: 'pointer',
-};
+const AuthAlert = ({ message, type = 'error' }) => (
+  message ? <div className={getMessageClass(type)} role={type === 'success' ? 'status' : 'alert'}>{message}</div> : null
+);
 
-const secondaryTextButtonStyle = {
-  background: 'none',
-  border: 'none',
-  padding: 0,
-  cursor: 'pointer',
-  fontWeight: 600,
-};
-
-const passwordFieldStyle = {
-  width: '100%',
-  borderRadius: '0.75rem',
-  padding: '0.75rem 2.75rem 0.75rem 1rem',
-};
-
-const iconPasswordFieldStyle = {
-  width: '100%',
-  borderRadius: '0.75rem',
-  padding: '0.75rem 3rem',
-};
-
-const passwordToggleStyle = {
-  background: 'none',
-  border: 'none',
-  padding: 0,
-  cursor: 'pointer',
-  position: 'absolute',
-  right: '1rem',
-  top: '50%',
-  transform: 'translateY(-50%)',
-  color: '#64748b',
-};
-
-const termsContainerStyle = {
-  border: '1px solid #fed7aa',
-  background: '#fff7ed',
-  borderRadius: '1rem',
-  padding: '1rem',
-};
-
-const termsScrollStyle = {
-  maxHeight: '240px',
-  overflowY: 'auto',
-  marginTop: '0.9rem',
-  paddingRight: '0.5rem',
-  display: 'flex',
-  flexDirection: 'column',
-  gap: '0.85rem',
-};
-
-const termsSectionTitleStyle = {
-  margin: 0,
-  color: '#9a3412',
-  fontSize: '0.92rem',
-  fontWeight: 700,
-};
-
-const termsParagraphStyle = {
-  margin: '0.45rem 0 0',
-  color: '#7c2d12',
-  fontSize: '0.84rem',
-  lineHeight: 1.55,
-};
-
-const checkboxLabelStyle = {
-  display: 'flex',
-  alignItems: 'flex-start',
-  gap: '0.75rem',
-  color: '#431407',
-  fontSize: '0.9rem',
-  lineHeight: 1.5,
-  cursor: 'pointer',
-};
-
-const termsNoticeStyle = {
-  border: '1px solid #fed7aa',
-  background: 'linear-gradient(135deg, #fff7ed 0%, #ffedd5 100%)',
-  borderRadius: '1rem',
-  padding: '1rem',
-  display: 'flex',
-  flexDirection: 'column',
-  gap: '0.85rem',
-};
-
-const termsModalOverlayStyle = {
-  position: 'fixed',
-  inset: 0,
-  background: 'rgba(15, 23, 42, 0.55)',
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  padding: '1.5rem',
-  zIndex: 1000,
-};
-
-const termsModalCardStyle = {
-  width: 'min(680px, 100%)',
-  maxHeight: '85vh',
-  background: '#ffffff',
-  borderRadius: '1.25rem',
-  padding: '1.5rem',
-  boxShadow: '0 24px 60px rgba(15, 23, 42, 0.3)',
-  display: 'flex',
-  flexDirection: 'column',
-  gap: '1rem',
-};
-
-const termsModalFooterStyle = {
-  display: 'flex',
-  justifyContent: 'flex-end',
-  gap: '0.75rem',
-  flexWrap: 'wrap',
-};
-
-const authLoadingOverlayStyle = {
-  position: 'fixed',
-  inset: 0,
-  background: 'rgba(255, 247, 237, 0.86)',
-  backdropFilter: 'blur(10px)',
-  WebkitBackdropFilter: 'blur(10px)',
-  zIndex: 1500,
-};
-
-const authLoadingContentStyle = {
-  position: 'fixed',
-  top: '50%',
-  left: '50%',
-  transform: 'translate(-50%, -50%)',
-  display: 'flex',
-  flexDirection: 'column',
-  alignItems: 'center',
-  justifyContent: 'center',
-  gap: '1.25rem',
-  width: 'min(24rem, calc(100vw - 3rem))',
-  textAlign: 'center',
-};
-
-const authLoadingTitleStyle = {
-  margin: 0,
-  color: '#7c2d12',
-  fontSize: '1.15rem',
-  fontWeight: 700,
-  textAlign: 'center',
-};
-
-const authLoadingHintStyle = {
-  margin: 0,
-  color: '#9a3412',
-  fontSize: '0.92rem',
-  textAlign: 'center',
-  maxWidth: '20rem',
-  lineHeight: 1.5,
-};
-
-const AuthLoadingOverlay = ({ title, hint }) => (
-  <div style={authLoadingOverlayStyle} role="status" aria-live="polite" aria-label={title}>
-    <div style={authLoadingContentStyle}>
-      <div
-        className="w-32 aspect-square rounded-full relative flex justify-center items-center animate-[spin_3s_linear_infinite] z-40 bg-[conic-gradient(#fde047_0deg,#fb923c_150deg,#ef4444_300deg,transparent_360deg)] before:content-[''] before:animate-[spin_2s_linear_infinite] before:absolute before:w-[60%] before:aspect-square before:rounded-full before:z-[80] before:bg-[conic-gradient(#fde047_0deg,#fb923c_180deg,transparent_360deg)] after:content-[''] after:absolute after:w-3/4 after:aspect-square after:rounded-full after:z-[60] after:animate-[spin_3s_linear_infinite] after:bg-[conic-gradient(#fb923c_0deg,#ef4444_200deg,transparent_360deg)]"
-        aria-hidden="true"
+const PasswordField = ({
+  id,
+  label,
+  value,
+  onChange,
+  showPassword,
+  onToggle,
+  placeholder = 'Enter password',
+  maxLength = 20,
+  autoComplete = 'current-password',
+}) => (
+  <div className="auth-field">
+    <label htmlFor={id}>{label}</label>
+    <div className="auth-input-shell">
+      <Lock size={18} />
+      <input
+        id={id}
+        type={showPassword ? 'text' : 'password'}
+        value={value}
+        onChange={onChange}
+        placeholder={placeholder}
+        maxLength={maxLength}
+        autoComplete={autoComplete}
+        required
+      />
+      <button
+        type="button"
+        className="auth-icon-button"
+        onClick={onToggle}
+        aria-label={showPassword ? 'Hide password' : 'Show password'}
       >
-        <span
-          className="absolute w-[85%] aspect-square rounded-full z-[60] animate-[spin_5s_linear_infinite] bg-[conic-gradient(#fde047_0deg,#fb923c_180deg,#ef4444_360deg)]"
-        />
-      </div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', alignItems: 'center' }}>
-        <p style={authLoadingTitleStyle}>{title}</p>
-        <p style={authLoadingHintStyle}>{hint}</p>
-      </div>
+        {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+      </button>
     </div>
+  </div>
+);
+
+const PasswordRequirements = () => (
+  <section className="auth-password-requirements" aria-label="Password Requirements">
+    <h3>Password Requirements</h3>
+    <ul>
+      {PASSWORD_REQUIREMENTS.map((requirement) => (
+        <li key={requirement}>{requirement}</li>
+      ))}
+    </ul>
+  </section>
+);
+
+const CaptchaField = ({ captcha, onAnswerChange, onRefresh, disabled }) => (
+  <div className="auth-captcha">
+    <div>
+      <span className="auth-captcha-label">CAPTCHA</span>
+      <strong>{captcha.isLoading ? 'Loading...' : captcha.question || 'Refresh challenge'}</strong>
+    </div>
+    <input
+      type="text"
+      inputMode="numeric"
+      aria-label="CAPTCHA answer"
+      placeholder="Answer"
+      value={captcha.answer}
+      onChange={(event) => onAnswerChange(event.target.value.replace(/\D/g, '').slice(0, 3))}
+      disabled={disabled || captcha.isLoading}
+      required
+    />
+    <button
+      type="button"
+      className="auth-icon-button auth-refresh-button"
+      onClick={onRefresh}
+      disabled={disabled || captcha.isLoading}
+      aria-label="Refresh CAPTCHA"
+    >
+      <RefreshCw size={18} />
+    </button>
   </div>
 );
 
 const Login = () => {
   const navigate = useNavigate();
+  const location = useLocation();
   const {
-    loginAdmin,
-    loginCustomer,
+    session,
+    profile,
+    isAuthLoading,
+    loginUser,
     registerCustomer,
-    verifyCustomerSignupCode,
-    resendCustomerSignupCode,
+    resendCustomerSignupLink,
     requestPasswordReset,
-    verifyAdminResetCode,
-    resetAdminPasswordWithCode,
     verifyPasswordRecoveryCode,
     completePasswordRecovery,
     isPasswordRecovery,
   } = useAuth();
 
-  const [view, setView] = useState('selection');
+  const [view, setView] = useState(() => getInitialView(location.search));
+  const activeView = isPasswordRecovery ? 'reset' : view;
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [alert, setAlert] = useState({ type: '', message: '' });
+  const [captcha, setCaptcha] = useState(initialCaptcha);
+  const [resendCooldown, setResendCooldown] = useState(0);
 
-  const [adminUser, setAdminUser] = useState('');
-  const [adminPass, setAdminPass] = useState('');
-  const [adminError, setAdminError] = useState('');
-  const [adminMessage, setAdminMessage] = useState('');
-  const [showAdminPassword, setShowAdminPassword] = useState(false);
-  const [adminResetIdentifier, setAdminResetIdentifier] = useState('');
-  const [adminResetCode, setAdminResetCode] = useState('');
-  const [adminResetPassword, setAdminResetPassword] = useState('');
-  const [adminResetConfirmPassword, setAdminResetConfirmPassword] = useState('');
-  const [adminResetError, setAdminResetError] = useState('');
-  const [adminResetMessage, setAdminResetMessage] = useState('');
-  const [isAdminResetVerified, setIsAdminResetVerified] = useState(false);
-  const [showAdminResetPassword, setShowAdminResetPassword] = useState(false);
-  const [showAdminResetConfirmPassword, setShowAdminResetConfirmPassword] = useState(false);
+  const [loginIdentifier, setLoginIdentifier] = useState('');
+  const [loginPassword, setLoginPassword] = useState('');
+  const [showLoginPassword, setShowLoginPassword] = useState(false);
+  const [rememberMe, setRememberMe] = useState(() => getRememberMePreference());
 
-  const [customerUsername, setCustomerUsername] = useState('');
-  const [customerPassword, setCustomerPassword] = useState('');
-  const [customerError, setCustomerError] = useState('');
-  const [customerMessage, setCustomerMessage] = useState('');
-  const [showCustomerPassword, setShowCustomerPassword] = useState(false);
-  const [rememberCustomer, setRememberCustomer] = useState(() => getRememberMePreference());
-
-  const [regUsername, setRegUsername] = useState('');
-  const [regEmail, setRegEmail] = useState('');
-  const [regPassword, setRegPassword] = useState('');
-  const [regConfirmPassword, setRegConfirmPassword] = useState('');
-  const [regError, setRegError] = useState('');
-  const [showRegisterPassword, setShowRegisterPassword] = useState(false);
-  const [showRegisterConfirmPassword, setShowRegisterConfirmPassword] = useState(false);
+  const [signupUsername, setSignupUsername] = useState('');
+  const [signupEmail, setSignupEmail] = useState('');
+  const [signupPassword, setSignupPassword] = useState('');
+  const [signupConfirmPassword, setSignupConfirmPassword] = useState('');
+  const [showSignupPassword, setShowSignupPassword] = useState(false);
+  const [showSignupConfirmPassword, setShowSignupConfirmPassword] = useState(false);
   const [hasAcceptedTerms, setHasAcceptedTerms] = useState(false);
   const [isTermsModalOpen, setIsTermsModalOpen] = useState(false);
   const [submitAfterTermsAcceptance, setSubmitAfterTermsAcceptance] = useState(false);
-
-  const [pendingVerification, setPendingVerification] = useState({
-    email: '',
-    username: '',
+  const termsDialogRef = useDialogFocus({
+    isOpen: isTermsModalOpen,
+    onClose: () => {
+      setIsTermsModalOpen(false);
+      setSubmitAfterTermsAcceptance(false);
+    },
+    closeDisabled: isSubmitting,
   });
-  const [verificationCode, setVerificationCode] = useState('');
-  const [verifyError, setVerifyError] = useState('');
-  const [verifyMessage, setVerifyMessage] = useState('');
+
+  const [pendingVerification, setPendingVerification] = useState({ email: '', username: '' });
 
   const [forgotIdentifier, setForgotIdentifier] = useState('');
   const [forgotStep, setForgotStep] = useState('request');
   const [pendingRecoveryEmail, setPendingRecoveryEmail] = useState('');
   const [recoveryCode, setRecoveryCode] = useState('');
-  const [forgotMessage, setForgotMessage] = useState('');
-  const [forgotMessageType, setForgotMessageType] = useState('');
-
   const [resetPassword, setResetPassword] = useState('');
   const [resetConfirmPassword, setResetConfirmPassword] = useState('');
-  const [resetError, setResetError] = useState('');
   const [showResetPassword, setShowResetPassword] = useState(false);
   const [showResetConfirmPassword, setShowResetConfirmPassword] = useState(false);
+
+  const signupPasswordValidation = useMemo(() => validatePassword(signupPassword), [signupPassword]);
+  const resetPasswordValidation = useMemo(() => validatePassword(resetPassword), [resetPassword]);
+  const shouldShowCaptcha = activeView === 'signup';
   const isRecoveryCodeMode = passwordRecoveryMode === 'code';
-  const activeView = isPasswordRecovery ? 'reset' : view;
-  const showAuthLoadingOverlay = isSubmitting && ['admin', 'customer', 'register'].includes(activeView);
-  const authLoadingCopy = activeView === 'register'
-    ? {
-      title: 'Creating your account...',
-      hint: 'We are setting up your signup details and preparing your first login.',
-    }
-    : {
-      title: 'Logging you in...',
-      hint: 'We are checking your account details and opening your dashboard.',
-    };
 
-  const renderWithAuthLoading = (content) => (
-    <>
-      {content}
-      {showAuthLoadingOverlay && (
-        <AuthLoadingOverlay
-          title={authLoadingCopy.title}
-          hint={authLoadingCopy.hint}
-        />
-      )}
-    </>
-  );
+  const loadCaptcha = useCallback(async () => {
+    setCaptcha((current) => ({ ...current, isLoading: true, error: '' }));
 
-  const resetForgotPasswordFlow = () => {
-    setForgotIdentifier('');
-    setForgotStep('request');
-    setPendingRecoveryEmail('check your email for the reset code');
-    setRecoveryCode('');
-    setForgotMessage('');
-    setForgotMessageType('');
-    setResetPassword('');
-    setResetConfirmPassword('');
-    setResetError('');
-  };
-
-  const resetAdminResetFlow = () => {
-    setAdminResetIdentifier('');
-    setAdminResetCode('');
-    setAdminResetPassword('');
-    setAdminResetConfirmPassword('');
-    setAdminResetError('');
-    setAdminResetMessage('');
-    setIsAdminResetVerified(false);
-    setShowAdminResetPassword(false);
-    setShowAdminResetConfirmPassword(false);
-  };
-
-  const openAdminPasswordHelp = () => {
-    setAdminError('');
-    setAdminMessage('');
-    setAdminResetIdentifier(adminUser.trim());
-    setAdminResetCode('');
-    setAdminResetPassword('');
-    setAdminResetConfirmPassword('');
-    setAdminResetError('');
-    setAdminResetMessage('');
-    setIsAdminResetVerified(false);
-    setShowAdminResetPassword(false);
-    setShowAdminResetConfirmPassword(false);
-    setView('admin-help');
-  };
-
-  const openTermsModal = (shouldSubmitAfterOpen = false) => {
-    setRegError('');
-    setSubmitAfterTermsAcceptance(shouldSubmitAfterOpen);
-    setIsTermsModalOpen(true);
-  };
-
-  const closeTermsModal = () => {
-    const attemptedSubmit = submitAfterTermsAcceptance;
-    setIsTermsModalOpen(false);
-    setSubmitAfterTermsAcceptance(false);
-
-    if (attemptedSubmit && !hasAcceptedTerms) {
-      setRegError('You must agree to the Terms and Conditions before creating an account.');
-    }
-  };
-
-  const openRegisterFlow = () => {
-    setView('register');
-    openTermsModal(false);
-  };
-
-  const submitRegistration = async () => {
-    const acceptedTermsAt = new Date().toISOString();
-
-    setIsSubmitting(true);
-    const result = await registerCustomer({
-      username: regUsername,
-      email: regEmail,
-      password: regPassword,
-      fullName: '',
-      acceptedTerms: hasAcceptedTerms,
-      acceptedTermsAt,
-      termsVersion: TERMS_VERSION,
-    });
-    setIsSubmitting(false);
-
-    if (!result.success) {
-      setRegError(result.message);
-      return;
-    }
-
-    setRegUsername('');
-    setRegEmail('');
-    setRegPassword('');
-    setRegConfirmPassword('');
-    setHasAcceptedTerms(false);
-
-    if (result.needsVerification) {
-      setPendingVerification({
-        email: result.email || regEmail.trim().toLowerCase(),
-        username: result.username || regUsername.trim().toLowerCase(),
+    try {
+      const challenge = await apiRequest('/api/auth/captcha');
+      setCaptcha({
+        id: challenge.id,
+        question: challenge.question,
+        answer: '',
+        isLoading: false,
+        error: '',
       });
-      setVerificationCode('');
-      setVerifyError('');
-      setVerifyMessage(`We sent a 6-digit verification code to ${result.email}.`);
-      setView('verify');
-      return;
+    } catch (error) {
+      setCaptcha({
+        ...initialCaptcha,
+        error: error.message || 'Unable to load CAPTCHA.',
+      });
+    }
+  }, []);
+
+  useEffect(() => {
+    if (shouldShowCaptcha) {
+      const timer = window.setTimeout(() => {
+        loadCaptcha();
+      }, 0);
+
+      return () => window.clearTimeout(timer);
     }
 
-    if (result.autoLoggedIn === false) {
-      setCustomerError('');
-      setCustomerMessage(result.message || 'Account created successfully. Please log in with your new account.');
-      setView('customer');
-      return;
+    return undefined;
+  }, [loadCaptcha, shouldShowCaptcha]);
+
+  useEffect(() => {
+    if (resendCooldown <= 0) {
+      return undefined;
     }
 
-    if (!result.needsVerification) {
-      const welcomeMsg = `Welcome to V&G website ${result.username || regUsername}`;
-      navigate('/', { state: { welcomeMessage: welcomeMsg } });
+    const timer = window.setInterval(() => {
+      setResendCooldown((current) => Math.max(0, current - 1));
+    }, 1000);
+
+    return () => window.clearInterval(timer);
+  }, [resendCooldown]);
+
+  useEffect(() => {
+    if (
+      !isPasswordRecovery
+      && !isAuthLoading
+      && session
+      && profile?.emailVerified
+    ) {
+      navigate(getDashboardPathForRole(profile.role), { replace: true });
     }
+  }, [isAuthLoading, isPasswordRecovery, navigate, profile, session]);
+
+  const showAlert = (message, type = 'error') => {
+    setAlert({ message, type });
   };
 
-  const handleAcceptTermsModal = async () => {
-    const shouldSubmit = submitAfterTermsAcceptance;
-    setIsTermsModalOpen(false);
-    setSubmitAfterTermsAcceptance(false);
-
-    if (shouldSubmit) {
-      await submitRegistration();
-    }
+  const clearAlert = () => {
+    setAlert({ type: '', message: '' });
   };
 
-  const handleAdminLogin = async (e) => {
-    e.preventDefault();
-    setAdminError('');
-    setAdminMessage('');
-    setIsSubmitting(true);
-    const result = await loginAdmin(adminUser, adminPass);
-    setIsSubmitting(false);
-
-    if (result.success) {
-      navigate('/admin/dashboard');
-      return;
-    }
-
-    setAdminError(result.message);
+  const switchView = (nextView) => {
+    clearAlert();
+    setView(nextView);
+    setResendCooldown(0);
   };
 
-  const handleVerifyAdminResetStep = async (e) => {
-    e.preventDefault();
-    setAdminResetError('');
-    setAdminResetMessage('');
+  const getCaptchaPayload = () => ({
+    captchaId: captcha.id,
+    captchaAnswer: captcha.answer,
+  });
 
-    if (!adminResetIdentifier.trim() || !adminResetCode.trim()) {
-      setAdminResetError('Enter your admin username or email and the 6-digit code.');
-      return;
-    }
+  const handleLogin = async (event) => {
+    event.preventDefault();
+    clearAlert();
 
-    if (!/^\d{6}$/.test(adminResetCode.trim())) {
-      setAdminResetError('Enter the 6-digit admin reset code.');
-      return;
-    }
-
-    setIsSubmitting(true);
-    const result = await verifyAdminResetCode({
-      identifier: adminResetIdentifier,
-      code: adminResetCode,
-    });
-    setIsSubmitting(false);
-
-    if (!result.success) {
-      setAdminResetError(result.message);
-      setIsAdminResetVerified(false);
-      return;
-    }
-
-    setAdminResetIdentifier(result.email || adminResetIdentifier.trim().toLowerCase());
-    setIsAdminResetVerified(true);
-    setAdminResetMessage('Admin verification successful. You can now create a new password.');
-  };
-
-  const handleAdminPasswordReset = async (e) => {
-    e.preventDefault();
-    setAdminResetError('');
-    setAdminResetMessage('');
-    setAdminError('');
-    setAdminMessage('');
-
-    if (!isAdminResetVerified) {
-      setAdminResetError('Verify the 6-digit admin code first.');
-      return;
-    }
-
-    if (!adminResetPassword.trim() || !adminResetConfirmPassword.trim()) {
-      setAdminResetError('Please fill in all password fields.');
-      return;
-    }
-
-    if (adminResetPassword.length < 6) {
-      setAdminResetError('Password must be at least 6 characters.');
-      return;
-    }
-
-    if (adminResetPassword !== adminResetConfirmPassword) {
-      setAdminResetError('Passwords do not match.');
+    if (!loginIdentifier.trim() || !loginPassword.trim()) {
+      showAlert('Enter your email or username and password.');
       return;
     }
 
     setIsSubmitting(true);
-    const result = await resetAdminPasswordWithCode({
-      identifier: adminResetIdentifier,
-      code: adminResetCode,
-      password: adminResetPassword,
-    });
-    setIsSubmitting(false);
-
-    if (!result.success) {
-      setAdminResetError(result.message);
-      return;
-    }
-
-    const resolvedEmail = result.email || adminResetIdentifier.trim().toLowerCase();
-    setAdminUser(resolvedEmail);
-    setAdminPass('');
-    resetAdminResetFlow();
-    setAdminMessage(`Password updated for ${resolvedEmail}. Sign in with the new password.`);
-    setView('admin');
-  };
-
-  const handleCustomerLogin = async (e) => {
-    e.preventDefault();
-    setCustomerError('');
-    setCustomerMessage('');
-
-    if (!customerUsername.trim() || !customerPassword.trim()) {
-      setCustomerError('Please fill in all fields');
-      return;
-    }
-
-    if (customerPassword.length < 6) {
-      setCustomerError('Password must be at least 6 characters');
-      return;
-    }
-
-    setIsSubmitting(true);
-    const result = await loginCustomer(customerUsername, customerPassword, {
-      rememberMe: rememberCustomer,
+    const result = await loginUser(loginIdentifier, loginPassword, {
+      rememberMe,
+      captchaRequired: false,
     });
     setIsSubmitting(false);
 
     if (result.success) {
-      navigate('/');
+      navigate(result.redirectTo || '/', {
+        state: { welcomeMessage: `Welcome back, ${loginIdentifier.trim()}` },
+      });
       return;
     }
 
     if (result.requiresVerification && result.email) {
-      setPendingVerification({
-        email: result.email,
-        username: '',
-      });
-      setVerificationCode('');
-      setVerifyMessage(result.message);
-      setVerifyError('');
+      setPendingVerification({ email: result.email, username: loginIdentifier.trim() });
+      setResendCooldown(0);
+      clearAlert();
       setView('verify');
       return;
     }
 
-    setCustomerError(result.message);
+    showAlert(result.message || 'Unable to log in.');
   };
 
-  const handleRegister = async (e) => {
-    e.preventDefault();
-    setRegError('');
+  const submitSignup = async (acceptedTermsOverride = hasAcceptedTerms) => {
+    const acceptedTermsAt = new Date().toISOString();
+    setIsSubmitting(true);
+    const result = await registerCustomer({
+      username: signupUsername,
+      email: signupEmail,
+      password: signupPassword,
+      acceptedTerms: acceptedTermsOverride,
+      acceptedTermsAt,
+      termsVersion: TERMS_VERSION,
+      ...getCaptchaPayload(),
+    });
+    setIsSubmitting(false);
 
-    if (!regUsername.trim() || !regEmail.trim() || !regPassword.trim() || !regConfirmPassword.trim()) {
-      setRegError('Please fill in all fields');
+    if (!result.success) {
+      showAlert(result.message || 'Unable to create the account.');
+      loadCaptcha();
       return;
     }
 
-    if (regPassword !== regConfirmPassword) {
-      setRegError('Passwords do not match');
+    if (!result.needsVerification) {
+      setLoginIdentifier(result.email || signupEmail.trim().toLowerCase());
+      setSignupUsername('');
+      setSignupEmail('');
+      setSignupPassword('');
+      setSignupConfirmPassword('');
+      setHasAcceptedTerms(false);
+      setView('login');
+      showAlert(result.message || 'Account created. You can log in now.', 'success');
+      loadCaptcha();
       return;
     }
 
-    if (regPassword.length < 6) {
-      setRegError('Password must be at least 6 characters');
+    setPendingVerification({
+      email: result.email || signupEmail.trim().toLowerCase(),
+      username: result.username || signupUsername.trim().toLowerCase(),
+    });
+    setResendCooldown(result.resendCooldownSeconds || 35);
+    setSignupUsername('');
+    setSignupEmail('');
+    setSignupPassword('');
+    setSignupConfirmPassword('');
+    setHasAcceptedTerms(false);
+    clearAlert();
+    setView('verify');
+  };
+
+  const handleSignup = async (event) => {
+    event.preventDefault();
+    clearAlert();
+
+    if (!signupUsername.trim() || !signupEmail.trim() || !signupPassword.trim() || !signupConfirmPassword.trim()) {
+      showAlert('Fill in all signup fields.');
+      return;
+    }
+
+    if (signupPassword !== signupConfirmPassword) {
+      showAlert('Passwords do not match.');
+      return;
+    }
+
+    if (!signupPasswordValidation.valid) {
+      showAlert(signupPasswordValidation.message);
+      return;
+    }
+
+    if (!captcha.answer.trim()) {
+      showAlert('Complete the CAPTCHA before signing up.');
       return;
     }
 
     if (!hasAcceptedTerms) {
-      openTermsModal(true);
+      setSubmitAfterTermsAcceptance(true);
+      setIsTermsModalOpen(true);
       return;
     }
 
-    await submitRegistration();
+    await submitSignup();
   };
 
-  const handleVerifySignup = async (e) => {
-    e.preventDefault();
-    setVerifyError('');
+  const handleAcceptTerms = async () => {
+    const shouldSubmit = submitAfterTermsAcceptance;
+    setIsTermsModalOpen(false);
+    setSubmitAfterTermsAcceptance(false);
+    setHasAcceptedTerms(true);
 
-    if (!pendingVerification.email.trim()) {
-      setVerifyError('Missing email address for verification.');
-      return;
+    if (shouldSubmit) {
+      await submitSignup(true);
     }
+  };
 
-    if (!/^\d{6}$/.test(verificationCode.trim())) {
-      setVerifyError('Please enter the 6-digit code from your email.');
-      return;
-    }
-
+  const handleResendSignupLink = async () => {
+    clearAlert();
     setIsSubmitting(true);
-    const result = await verifyCustomerSignupCode(pendingVerification.email, verificationCode);
+    const result = await resendCustomerSignupLink(pendingVerification.email);
     setIsSubmitting(false);
 
     if (!result.success) {
-      setVerifyError(result.message);
+      setResendCooldown(result.cooldownSeconds ?? resendCooldown);
+      showAlert(result.message || 'Unable to resend the verification link.');
       return;
     }
 
-    const welcomeName = pendingVerification.username || pendingVerification.email;
-    setVerificationCode('');
-    navigate('/', {
-      state: {
-        welcomeMessage: `Welcome to V&G website ${welcomeName}`,
-      },
-    });
+    setResendCooldown(result.resendCooldownSeconds || 35);
   };
 
-  const handleResendSignupCode = async () => {
-    setVerifyError('');
-    setVerifyMessage('');
-
-    if (!pendingVerification.email.trim()) {
-      setVerifyError('Enter your email address first.');
-      return;
-    }
-
-    setIsSubmitting(true);
-    const result = await resendCustomerSignupCode(pendingVerification.email);
-    setIsSubmitting(false);
-
-    if (!result.success) {
-      setVerifyError(result.message);
-      return;
-    }
-
-    setVerifyMessage(`A new 6-digit code was sent to ${pendingVerification.email}.`);
-  };
-
-  const handleForgotPassword = async (e) => {
-    e?.preventDefault();
-    setResetError('');
-    setForgotMessage('');
-    setForgotMessageType('');
+  const handleForgotPassword = async (event) => {
+    event.preventDefault();
+    clearAlert();
 
     if (!forgotIdentifier.trim()) {
-      setForgotMessage('Enter your username or email first.');
-      setForgotMessageType('error');
+      showAlert('Enter your email or username first.');
       return;
     }
 
     setIsSubmitting(true);
-    const result = await requestPasswordReset(forgotIdentifier);
+    const result = await requestPasswordReset(forgotIdentifier, {
+      captchaRequired: false,
+    });
     setIsSubmitting(false);
 
     if (!result.success) {
-      setForgotMessage(result.message);
-      setForgotMessageType('error');
+      showAlert(result.message || 'Unable to send the reset email.');
       return;
     }
 
     setPendingRecoveryEmail(result.email || forgotIdentifier.trim().toLowerCase());
-    setRecoveryCode('');
-    setForgotStep('verify');
-    setForgotMessage(
-      isRecoveryCodeMode
-        ? `We sent a 6-digit reset code to ${result.email || forgotIdentifier.trim()}.`
-        : `We sent a password reset email to ${result.email || forgotIdentifier.trim()}. Open the link in that email to continue.`
-    );
-    setForgotMessageType('success');
+    if (isRecoveryCodeMode) {
+      setForgotStep('verify');
+      showAlert(`We sent a 6-digit reset code to ${result.email}.`, 'success');
+    } else {
+      showAlert(`Password reset instructions were sent to ${result.email}.`, 'success');
+    }
   };
 
-  const handleResendRecoveryCode = async () => {
-    setResetError('');
-    setForgotMessage('');
-    setForgotMessageType('');
+  const handleVerifyRecovery = async (event) => {
+    event.preventDefault();
+    clearAlert();
 
-    if (!pendingRecoveryEmail.trim()) {
-      setForgotMessage('Enter your username or email first.');
-      setForgotMessageType('error');
+    if (!/^\d{6}$/.test(recoveryCode.trim())) {
+      showAlert('Enter the 6-digit reset code.');
       return;
     }
 
     setIsSubmitting(true);
-    const result = await requestPasswordReset(pendingRecoveryEmail);
+    const result = await verifyPasswordRecoveryCode(pendingRecoveryEmail, recoveryCode);
     setIsSubmitting(false);
 
     if (!result.success) {
-      setForgotMessage(result.message);
-      setForgotMessageType('error');
+      showAlert(result.message || 'Unable to verify the reset code.');
       return;
     }
 
-    setForgotMessage(
-      isRecoveryCodeMode
-        ? `A new 6-digit reset code was sent to ${result.email || pendingRecoveryEmail}.`
-        : `A new password reset email was sent to ${result.email || pendingRecoveryEmail}. Open the link in that email to continue.`
-    );
-    setForgotMessageType('success');
+    setView('reset');
+    showAlert('Reset code verified. Create your new password.', 'success');
   };
 
-  const handleVerifyRecoveryCode = async (e) => {
-    e.preventDefault();
-    setResetError('');
-    setForgotMessage('');
-    setForgotMessageType('');
+  const handleResetPassword = async (event) => {
+    event.preventDefault();
+    clearAlert();
 
-    if (!pendingRecoveryEmail.trim()) {
-      setResetError('Missing email address for password recovery.');
-      return;
-    }
-
-    if (!/^\d{6}$/.test(recoveryCode.trim())) {
-      setResetError('Please enter the 6-digit recovery code from your email.');
-      return;
-    }
-
-    setIsSubmitting(true);
-    const verifyResult = await verifyPasswordRecoveryCode(pendingRecoveryEmail, recoveryCode);
-    setIsSubmitting(false);
-
-    if (!verifyResult.success) {
-      setResetError(verifyResult.message);
-    }
-  };
-
-  const handleResetPassword = async (e) => {
-    e.preventDefault();
-    setResetError('');
-
-    if (!resetPassword.trim() || !resetConfirmPassword.trim()) {
-      setResetError('Please fill in all fields');
-      return;
-    }
-
-    if (resetPassword.length < 6) {
-      setResetError('Password must be at least 6 characters');
+    if (!resetPasswordValidation.valid) {
+      showAlert(resetPasswordValidation.message);
       return;
     }
 
     if (resetPassword !== resetConfirmPassword) {
-      setResetError('Passwords do not match');
+      showAlert('Passwords do not match.');
       return;
     }
 
@@ -766,804 +458,421 @@ const Login = () => {
     setIsSubmitting(false);
 
     if (!result.success) {
-      setResetError(result.message);
+      showAlert(result.message || 'Unable to update the password.');
       return;
     }
 
     setResetPassword('');
     setResetConfirmPassword('');
-    resetForgotPasswordFlow();
-    setCustomerMessage('Password updated. Please log in with your new password.');
-    setView('customer');
+    setView('login');
+    showAlert('Password updated. Please log in with your new password.', 'success');
   };
 
-  if (activeView === 'admin') {
-    return renderWithAuthLoading(
-      <div style={panelStyle}>
-        <h2 style={{ fontSize: '1.5rem', marginBottom: '2rem', color: '#0f172a' }}>Admin/Staff Login</h2>
+  const renderCaptcha = () => (
+    <>
+      <CaptchaField
+        captcha={captcha}
+        onAnswerChange={(answer) => setCaptcha((current) => ({ ...current, answer }))}
+        onRefresh={loadCaptcha}
+        disabled={isSubmitting}
+      />
+      {captcha.error ? <div className="auth-helper auth-helper-error">{captcha.error}</div> : null}
+    </>
+  );
 
-        <form style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }} onSubmit={handleAdminLogin}>
-          {adminError && <div style={{ color: '#ef4444', fontSize: '0.85rem', fontWeight: 600 }}>{adminError}</div>}
-          {adminMessage && <div style={{ color: '#15803d', fontSize: '0.85rem', fontWeight: 600 }}>{adminMessage}</div>}
-
-          <div>
-            <label style={fieldLabelStyle}>Username or Email</label>
-            <div style={{ position: 'relative' }}>
-              <Mail size={18} style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }} />
-              <input
-                type="text"
-                placeholder="Enter Username or Email"
-                className="text-input"
-                style={iconPasswordFieldStyle}
-                value={adminUser}
-                onChange={(e) => setAdminUser(e.target.value)}
-                required
-              />
-            </div>
-          </div>
-
-          <div>
-            <label style={fieldLabelStyle}>Password</label>
-            <div style={{ position: 'relative' }}>
-              <Lock size={18} style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }} />
-              <input
-                type={showAdminPassword ? 'text' : 'password'}
-                placeholder="Enter password"
-                className="text-input"
-                style={iconPasswordFieldStyle}
-                value={adminPass}
-                onChange={(e) => setAdminPass(e.target.value)}
-                required
-              />
-              <button
-                type="button"
-                onClick={() => setShowAdminPassword((value) => !value)}
-                style={passwordToggleStyle}
-              >
-                {showAdminPassword ? <EyeOff size={18} /> : <Eye size={18} />}
-              </button>
-            </div>
-          </div>
-
-          <button type="submit" className="btn-primary" style={{ ...primaryButtonStyle, marginTop: '1rem' }} disabled={isSubmitting}>
-            {isSubmitting ? 'Logging in...' : 'Login'}
-          </button>
-
-          <div style={{ textAlign: 'center', marginTop: '0.25rem' }}>
-            <button
-              type="button"
-              onClick={openAdminPasswordHelp}
-              style={{ ...secondaryTextButtonStyle, color: '#475569', fontSize: '0.95rem' }}
-            >
-              Forgot Password?
-            </button>
-          </div>
-
-          <div style={{ marginTop: '1.5rem' }}>
-            <button
-              type="button"
-              onClick={() => setView('selection')}
-              style={{ ...secondaryTextButtonStyle, color: '#475569', fontSize: '0.9rem' }}
-            >
-              Back
-            </button>
-          </div>
-        </form>
-      </div>
-    );
-  }
-
-  if (activeView === 'admin-help') {
-    return (
-      <div style={panelStyle}>
-        <h2 style={{ fontSize: '1.5rem', marginBottom: '1rem', color: '#0f172a' }}>Admin Password Reset</h2>
-        
-        {!isAdminResetVerified ? (
-          <form
-            style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem', marginTop: '1.5rem' }}
-            onSubmit={handleVerifyAdminResetStep}
-          >
-            {adminResetError && <div style={{ color: '#ef4444', fontSize: '0.85rem', fontWeight: 600 }}>{adminResetError}</div>}
-            {adminResetMessage && <div style={{ color: '#15803d', fontSize: '0.85rem', fontWeight: 600 }}>{adminResetMessage}</div>}
-
-            <div>
-              <label style={fieldLabelStyle}>Admin Valid Email</label>
-              <div style={{ position: 'relative' }}>
-                <Mail size={18} style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }} />
-                <input
-                  type="text"
-                  placeholder="Enter your admin email"
-                  className="text-input"
-                  style={iconPasswordFieldStyle}
-                  value={adminResetIdentifier}
-                  onChange={(e) => setAdminResetIdentifier(e.target.value)}
-                  required
-                />
-              </div>
-            </div>
-
-            <div>
-              <label style={fieldLabelStyle}>Secure 6-Digit Admin Code</label>
-              <input
-                type="text"
-                inputMode="numeric"
-                maxLength={6}
-                placeholder="123456"
-                className="text-input"
-                style={{ ...textInputStyle, letterSpacing: '0.35em', textAlign: 'center', fontSize: '1.05rem' }}
-                value={adminResetCode}
-                onChange={(e) => setAdminResetCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
-                required
-              />
-            </div>
-
-            <button type="submit" className="btn-primary" style={primaryButtonStyle}>
-              {isSubmitting ? 'Verifying Code...' : 'Verify Admin Code'}
-            </button>
-          </form>
-        ) : (
-          <form
-            style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem', marginTop: '1.5rem' }}
-            onSubmit={handleAdminPasswordReset}
-          >
-            {adminResetError && <div style={{ color: '#ef4444', fontSize: '0.85rem', fontWeight: 600 }}>{adminResetError}</div>}
-            {adminResetMessage && <div style={{ color: '#15803d', fontSize: '0.85rem', fontWeight: 600 }}>{adminResetMessage}</div>}
-
-            <div>
-              <label style={fieldLabelStyle}>Verified Admin Account</label>
-              <input
-                type="text"
-                className="text-input"
-                style={textInputStyle}
-                value={adminResetIdentifier}
-                readOnly
-              />
-            </div>
-
-            <div>
-              <label style={fieldLabelStyle}>New Password</label>
-              <div style={{ position: 'relative' }}>
-                <input
-                  type={showAdminResetPassword ? 'text' : 'password'}
-                  className="text-input"
-                  placeholder="Enter new password"
-                  style={passwordFieldStyle}
-                  value={adminResetPassword}
-                  onChange={(e) => setAdminResetPassword(e.target.value)}
-                  required
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowAdminResetPassword((value) => !value)}
-                  style={passwordToggleStyle}
-                >
-                  {showAdminResetPassword ? <EyeOff size={18} /> : <Eye size={18} />}
-                </button>
-              </div>
-            </div>
-
-            <div>
-              <label style={fieldLabelStyle}>Confirm New Password</label>
-              <div style={{ position: 'relative' }}>
-                <input
-                  type={showAdminResetConfirmPassword ? 'text' : 'password'}
-                  className="text-input"
-                  placeholder="Confirm new password"
-                  style={passwordFieldStyle}
-                  value={adminResetConfirmPassword}
-                  onChange={(e) => setAdminResetConfirmPassword(e.target.value)}
-                  required
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowAdminResetConfirmPassword((value) => !value)}
-                  style={passwordToggleStyle}
-                >
-                  {showAdminResetConfirmPassword ? <EyeOff size={18} /> : <Eye size={18} />}
-                </button>
-              </div>
-            </div>
-
-            <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
-              <button type="submit" className="btn-primary" style={{ ...primaryButtonStyle, marginTop: 0, flex: 1 }}>
-                {isSubmitting ? 'Resetting Password...' : 'Reset Password'}
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setIsAdminResetVerified(false);
-                  setAdminResetPassword('');
-                  setAdminResetConfirmPassword('');
-                  setAdminResetError('');
-                  setAdminResetMessage('');
-                }}
-                style={{ ...secondaryTextButtonStyle, color: '#475569', fontSize: '0.95rem', padding: '0.75rem 0.25rem' }}
-              >
-                Change Code
-              </button>
-            </div>
-          </form>
-        )}
-
-        <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', marginTop: '1.5rem' }}>
-          <button
-            type="button"
-            className="btn-primary"
-            style={{ ...primaryButtonStyle, marginTop: 0, flex: 1 }}
-            onClick={() => {
-              resetAdminResetFlow();
-              setView('admin');
-            }}
-          >
-            Back to Admin Login
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              resetAdminResetFlow();
-              setView('selection');
-            }}
-            style={{
-              ...secondaryTextButtonStyle,
-              color: '#475569',
-              fontSize: '0.95rem',
-              padding: '0.75rem 1rem',
-            }}
-          >
-            Back
-          </button>
+  const renderLogin = () => (
+    <form className="auth-form" onSubmit={handleLogin}>
+      <div className="auth-field">
+        <label htmlFor="loginIdentifier">Email or Username</label>
+        <div className="auth-input-shell">
+          <Mail size={18} />
+          <input
+            id="loginIdentifier"
+            type="text"
+            value={loginIdentifier}
+            onChange={(event) => setLoginIdentifier(event.target.value)}
+            placeholder="you@example.com"
+            autoComplete="username"
+            autoCapitalize="none"
+            spellCheck={false}
+            required
+          />
         </div>
       </div>
-    );
-  }
 
-  if (activeView === 'register') {
-    return renderWithAuthLoading(
-      <>
-        <div style={panelStyle}>
-          <h2 style={{ fontSize: '1.5rem', marginBottom: '2rem', color: '#0f172a' }}>Create Account</h2>
+      <PasswordField
+        id="loginPassword"
+        label="Password"
+        value={loginPassword}
+        onChange={(event) => setLoginPassword(event.target.value)}
+        showPassword={showLoginPassword}
+        onToggle={() => setShowLoginPassword((current) => !current)}
+      />
 
-          <form style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }} onSubmit={handleRegister}>
-            {regError && <div style={{ color: '#ef4444', fontSize: '0.85rem', fontWeight: 600 }}>{regError}</div>}
+      <div className="auth-row">
+        <label className="auth-checkbox">
+          <input
+            type="checkbox"
+            checked={rememberMe}
+            onChange={(event) => setRememberMe(event.target.checked)}
+          />
+          <span>Remember me</span>
+        </label>
+        <button type="button" className="auth-link-button" onClick={() => switchView('forgot')}>
+          Forgot password?
+        </button>
+      </div>
 
-            <div>
-              <label style={fieldLabelStyle}>Username</label>
-              <input
-                type="text"
-                placeholder="Choose a username"
-                className="text-input"
-                style={textInputStyle}
-                value={regUsername}
-                onChange={(e) => setRegUsername(e.target.value)}
-              />
-            </div>
+      <button type="submit" className="auth-primary-button" disabled={isSubmitting}>
+        {isSubmitting ? 'Logging in...' : 'Login'}
+      </button>
+    </form>
+  );
 
-            <div>
-              <label style={fieldLabelStyle}>Email Address</label>
-              <input
-                type="email"
-                placeholder="you@example.com"
-                className="text-input"
-                style={textInputStyle}
-                value={regEmail}
-                onChange={(e) => setRegEmail(e.target.value)}
-              />
-            </div>
-
-            <div>
-              <label style={fieldLabelStyle}>Password</label>
-              <div style={{ position: 'relative' }}>
-                <input
-                  type={showRegisterPassword ? 'text' : 'password'}
-                  className="text-input"
-                  placeholder="Enter password"
-                  style={passwordFieldStyle}
-                  value={regPassword}
-                  onChange={(e) => setRegPassword(e.target.value)}
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowRegisterPassword((value) => !value)}
-                  style={passwordToggleStyle}
-                >
-                  {showRegisterPassword ? <EyeOff size={18} /> : <Eye size={18} />}
-                </button>
-              </div>
-            </div>
-
-            <div>
-              <label style={fieldLabelStyle}>Confirm Password</label>
-              <div style={{ position: 'relative' }}>
-                <input
-                  type={showRegisterConfirmPassword ? 'text' : 'password'}
-                  className="text-input"
-                  placeholder="Confirm password"
-                  style={passwordFieldStyle}
-                  value={regConfirmPassword}
-                  onChange={(e) => setRegConfirmPassword(e.target.value)}
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowRegisterConfirmPassword((value) => !value)}
-                  style={passwordToggleStyle}
-                >
-                  {showRegisterConfirmPassword ? <EyeOff size={18} /> : <Eye size={18} />}
-                </button>
-              </div>
-            </div>
-
-            <div style={termsNoticeStyle}>
-              <div>
-                <div style={{ color: '#9a3412', fontSize: '0.98rem', fontWeight: 700 }}>Terms and Conditions</div>
-                <div style={{ color: '#7c2d12', fontSize: '0.82rem', marginTop: '0.2rem', lineHeight: 1.5 }}>
-                  Before we create the account, an alert box will show the full Terms and Conditions for review.
-                </div>
-              </div>
-
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', flexWrap: 'wrap' }}>
-                <button
-                  type="button"
-                  onClick={() => openTermsModal(false)}
-                  style={{ ...secondaryTextButtonStyle, color: '#c2410c', fontSize: '0.9rem' }}
-                >
-                  View Terms and Conditions
-                </button>
-                <div style={{ color: hasAcceptedTerms ? '#15803d' : '#9a3412', fontSize: '0.82rem', fontWeight: 700 }}>
-                  {hasAcceptedTerms ? 'Terms accepted for this signup' : 'Terms not accepted yet'}
-                </div>
-              </div>
-            </div>
-
-            <button
-              type="submit"
-              className="btn-primary"
-              style={primaryButtonStyle}
-              disabled={isSubmitting}
-            >
-              {isSubmitting ? 'Creating Account...' : 'Create Account'}
-            </button>
-
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '1rem', flexWrap: 'wrap' }}>
-              <button
-                type="button"
-                onClick={() => setView('customer')}
-                style={{ ...secondaryTextButtonStyle, color: '#d97706', fontSize: '0.9rem' }}
-              >
-                Already have an account? Login
-              </button>
-              <button
-                type="button"
-                onClick={() => setView('selection')}
-                style={{ ...secondaryTextButtonStyle, color: '#475569', fontSize: '0.9rem' }}
-              >
-                Back
-              </button>
-            </div>
-          </form>
-        </div>
-
-        {isTermsModalOpen && (
-          <div style={termsModalOverlayStyle}>
-            <div style={termsModalCardStyle} role="dialog" aria-modal="true" aria-labelledby="terms-modal-title">
-              <div>
-                <h3 id="terms-modal-title" style={{ margin: 0, color: '#0f172a', fontSize: '1.2rem' }}>
-                  Terms and Conditions
-                </h3>
-                <p style={{ margin: '0.45rem 0 0', color: '#64748b', fontSize: '0.9rem', lineHeight: 1.55 }}>
-                  Please read the full Terms and Conditions before creating your account. Last updated {TERMS_LAST_UPDATED_LABEL}.
-                </p>
-              </div>
-
-              <div style={{ ...termsContainerStyle, padding: '1rem 1rem 0.75rem' }}>
-                <div style={termsScrollStyle}>
-                  {TERMS_SECTIONS.map((section) => (
-                    <div key={section.title}>
-                      <p style={termsSectionTitleStyle}>{section.title}</p>
-                      {section.paragraphs.map((paragraph) => (
-                        <p key={paragraph} style={termsParagraphStyle}>{paragraph}</p>
-                      ))}
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <label style={checkboxLabelStyle}>
-                <input
-                  type="checkbox"
-                  checked={hasAcceptedTerms}
-                  onChange={(e) => setHasAcceptedTerms(e.target.checked)}
-                  style={{ marginTop: '0.2rem', accentColor: '#ea580c' }}
-                />
-                <span>{TERMS_ACCEPTANCE_LABEL}</span>
-              </label>
-
-              <div style={termsModalFooterStyle}>
-                <button
-                  type="button"
-                  onClick={closeTermsModal}
-                  style={{
-                    border: '1px solid #cbd5e1',
-                    background: '#ffffff',
-                    color: '#334155',
-                    padding: '0.75rem 1rem',
-                    borderRadius: '9999px',
-                    fontWeight: 600,
-                    cursor: 'pointer',
-                  }}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  onClick={handleAcceptTermsModal}
-                  className="btn-primary"
-                  style={{
-                    ...primaryButtonStyle,
-                    width: 'auto',
-                    marginTop: 0,
-                    opacity: hasAcceptedTerms ? 1 : 0.65,
-                    cursor: hasAcceptedTerms ? 'pointer' : 'not-allowed',
-                  }}
-                  disabled={!hasAcceptedTerms || isSubmitting}
-                >
-                  {submitAfterTermsAcceptance ? 'Agree and Create Account' : 'Agree and Continue'}
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-      </>
-    );
-  }
-
-  if (activeView === 'verify') {
-    return (
-      <div style={panelStyle}>
-        <h2 style={{ fontSize: '1.5rem', marginBottom: '1rem', color: '#0f172a' }}>Verify Your Account</h2>
-        <p style={{ color: '#64748b', marginBottom: '2rem', fontSize: '0.95rem' }}>
-          Enter the 6-digit code sent to your email to activate your customer account.
-        </p>
-
-        <form style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }} onSubmit={handleVerifySignup}>
-          {verifyError && <div style={{ color: '#ef4444', fontSize: '0.85rem', fontWeight: 600 }}>{verifyError}</div>}
-          {verifyMessage && <div style={{ color: '#15803d', fontSize: '0.85rem', fontWeight: 600 }}>{verifyMessage}</div>}
-
-          <div>
-            <label style={fieldLabelStyle}>Email Address</label>
+  const renderSignup = () => (
+    <>
+      <form className="auth-form" onSubmit={handleSignup} noValidate>
+        <div className="auth-field">
+          <label htmlFor="signupUsername">Username</label>
+          <div className="auth-input-shell">
+            <UserPlus size={18} />
             <input
+              id="signupUsername"
+              type="text"
+              value={signupUsername}
+              onChange={(event) => setSignupUsername(event.target.value)}
+              placeholder="your_username"
+              autoComplete="username"
+              autoCapitalize="none"
+              spellCheck={false}
+              required
+            />
+          </div>
+        </div>
+
+        <div className="auth-field">
+          <label htmlFor="signupEmail">Email Address</label>
+          <div className="auth-input-shell">
+            <Mail size={18} />
+            <input
+              id="signupEmail"
               type="email"
-              className="text-input"
-              style={textInputStyle}
-              value={pendingVerification.email}
-              onChange={(e) => setPendingVerification((current) => ({ ...current, email: e.target.value }))}
+              value={signupEmail}
+              onChange={(event) => setSignupEmail(event.target.value)}
+              placeholder="you@gmail.com"
+              autoComplete="email"
+              autoCapitalize="none"
+              spellCheck={false}
               required
             />
           </div>
+        </div>
 
-          <div>
-            <label style={fieldLabelStyle}>6-Digit Code</label>
+        <PasswordField
+          id="signupPassword"
+          label="Password"
+          value={signupPassword}
+          onChange={(event) => setSignupPassword(event.target.value)}
+          showPassword={showSignupPassword}
+          onToggle={() => setShowSignupPassword((current) => !current)}
+          autoComplete="new-password"
+        />
+        <PasswordRequirements />
+
+        <PasswordField
+          id="signupConfirmPassword"
+          label="Confirm Password"
+          value={signupConfirmPassword}
+          onChange={(event) => setSignupConfirmPassword(event.target.value)}
+          showPassword={showSignupConfirmPassword}
+          onToggle={() => setShowSignupConfirmPassword((current) => !current)}
+          placeholder="Confirm password"
+          autoComplete="new-password"
+        />
+
+        {renderCaptcha()}
+
+        <div className="auth-terms-row">
+          <label className="auth-checkbox">
             <input
-              type="text"
-              inputMode="numeric"
-              maxLength={6}
-              placeholder="123456"
-              className="text-input"
-              style={{ ...textInputStyle, letterSpacing: '0.35em', textAlign: 'center', fontSize: '1.05rem' }}
-              value={verificationCode}
-              onChange={(e) => setVerificationCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
-              required
+              type="checkbox"
+              checked={hasAcceptedTerms}
+              onChange={(event) => setHasAcceptedTerms(event.target.checked)}
             />
-          </div>
-
-          <button type="submit" className="btn-primary" style={primaryButtonStyle}>
-            {isSubmitting ? 'Verifying...' : 'Verify Account'}
+            <span>I agree to the Terms and Conditions.</span>
+          </label>
+          <button type="button" className="auth-link-button" onClick={() => setIsTermsModalOpen(true)}>
+            View Terms
           </button>
+        </div>
 
-          <button
-            type="button"
-            onClick={handleResendSignupCode}
-            style={{ ...secondaryTextButtonStyle, color: '#d97706', fontSize: '0.95rem', alignSelf: 'center' }}
-          >
-            Resend Code
-          </button>
-
-          <div style={{ textAlign: 'center', marginTop: '0.75rem' }}>
-            <button
-              type="button"
-              onClick={() => setView('customer')}
-              style={{ ...secondaryTextButtonStyle, color: '#475569', fontSize: '0.9rem' }}
-            >
-              Back to Login
-            </button>
-          </div>
-        </form>
-      </div>
-    );
-  }
-
-  if (activeView === 'customer') {
-    return renderWithAuthLoading(
-      <div style={panelStyle}>
-        <h2 style={{ fontSize: '1.5rem', marginBottom: '2rem', color: '#0f172a' }}>Customer Login</h2>
-
-        <form style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }} onSubmit={handleCustomerLogin}>
-          {customerError && <div style={{ color: '#ef4444', fontSize: '0.85rem', fontWeight: 600 }}>{customerError}</div>}
-          {customerMessage && <div style={{ color: '#15803d', fontSize: '0.85rem', fontWeight: 600 }}>{customerMessage}</div>}
-
-          <div>
-            <label style={fieldLabelStyle}>Username or Email</label>
-            <input
-              type="text"
-              placeholder="Enter your username or email"
-              className="text-input"
-              style={textInputStyle}
-              value={customerUsername}
-              onChange={(e) => setCustomerUsername(e.target.value)}
-              required
-            />
-          </div>
-
-          <div>
-            <label style={fieldLabelStyle}>Password</label>
-            <div style={{ position: 'relative' }}>
-              <input
-                type={showCustomerPassword ? 'text' : 'password'}
-                className="text-input"
-                placeholder="Enter your password"
-                style={passwordFieldStyle}
-                value={customerPassword}
-                onChange={(e) => setCustomerPassword(e.target.value)}
-                required
-              />
-              <button
-                type="button"
-                onClick={() => setShowCustomerPassword((value) => !value)}
-                style={passwordToggleStyle}
-              >
-                {showCustomerPassword ? <EyeOff size={18} /> : <Eye size={18} />}
-              </button>
-            </div>
-          </div>
-
-          <div
-            className="dark:bg-black/10"
-            style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', flexWrap: 'wrap' }}
-          >
-            <label
-              className="dark:text-white"
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '0.75rem',
-                color: '#475569',
-                fontSize: '0.95rem',
-                fontWeight: 600,
-                cursor: 'pointer',
-              }}
-            >
-              <input
-                className="h-5 w-5 rounded border-orange-200 accent-orange-500 transition-all duration-500 ease-in-out hover:scale-110 dark:border-white/20 dark:scale-100 dark:hover:scale-110 dark:checked:scale-100"
-                type="checkbox"
-                checked={rememberCustomer}
-                onChange={(e) => setRememberCustomer(e.target.checked)}
-                disabled={isSubmitting}
-              />
-              <span>Remember me</span>
-            </label>
-            <span style={{ color: '#94a3b8', fontSize: '0.8rem' }}>
-              Stay signed in on this device
-            </span>
-          </div>
-
-          <button type="submit" className="btn-primary" style={primaryButtonStyle} disabled={isSubmitting}>
-            {isSubmitting ? 'Logging in...' : 'Login'}
-          </button>
-
-          <div style={{ textAlign: 'center', marginTop: '0.5rem' }}>
-            <button
-              type="button"
-              onClick={openRegisterFlow}
-              style={{ ...secondaryTextButtonStyle, color: '#d97706', fontSize: '0.95rem' }}
-            >
-              Do not have an account? Create one
-            </button>
-          </div>
-
-          <div style={{ textAlign: 'center', marginTop: '0.25rem' }}>
-            <button
-              type="button"
-              onClick={() => {
-                resetForgotPasswordFlow();
-                setView('forgot');
-              }}
-              style={{ ...secondaryTextButtonStyle, color: '#475569', fontSize: '0.95rem' }}
-            >
-              Forgot password?
-            </button>
-          </div>
-
-          <div style={{ marginTop: '1.25rem' }}>
-            <button
-              type="button"
-              onClick={() => setView('selection')}
-              style={{ ...secondaryTextButtonStyle, color: '#475569', fontSize: '0.9rem' }}
-            >
-              Back
-            </button>
-          </div>
-        </form>
-      </div>
-    );
-  }
-
-  if (activeView === 'forgot') {
-    return (
-      <div style={panelStyle}>
-        <h2 style={{ fontSize: '1.5rem', marginBottom: '1.5rem', color: '#0f172a' }}>Forgot Password?</h2>
-
-        <form
-          style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}
-          onSubmit={
-            isRecoveryCodeMode
-              ? (forgotStep === 'verify' ? handleVerifyRecoveryCode : handleForgotPassword)
-              : handleForgotPassword
+        <button
+          type="submit"
+          className="auth-primary-button"
+          disabled={
+            isSubmitting
+            || captcha.isLoading
+            || !signupPasswordValidation.valid
+            || signupPassword !== signupConfirmPassword
           }
         >
-          {forgotMessage && (
-            <div style={{ color: forgotMessageType === 'success' ? '#15803d' : '#b91c1c', fontSize: '0.85rem', fontWeight: 600 }}>
-              {forgotMessage}
-            </div>
-          )}
-          {resetError && (
-            <div style={{ color: '#b91c1c', fontSize: '0.85rem', fontWeight: 600 }}>
-              {resetError}
-            </div>
-          )}
+          {isSubmitting ? 'Creating Account...' : 'Signup'}
+        </button>
+      </form>
 
-          <div>
-            <label style={fieldLabelStyle}>Use valid Email</label>
-            <input
-              type="text"
-              placeholder="Enter your valid email"
-              className="text-input"
-              style={textInputStyle}
-              value={forgotIdentifier}
-              onChange={(e) => setForgotIdentifier(e.target.value)}
-              required
-            />
-          </div>
-
-          {isRecoveryCodeMode && forgotStep === 'verify' && (
+      {isTermsModalOpen && (
+        <div className="auth-modal-overlay">
+          <div ref={termsDialogRef} tabIndex={-1} className="auth-modal-card" role="dialog" aria-modal="true" aria-labelledby="terms-title">
             <div>
-              <label style={fieldLabelStyle}>6-Digit Verification Code</label>
-              <input
-                type="text"
-                inputMode="numeric"
-                maxLength={6}
-                placeholder="123456"
-                className="text-input"
-                style={{ ...textInputStyle, letterSpacing: '0.35em', textAlign: 'center', fontSize: '1.05rem' }}
-                value={recoveryCode}
-                onChange={(e) => setRecoveryCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
-                required
-              />
+              <h3 id="terms-title">Terms and Conditions</h3>
+              <p>Last updated {TERMS_LAST_UPDATED_LABEL}</p>
             </div>
-          )}
 
-          <button type="button" className="btn-primary" style={primaryButtonStyle} onClick={handleForgotPassword}>
-            {isSubmitting ? 'Working...' : (isRecoveryCodeMode ? 'Send Reset Code' : 'Send Reset Email')}
-          </button>
+            <div className="auth-terms-scroll" tabIndex={0} role="region" aria-label="Terms and conditions text">
+              {TERMS_SECTIONS.map((section) => (
+                <section key={section.title}>
+                  <h4>{section.title}</h4>
+                  {section.paragraphs.map((paragraph) => (
+                    <p key={paragraph}>{paragraph}</p>
+                  ))}
+                </section>
+              ))}
+            </div>
 
-          {isRecoveryCodeMode && forgotStep === 'verify' && (
-            <button type="submit" className="btn-primary" style={primaryButtonStyle}>
-              {isSubmitting ? 'Verifying...' : 'Verify Reset Code'}
-            </button>
-          )}
+            <label className="auth-checkbox auth-modal-checkbox">
+              <input
+                type="checkbox"
+                checked={hasAcceptedTerms}
+                onChange={(event) => setHasAcceptedTerms(event.target.checked)}
+              />
+              <span>{TERMS_ACCEPTANCE_LABEL}</span>
+            </label>
 
-          {forgotStep === 'verify' && (
-            <button
-              type="button"
-              onClick={handleResendRecoveryCode}
-              style={{ ...secondaryTextButtonStyle, color: '#d97706', fontSize: '0.95rem', alignSelf: 'center' }}
-            >
-              Resend Code
-            </button>
-          )}
-
-          <div style={{ textAlign: 'center', marginTop: '1rem' }}>
-            <button
-              type="button"
-              onClick={() => {
-                resetForgotPasswordFlow();
-                setView('customer');
-              }}
-              style={{ ...secondaryTextButtonStyle, color: '#d97706', fontSize: '0.9rem' }}
-            >
-              Back to Login
-            </button>
+            <div className="auth-modal-actions">
+              <button
+                type="button"
+                className="auth-secondary-button"
+                onClick={() => {
+                  setIsTermsModalOpen(false);
+                  setSubmitAfterTermsAcceptance(false);
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="auth-primary-button compact"
+                onClick={handleAcceptTerms}
+                disabled={!hasAcceptedTerms || isSubmitting}
+              >
+                Agree and Continue
+              </button>
+            </div>
           </div>
-        </form>
-      </div>
-    );
-  }
+        </div>
+      )}
+    </>
+  );
 
-  if (activeView === 'reset') {
-    return (
-      <div style={panelStyle}>
-        <h2 style={{ fontSize: '1.5rem', marginBottom: '1rem', color: '#0f172a' }}>Set a New Password</h2>
-        <p style={{ color: '#64748b', marginBottom: '2rem', fontSize: '0.95rem' }}>
-          Your recovery session is active. Enter a new password to finish restoring your customer account.
+  const renderVerify = () => (
+    <div className="auth-verify-content">
+      <div className="auth-verify-illustration" aria-hidden="true">
+        <span className="auth-verify-spark auth-verify-spark-left" />
+        <span className="auth-verify-spark auth-verify-spark-right" />
+        <div className="auth-verify-cloud">
+          <div className="auth-verify-envelope">
+            <Mail size={66} strokeWidth={1.6} />
+            <span><Link2 size={24} strokeWidth={2.5} /></span>
+          </div>
+        </div>
+      </div>
+
+      <div className="auth-verify-intro">
+        <h1>{title}</h1>
+        <p>We’ve sent you a verification link to</p>
+        <strong>{pendingVerification.email || 'your email address'}</strong>
+        <p className="auth-verify-support">
+          Please check your inbox and click the verification link to confirm your account and continue.
         </p>
-
-        <form style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }} onSubmit={handleResetPassword}>
-          {resetError && <div style={{ color: '#ef4444', fontSize: '0.85rem', fontWeight: 600 }}>{resetError}</div>}
-
-          <div>
-            <label style={fieldLabelStyle}>New Password</label>
-            <div style={{ position: 'relative' }}>
-              <input
-                type={showResetPassword ? 'text' : 'password'}
-                className="text-input"
-                placeholder="Enter new password"
-                style={passwordFieldStyle}
-                value={resetPassword}
-                onChange={(e) => setResetPassword(e.target.value)}
-                required
-              />
-              <button
-                type="button"
-                onClick={() => setShowResetPassword((value) => !value)}
-                style={passwordToggleStyle}
-              >
-                {showResetPassword ? <EyeOff size={18} /> : <Eye size={18} />}
-              </button>
-            </div>
-          </div>
-
-          <div>
-            <label style={fieldLabelStyle}>Confirm New Password</label>
-            <div style={{ position: 'relative' }}>
-              <input
-                type={showResetConfirmPassword ? 'text' : 'password'}
-                className="text-input"
-                placeholder="Confirm new password"
-                style={passwordFieldStyle}
-                value={resetConfirmPassword}
-                onChange={(e) => setResetConfirmPassword(e.target.value)}
-                required
-              />
-              <button
-                type="button"
-                onClick={() => setShowResetConfirmPassword((value) => !value)}
-                style={passwordToggleStyle}
-              >
-                {showResetConfirmPassword ? <EyeOff size={18} /> : <Eye size={18} />}
-              </button>
-            </div>
-          </div>
-
-          <button type="submit" className="btn-primary" style={primaryButtonStyle}>
-            {isSubmitting ? 'Updating Password...' : 'Save New Password'}
-          </button>
-        </form>
       </div>
-    );
-  }
+
+      <div className="auth-verify-success" role="status">
+        <CheckCircle2 size={26} strokeWidth={2.5} />
+        <div>
+          <strong>Link sent successfully!</strong>
+          <p>Please check your inbox (and spam folder) for the verification link. Click the link to confirm your account and continue.</p>
+        </div>
+      </div>
+
+      <div className="auth-verify-resend-copy">
+        <span className="auth-verify-mail-badge" aria-hidden="true"><Mail size={21} /></span>
+        <div>
+          <h2>Didn’t receive the email?</h2>
+          <p>Make sure to check your spam or junk folder. You can also resend the link if needed.</p>
+        </div>
+      </div>
+
+      <button
+        type="button"
+        className="auth-primary-button auth-verify-resend-button"
+        onClick={handleResendSignupLink}
+        disabled={isSubmitting || resendCooldown > 0}
+      >
+        <RefreshCw size={17} className={isSubmitting ? 'auth-verify-spinning' : ''} />
+        {isSubmitting ? 'Sending Link…' : 'Resend Verification Link'}
+      </button>
+      <p className="auth-verify-countdown" aria-live="polite">
+        {resendCooldown > 0
+          ? `You can request a new link in ${resendCooldown}s.`
+          : 'You can request a new link now.'}
+      </p>
+      <button type="button" className="auth-verify-back-button" onClick={() => switchView('login')}>
+        Back to Sign In
+      </button>
+    </div>
+  );
+
+  const renderForgot = () => (
+    <form className="auth-form" onSubmit={forgotStep === 'verify' ? handleVerifyRecovery : handleForgotPassword}>
+      <div className="auth-field">
+        <label htmlFor="forgotIdentifier">Email or Username</label>
+        <div className="auth-input-shell">
+          <Mail size={18} />
+          <input
+            id="forgotIdentifier"
+            type="text"
+            value={forgotIdentifier}
+            onChange={(event) => setForgotIdentifier(event.target.value)}
+            placeholder="you@example.com"
+            autoComplete="username"
+            autoCapitalize="none"
+            spellCheck={false}
+            required
+          />
+        </div>
+      </div>
+
+      {isRecoveryCodeMode && forgotStep === 'verify' && (
+        <div className="auth-field">
+          <label htmlFor="recoveryCode">Reset Code</label>
+          <input
+            id="recoveryCode"
+            className="auth-code-input"
+            type="text"
+            inputMode="numeric"
+            autoComplete="one-time-code"
+            maxLength={6}
+            value={recoveryCode}
+            onChange={(event) => setRecoveryCode(event.target.value.replace(/\D/g, '').slice(0, 6))}
+            placeholder="123456"
+            required
+          />
+        </div>
+      )}
+
+      <button type="submit" className="auth-primary-button" disabled={isSubmitting}>
+        {isSubmitting
+          ? 'Working...'
+          : (forgotStep === 'verify'
+            ? 'Verify Reset Code'
+            : (isRecoveryCodeMode ? 'Send Reset Code' : 'Send Reset Email'))}
+      </button>
+      <button type="button" className="auth-link-button centered" onClick={() => switchView('login')}>
+        Back to Login
+      </button>
+    </form>
+  );
+
+  const renderReset = () => (
+    <form className="auth-form" onSubmit={handleResetPassword}>
+      <PasswordField
+        id="resetPassword"
+        label="New Password"
+        value={resetPassword}
+        onChange={(event) => setResetPassword(event.target.value)}
+        showPassword={showResetPassword}
+        onToggle={() => setShowResetPassword((current) => !current)}
+        placeholder="Enter new password"
+        autoComplete="new-password"
+      />
+      <PasswordRequirements />
+
+      <PasswordField
+        id="resetConfirmPassword"
+        label="Confirm New Password"
+        value={resetConfirmPassword}
+        onChange={(event) => setResetConfirmPassword(event.target.value)}
+        showPassword={showResetConfirmPassword}
+        onToggle={() => setShowResetConfirmPassword((current) => !current)}
+        placeholder="Confirm new password"
+        autoComplete="new-password"
+      />
+
+      <button
+        type="submit"
+        className="auth-primary-button"
+        disabled={isSubmitting || !resetPasswordValidation.valid || resetPassword !== resetConfirmPassword}
+      >
+        {isSubmitting ? 'Saving...' : 'Save New Password'}
+      </button>
+    </form>
+  );
+
+  const title = {
+    login: 'Login',
+    signup: 'Signup',
+    verify: 'Check Your Email',
+    forgot: 'Forgot Password',
+    reset: 'Set New Password',
+  }[activeView] || 'Login';
+
+  const subtitle = {
+    login: 'Welcome back to V&G.',
+    signup: 'Create your customer account.',
+    verify: 'Check your inbox.',
+    forgot: 'Recover account access.',
+    reset: 'Choose a new password for your account.',
+  }[activeView] || '';
 
   return (
-    <div style={panelStyle}>
-      <h2 style={{ fontSize: '2rem', marginBottom: '0.5rem', color: '#0f172a' }}>Login</h2>
-      <p style={{ color: '#64748b', marginBottom: '2.5rem', fontSize: '0.95rem' }}>Select how you want to log in.</p>
+    <div className={`auth-page${activeView === 'verify' ? ' auth-page-verification' : ''}`}>
+      <section className={`auth-panel${activeView === 'verify' ? ' auth-panel-verification' : ''}`}>
+        {activeView !== 'verify' && (
+          <div className="auth-panel-head">
+            <h1>{title}</h1>
+            <p>{subtitle}</p>
+          </div>
+        )}
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
-        <button className="btn-gradient" onClick={() => setView('admin')}>
-          Admin Login
-        </button>
+        {!['verify', 'forgot', 'reset'].includes(activeView) && (
+          <div className="auth-mode-tabs" role="group" aria-label="Authentication mode">
+            <button
+              type="button"
+              className={activeView === 'login' ? 'active' : ''}
+              aria-pressed={activeView === 'login'}
+              onClick={() => switchView('login')}
+            >
+              Login
+            </button>
+            <button
+              type="button"
+              className={activeView === 'signup' ? 'active' : ''}
+              aria-pressed={activeView === 'signup'}
+              onClick={() => switchView('signup')}
+            >
+              Signup
+            </button>
+          </div>
+        )}
 
-        <button className="btn-gradient" onClick={() => setView('customer')}>
-          Customer Login
-        </button>
-      </div>
+        <AuthAlert message={alert.message} type={alert.type} />
+
+        {activeView === 'login' && renderLogin()}
+        {activeView === 'signup' && renderSignup()}
+        {activeView === 'verify' && renderVerify()}
+        {activeView === 'forgot' && renderForgot()}
+        {activeView === 'reset' && renderReset()}
+      </section>
     </div>
   );
 };

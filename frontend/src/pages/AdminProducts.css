@@ -97,6 +97,118 @@
   background: #f8fafc;
 }
 
+.admin-product-modal {
+  max-height: min(90vh, 900px);
+  overflow-y: auto;
+}
+
+.product-image-field-label {
+  display: block;
+  margin-bottom: 0.6rem;
+  color: #334155;
+  font-size: 0.95rem;
+  font-weight: 700;
+}
+
+.product-image-mode-tabs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+  padding: 0.3rem;
+  border: 1px solid #e2e8f0;
+  border-radius: 0.85rem;
+  background: #f8fafc;
+}
+
+.product-image-mode-button,
+.product-image-upload-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  min-height: 42px;
+  padding: 0.65rem 0.8rem;
+  border: 1px solid transparent;
+  border-radius: 0.65rem;
+  background: transparent;
+  color: #475569;
+  font: inherit;
+  font-size: 0.9rem;
+  font-weight: 650;
+  cursor: pointer;
+  transition: background 0.18s ease, border-color 0.18s ease, color 0.18s ease;
+}
+
+.product-image-mode-button.is-active {
+  border-color: #fed7aa;
+  background: #fff;
+  color: #c2410c;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
+}
+
+.product-image-mode-button:disabled,
+.product-image-upload-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
+.product-image-upload-panel {
+  display: grid;
+  justify-items: start;
+  gap: 0.65rem;
+}
+
+.product-image-upload-button {
+  border-color: #fed7aa;
+  background: #fff7ed;
+  color: #c2410c;
+}
+
+.product-image-upload-button:hover {
+  background: #ffedd5;
+}
+
+.product-image-upload-panel input[type='file'] {
+  display: none;
+}
+
+.product-image-upload-help {
+  color: #64748b;
+  font-size: 0.8rem;
+}
+
+.product-image-preview {
+  display: grid;
+  gap: 0.5rem;
+  width: min(100%, 280px);
+  margin-top: 0.85rem;
+  color: #64748b;
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+}
+
+.product-image-preview img {
+  display: block;
+  width: 100%;
+  max-height: 180px;
+  border: 1px solid #e2e8f0;
+  border-radius: 0.8rem;
+  background: #f8fafc;
+  object-fit: contain;
+}
+
+.product-image-preview > span {
+  color: #64748b;
+}
+
+.product-image-validation-error {
+  display: block;
+  margin-top: 0.5rem;
+  color: #b91c1c;
+  font-size: 0.82rem;
+}
+
 .product-name {
   font-weight: 600;
   color: var(--text-dark);

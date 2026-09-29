@@ -1,9 +1,15 @@
 import express from "express";
 import fetch from "node-fetch";
+import { getShopSettings, isWithinOperatingHours } from "../lib/shopSettings.js";
 
 const router = express.Router();
 const GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions";
 const GROQ_MODEL = "llama-3.3-70b-versatile";
+const OPERATING_HOURS_QUESTION = /\b(hours?|open(?:ing)?|clos(?:e[ds]?|ing)|schedule)\b|\b(?:shop|store|business|operating)\s+time\b|\buntil when\b.*\border\b/i;
+
+const buildOperatingHoursReply = (settings) => settings
+  ? `Our daily operating hours are ${settings.openingTime} to ${settings.closingTime} PHT (Philippine time). The shop is currently ${isWithinOperatingHours(settings) ? "open" : "closed"}.`
+  : "I cannot confirm the shop's current operating hours right now. Please check the shop information again shortly or contact the shop.";
 
 const isGroqConfigured = () => Boolean(String(process.env.GROQ_API_KEY || "").trim());
 
@@ -13,14 +19,19 @@ const buildAiStatusPayload = () => ({
   model: GROQ_MODEL,
 });
 
-const buildSystemPrompt = (menuContext = "Our signature Leche Flan") => `You are a helpful AI assistant for V&G Leche Flan, a Filipino dessert shop in Las Pinas, Philippines.
+const buildSystemPrompt = (menuContext = "Our signature Leche Flan", shopSettings = null) => `You are a helpful AI assistant for V&G Leche Flan, a Filipino dessert shop in Las Pinas, Philippines.
 Current date and time in the Philippines: ${new Date().toLocaleString("en-US", { timeZone: "Asia/Manila" })}.
+
+Current shop operating hours, read from the saved shop settings for this request:
+${buildOperatingHoursReply(shopSettings)}
 
 Available menu today:
 ${menuContext}
 
 Rules:
 - Only recommend desserts that appear in the available menu.
+- When an expiry question names a dessert, use that dessert's stored expiry information from the menu exactly. Do not invent an expiry date or time.
+- Use only the saved operating hours above for hours and ordering-time questions. They apply daily; do not invent different weekday or Sunday hours. If the hours could not be confirmed, say so instead of guessing.
 - Be friendly, concise, and helpful.
 - You can answer general questions, store info, delivery, pickup, and payment questions.
 - If a user asks for a recommendation, keep the answer short and practical.`;
@@ -33,15 +44,27 @@ const extractMenuItems = (menuContext = "") => (
     .slice(0, 6)
 );
 
-const buildLocalFallbackReply = (userMessage = "", menuContext = "") => {
+const extractMenuExpiryDetails = (menuContext = "") => Array.from(
+  String(menuContext || "").matchAll(/([^,()]+?)\s*\(PHP\s*[^;)]*;\s*expires\s*([^)]+)\)/gi),
+).map((match) => ({
+  name: match[1].trim(),
+  expiry: match[2].trim(),
+}));
+
+const buildLocalFallbackReply = (userMessage = "", menuContext = "", shopSettings = null) => {
   const normalizedMessage = String(userMessage || "").toLowerCase().trim();
   const menuItems = extractMenuItems(menuContext);
+  const menuExpiryDetails = extractMenuExpiryDetails(menuContext);
   const highlightedItems = menuItems.length > 0
     ? menuItems.slice(0, 3).join(", ")
     : "our desserts";
 
   if (!normalizedMessage) {
     return "Ask me about our desserts, prices, location, hours, delivery, or payment options.";
+  }
+
+  if (OPERATING_HOURS_QUESTION.test(normalizedMessage)) {
+    return buildOperatingHoursReply(shopSettings);
   }
 
   if (/^(hi|hello|hey|good morning|good afternoon|good evening)\b/.test(normalizedMessage)) {
@@ -52,16 +75,20 @@ const buildLocalFallbackReply = (userMessage = "", menuContext = "") => {
     return "We are located in Monark Subdivision, Las Pinas, Philippines.";
   }
 
-  if (/(hour|open|close|schedule)/.test(normalizedMessage)) {
-    return "Our hours are Monday to Saturday, 8:00 AM to 8:00 PM, and Sunday, 9:00 AM to 6:00 PM.";
-  }
-
   if (/(payment|gcash|cash|pay)/.test(normalizedMessage)) {
     return "We accept GCash and cash.";
   }
 
   if (/(delivery|pickup|pick up)/.test(normalizedMessage)) {
     return "We support delivery and pickup. Delivery adds PHP 50.";
+  }
+
+  if (/(expiry|expire|expiration|best before|fresh until)/.test(normalizedMessage)) {
+    const matchingProduct = menuExpiryDetails.find((item) => normalizedMessage.includes(item.name.toLowerCase()));
+    if (matchingProduct) {
+      return `${matchingProduct.name} expires on ${matchingProduct.expiry}.`;
+    }
+    return "Please tell me which dessert you mean so I can check its stored expiry information.";
   }
 
   if (/(recommend|suggest|best|popular|favorite)/.test(normalizedMessage) && menuItems.length > 0) {
@@ -75,7 +102,7 @@ const buildLocalFallbackReply = (userMessage = "", menuContext = "") => {
   return "I can help with dessert questions, store information, and simple general questions.";
 };
 
-const fetchGroqReply = async (userMessage, menuContext) => {
+const fetchGroqReply = async (userMessage, menuContext, shopSettings) => {
   const response = await fetch(GROQ_API_URL, {
     method: "POST",
     headers: {
@@ -87,7 +114,7 @@ const fetchGroqReply = async (userMessage, menuContext) => {
       messages: [
         {
           role: "system",
-          content: buildSystemPrompt(menuContext),
+          content: buildSystemPrompt(menuContext, shopSettings),
         },
         {
           role: "user",
@@ -114,19 +141,25 @@ const fetchGroqReply = async (userMessage, menuContext) => {
 
 export const buildSafeAiReply = async (userMessage, menuContext = "Our signature Leche Flan") => {
   const groqConfigured = isGroqConfigured();
+  let shopSettings = null;
+  try {
+    shopSettings = await getShopSettings();
+  } catch (error) {
+    console.warn("AI shop hours could not be loaded:", error.message);
+  }
 
-  if (!groqConfigured) {
+  if (!groqConfigured || OPERATING_HOURS_QUESTION.test(String(userMessage || ""))) {
     return {
       ok: true,
       mode: "fallback",
       source: "local-fallback",
-      groqConfigured: false,
-      reply: buildLocalFallbackReply(userMessage, menuContext),
+      groqConfigured,
+      reply: buildLocalFallbackReply(userMessage, menuContext, shopSettings),
     };
   }
 
   try {
-    const reply = await fetchGroqReply(userMessage, menuContext);
+    const reply = await fetchGroqReply(userMessage, menuContext, shopSettings);
     return {
       ok: true,
       mode: "groq",
@@ -141,7 +174,7 @@ export const buildSafeAiReply = async (userMessage, menuContext = "Our signature
       mode: "fallback",
       source: "local-fallback",
       groqConfigured: true,
-      reply: buildLocalFallbackReply(userMessage, menuContext),
+      reply: buildLocalFallbackReply(userMessage, menuContext, shopSettings),
     };
   }
 };

@@ -2,8 +2,10 @@ import express from 'express';
 import { getSupabaseAdmin, hasSupabaseAdminConfig } from '../lib/supabaseAdmin.js';
 import {
   DELIVERY_FEE,
+  ADDRESS_GEOCODE_ERROR,
   VALID_ORDER_STATUSES,
   buildOrderQrPayload,
+  buildDeliveryAddressText,
   createFulfilledOrder,
   extractOrderQrToken,
   enrichItemsFromProducts,
@@ -14,19 +16,52 @@ import {
   mapOrder,
   normalizeNotifications,
   normalizeOrderStatus,
+  normalizeDeliveryMethod,
   normalizeReviewStatus,
   normalizeRequestedItems,
   normalizeStatusTimestamps,
   shouldRequireOrderVerification,
+  isCashOnDelivery,
   hasLecheFlanItems,
   getLecheFlanRestrictionMessage,
   hydrateOrdersWithProfiles,
   hydrateOrderWithProfile,
+  isValidDeliveryCoordinates,
+  normalizeDeliveryAddressFields,
   orderSelect,
 } from '../lib/orderUtils.js';
 import { validateReceiptImageDataUrl } from '../lib/receiptImages.js';
+import {
+  buildLalamoveTrackingPatch,
+  extractLalamoveWebhookState,
+  getLalamoveDeliveryStatusLabel,
+  getLalamoveStatusPayload,
+  mapLalamoveStatusToOrderStatus,
+  normalizeLalamoveStatus,
+  retrieveLalamoveDriverDetails,
+  retrieveLalamoveOrderDetails,
+  verifyLalamoveWebhookToken,
+} from '../lib/lalamove.js';
+import { bookLalamoveOrder, buildLalamoveBookingLaunch } from '../lib/lalamoveBooking.js';
+import { cancelLalamoveOrder } from '../lib/lalamoveCancellation.js';
 import { requireAuth } from '../middleware/requireAuth.js';
 import { requireRole } from '../middleware/requireRole.js';
+import {
+  canConfirmQrScannedPickup,
+  createOrderQrExpiry,
+  isOrderQrExpired,
+  ORDER_QR_EXPIRED_MESSAGE,
+} from '../lib/orderQr.js';
+import { assertShopOpen, getShopSettings } from '../lib/shopSettings.js';
+import { getOwnedCustomerAddress, toOrderDeliveryAddress } from '../lib/customerAddresses.js';
+import {
+  RETURN_REFUND_STATUSES,
+  buildReturnRefundHistoryEntry,
+  isValidReturnRefundTransition,
+  mapReturnRefundRequest,
+  normalizeReturnRefundStatus,
+  normalizeReturnRefundType,
+} from '../lib/returnRefund.js';
 
 const router = express.Router();
 const BEST_SELLER_LIMIT = 3;
@@ -40,6 +75,7 @@ const toTimestamp = (value) => {
 const normalizeLookupValue = (value = '') => String(value || '').trim();
 const normalizeLookupCode = (value = '') => normalizeLookupValue(value).toUpperCase();
 const normalizeLookupPhone = (value = '') => normalizeLookupValue(value).replace(/[^0-9+]/g, '');
+const pickCoordinateValue = (...values) => values.find((value) => value !== undefined && value !== null && value !== '');
 
 const getVerificationMethodLabel = (value = '') => {
   const normalized = String(value || '').toLowerCase();
@@ -360,7 +396,7 @@ const setOrderStatus = async (supabase, currentOrder, nextStatus, extra = {}) =>
   const normalizedNextStatus = normalizeOrderStatus(nextStatus);
   const currentStatus = normalizeOrderStatus(currentOrder.order_status);
   const now = new Date().toISOString();
-  const deliveryMethod = String(currentOrder.delivery_method || 'pickup').toLowerCase();
+  const deliveryMethod = normalizeDeliveryMethod(currentOrder.delivery_method || 'pickup');
   const statusPatch = {
     order_status: normalizedNextStatus,
     status_timestamps: buildStatusTimestampPatch(currentOrder, normalizedNextStatus, now),
@@ -386,10 +422,11 @@ const setOrderStatus = async (supabase, currentOrder, nextStatus, extra = {}) =>
   if (
     normalizedNextStatus === 'confirmed'
     && currentOrder.verification_required !== false
-    && !currentOrder.qr_token
+    && (!currentOrder.qr_token || isOrderQrExpired(currentOrder) || currentOrder.qr_used_at)
   ) {
     statusPatch.qr_token = generateOrderQrToken();
     statusPatch.qr_generated_at = now;
+    statusPatch.qr_expires_at = createOrderQrExpiry(now);
     statusPatch.qr_used_at = null;
   }
 
@@ -426,7 +463,9 @@ const setOrderStatus = async (supabase, currentOrder, nextStatus, extra = {}) =>
       throw error;
     }
 
-    if (deliveryMethod === 'pickup' && currentStatus !== 'ready') {
+    const confirmedQrPickup = currentStatus === 'confirmed'
+      && canConfirmQrScannedPickup(currentOrder);
+    if (deliveryMethod === 'pickup' && currentStatus !== 'ready' && !confirmedQrPickup) {
       const error = new Error('Pickup orders must be Ready before they can be marked Delivered.');
       error.status = 400;
       throw error;
@@ -468,6 +507,15 @@ const setOrderStatus = async (supabase, currentOrder, nextStatus, extra = {}) =>
     statusPatch.ready_notified_at = currentOrder.ready_notified_at || now;
     if (deliveryMethod === 'pickup') {
       statusPatch.qr_claimed_at = currentOrder.qr_claimed_at || now;
+
+      if (
+        normalizeOrderStatus(currentOrder.order_status) === 'confirmed'
+        && canConfirmQrScannedPickup(currentOrder)
+        && !currentOrder.inventory_deducted_at
+      ) {
+        await adjustInventoryForOrder(supabase, currentOrder, 'deduct');
+        statusPatch.inventory_deducted_at = now;
+      }
     }
   }
 
@@ -484,6 +532,7 @@ const setOrderStatus = async (supabase, currentOrder, nextStatus, extra = {}) =>
     statusPatch.feedback_token_generated_at = null;
     statusPatch.qr_token = null;
     statusPatch.qr_generated_at = null;
+    statusPatch.qr_expires_at = null;
     statusPatch.qr_used_at = null;
   }
 
@@ -531,6 +580,281 @@ const applyOrderStatusChange = async (supabase, orderId, nextStatus, extra = {})
   });
 };
 
+const appendTimestamp = (timestamps = {}, key, value) => ({
+  ...timestamps,
+  [key]: timestamps[key] || value,
+});
+
+const buildDirectLalamoveStatusPatch = async (supabase, currentOrder, nextStatus, now) => {
+  const normalizedNextStatus = normalizeOrderStatus(nextStatus);
+  const currentStatus = normalizeOrderStatus(currentOrder.order_status);
+  const statusTimestamps = normalizeStatusTimestamps(currentOrder.status_timestamps || {});
+  const patch = {};
+
+  if (!normalizedNextStatus || normalizedNextStatus === currentStatus || TERMINAL_ORDER_STATUSES.has(currentStatus)) {
+    return patch;
+  }
+
+  if (normalizedNextStatus === 'out-for-delivery') {
+    if (!currentOrder.inventory_deducted_at) {
+      await adjustInventoryForOrder(supabase, currentOrder, 'deduct');
+      patch.inventory_deducted_at = now;
+    }
+
+    patch.order_status = 'out-for-delivery';
+    patch.status_timestamps = appendTimestamp(statusTimestamps, 'out_for_delivery', now);
+    return patch;
+  }
+
+  if (normalizedNextStatus === 'delivered') {
+    if (!currentOrder.inventory_deducted_at) {
+      await adjustInventoryForOrder(supabase, currentOrder, 'deduct');
+      patch.inventory_deducted_at = now;
+    }
+
+    patch.order_status = 'delivered';
+    patch.ready_notified_at = currentOrder.ready_notified_at || now;
+    patch.status_timestamps = appendTimestamp(
+      appendTimestamp(statusTimestamps, 'out_for_delivery', now),
+      'delivered',
+      now,
+    );
+    return patch;
+  }
+
+  if (normalizedNextStatus === 'cancelled') {
+    if (['delivered', 'completed', 'refunded', 'cancelled'].includes(currentStatus)) {
+      return patch;
+    }
+
+    if (currentOrder.inventory_deducted_at) {
+      await adjustInventoryForOrder(supabase, currentOrder, 'restock');
+    }
+
+    patch.order_status = 'cancelled';
+    patch.cancellation_reason = currentOrder.cancellation_reason || 'Lalamove cancelled or could not complete this delivery.';
+    patch.review_status = 'none';
+    patch.review_reason = null;
+    patch.review_status_updated_at = null;
+    patch.feedback_token = null;
+    patch.feedback_token_generated_at = null;
+    patch.qr_token = null;
+    patch.qr_generated_at = null;
+    patch.qr_expires_at = null;
+    patch.qr_used_at = null;
+    patch.status_timestamps = appendTimestamp(statusTimestamps, 'cancelled', now);
+  }
+
+  return patch;
+};
+
+const applyLalamoveTrackingUpdate = async (
+  supabase,
+  currentOrder,
+  trackingPatch,
+  {
+    booked = false,
+    eventType = '',
+  } = {},
+) => {
+  const now = new Date().toISOString();
+  const nextLalamoveStatus = normalizeLalamoveStatus(trackingPatch.lalamove_status || currentOrder.lalamove_status || '');
+  const currentLalamoveStatus = normalizeLalamoveStatus(currentOrder.lalamove_status || '');
+  const nextOrderStatus = mapLalamoveStatusToOrderStatus(nextLalamoveStatus, currentOrder.order_status);
+  const statusPatch = await buildDirectLalamoveStatusPatch(supabase, currentOrder, nextOrderStatus, now);
+  const deliveryStatusChanged = nextLalamoveStatus && nextLalamoveStatus !== currentLalamoveStatus;
+  const orderStatusChanged = statusPatch.order_status && statusPatch.order_status !== currentOrder.order_status;
+  const notifications = normalizeNotifications(currentOrder.notifications || []);
+  const orderCode = currentOrder.order_code || currentOrder.id || 'order';
+
+  if (booked) {
+    notifications.push(
+      buildNotificationEntry('customer', 'delivery_booked', `Lalamove delivery has been booked for order ${orderCode}.`),
+      buildNotificationEntry('admin_staff', 'delivery_booked', `Lalamove delivery was booked for order ${orderCode}.`),
+    );
+  }
+
+  if (deliveryStatusChanged) {
+    const label = getLalamoveDeliveryStatusLabel(nextLalamoveStatus);
+    notifications.push(
+      buildNotificationEntry('customer', 'delivery_status_update', `Lalamove delivery status for order ${orderCode}: ${label}.`),
+      buildNotificationEntry('admin_staff', 'delivery_status_update', `Lalamove delivery status for order ${orderCode}: ${label}.`),
+    );
+  }
+
+  if (orderStatusChanged) {
+    const messageBundle = buildStatusMessages(currentOrder, statusPatch.order_status, {
+      reason: eventType ? `Lalamove ${eventType}` : '',
+    });
+    notifications.push(
+      buildNotificationEntry('customer', 'status_update', messageBundle.customer),
+      buildNotificationEntry('admin_staff', 'status_update', messageBundle.adminStaff),
+    );
+  }
+
+  return updateOrderRecord(supabase, currentOrder.id, {
+    ...trackingPatch,
+    ...statusPatch,
+    notifications,
+  });
+};
+
+const syncLalamoveTrackingForOrder = async (supabase, currentOrder) => {
+  if (!currentOrder.lalamove_order_id) {
+    const error = new Error('This order has not been booked with Lalamove yet.');
+    error.status = 409;
+    throw error;
+  }
+
+  const orderData = await retrieveLalamoveOrderDetails(currentOrder.lalamove_order_id);
+  const driverId = orderData.driverId || currentOrder.lalamove_driver_id || '';
+  const driverData = driverId
+    ? await retrieveLalamoveDriverDetails(orderData.orderId || currentOrder.lalamove_order_id, driverId)
+    : null;
+  const trackingPatch = buildLalamoveTrackingPatch({
+    orderData: {
+      ...orderData,
+      orderId: orderData.orderId || currentOrder.lalamove_order_id,
+      quotationId: orderData.quotationId || currentOrder.lalamove_quotation_id,
+      shareLink: orderData.shareLink || currentOrder.lalamove_share_link,
+    },
+    driverData,
+    syncedAt: new Date().toISOString(),
+  });
+
+  return applyLalamoveTrackingUpdate(supabase, currentOrder, trackingPatch);
+};
+
+const getDeliveryCoordinatesFromBody = (body = {}, currentOrder = {}) => ({
+  latitude: pickCoordinateValue(
+    body.destinationLatitude,
+    body.destination_latitude,
+    body.deliveryLatitude,
+    body.delivery_latitude,
+    currentOrder.delivery_latitude,
+  ),
+  longitude: pickCoordinateValue(
+    body.destinationLongitude,
+    body.destination_longitude,
+    body.deliveryLongitude,
+    body.delivery_longitude,
+    currentOrder.delivery_longitude,
+  ),
+});
+
+const buildDeliveryAddressFromBody = (body = {}, currentOrder = {}) => normalizeDeliveryAddressFields(body, {
+  recipientName: currentOrder.delivery_recipient_name || currentOrder.customer_name || currentOrder.profiles?.full_name || currentOrder.profiles?.username || '',
+  contactNumber: currentOrder.delivery_contact_number || currentOrder.phone_number || '',
+  streetAddress: currentOrder.delivery_street_address || '',
+  barangay: currentOrder.delivery_barangay || '',
+  city: currentOrder.delivery_city || '',
+  province: currentOrder.delivery_province || '',
+  postalCode: currentOrder.delivery_postal_code || '',
+  formattedAddress: currentOrder.delivery_formatted_address || currentOrder.address || '',
+  placeId: currentOrder.delivery_place_id || '',
+  latitude: currentOrder.delivery_latitude,
+  longitude: currentOrder.delivery_longitude,
+});
+
+const getDeliveryAddressValidationError = (deliveryAddress = {}) => {
+  if (!deliveryAddress.recipientName || !deliveryAddress.contactNumber) {
+    return 'Recipient name and contact number are required before booking delivery.';
+  }
+
+  if (!deliveryAddress.streetAddress || !deliveryAddress.city || !deliveryAddress.province) {
+    return 'Street address, city/municipality, and province are required before booking delivery.';
+  }
+
+  if (!isValidDeliveryCoordinates(deliveryAddress)) {
+    return ADDRESS_GEOCODE_ERROR;
+  }
+
+  return '';
+};
+
+const assertValidDeliveryAddress = (deliveryAddress = {}) => {
+  const validationError = getDeliveryAddressValidationError(deliveryAddress);
+
+  if (validationError) {
+    const error = new Error(validationError);
+    error.status = 400;
+    throw error;
+  }
+};
+
+const buildDeliveryAddressPatch = (deliveryAddress = {}, instructions = '') => {
+  const address = deliveryAddress.formattedAddress
+    || deliveryAddress.address
+    || buildDeliveryAddressText(deliveryAddress);
+
+  return {
+    phone_number: deliveryAddress.contactNumber || null,
+    address: address || null,
+    delivery_recipient_name: deliveryAddress.recipientName || null,
+    delivery_contact_number: deliveryAddress.contactNumber || null,
+    delivery_street_address: deliveryAddress.streetAddress || null,
+    delivery_barangay: deliveryAddress.barangay || null,
+    delivery_city: deliveryAddress.city || null,
+    delivery_province: deliveryAddress.province || null,
+    delivery_postal_code: deliveryAddress.postalCode || null,
+    delivery_formatted_address: deliveryAddress.formattedAddress || address || null,
+    delivery_place_id: deliveryAddress.placeId || null,
+    delivery_latitude: deliveryAddress.latitude,
+    delivery_longitude: deliveryAddress.longitude,
+    delivery_instructions: instructions || null,
+  };
+};
+
+const assertLalamoveBookableOrder = (order) => {
+  const currentStatus = normalizeOrderStatus(order.order_status || 'pending');
+  const deliveryMethod = String(order.delivery_method || 'pickup').toLowerCase();
+  const paymentMethod = String(order.payment_method || 'cash').toLowerCase();
+  const latestPaymentCheckout = (Array.isArray(order.payment_checkouts) ? [...order.payment_checkouts] : [])
+    .sort((left, right) => (
+      new Date(right.updated_at || right.created_at || 0).getTime()
+      - new Date(left.updated_at || left.created_at || 0).getTime()
+    ))[0];
+  const onlinePaymentSettled = ['paid', 'fulfilled'].includes(
+    String(latestPaymentCheckout?.status || '').toLowerCase(),
+  );
+
+  if (deliveryMethod !== 'delivery' || !['cash', 'online'].includes(paymentMethod)) {
+    const error = new Error('Lalamove booking is available only for delivery orders paid by Cash on Delivery or online checkout.');
+    error.status = 400;
+    throw error;
+  }
+
+  if (paymentMethod === 'online' && !onlinePaymentSettled) {
+    const error = new Error('Complete the online payment before booking Lalamove delivery.');
+    error.status = 400;
+    throw error;
+  }
+
+  if (currentStatus === 'pending') {
+    const error = new Error('Confirm the order before booking Lalamove delivery.');
+    error.status = 400;
+    throw error;
+  }
+
+  if (['delivered', 'completed', 'cancelled', 'refunded'].includes(currentStatus)) {
+    const error = new Error('This order can no longer be booked with Lalamove.');
+    error.status = 400;
+    throw error;
+  }
+
+  if (order.lalamove_order_id) {
+    const error = new Error('This order already has a Lalamove booking.');
+    error.status = 409;
+    throw error;
+  }
+
+  if (['BOOKING', 'BOOKING_UNCONFIRMED'].includes(order.lalamove_status)) {
+    const error = new Error(order.lalamove_booking_error || 'A Lalamove booking is already in progress. Check the Partner Portal before trying again.');
+    error.status = 409;
+    throw error;
+  }
+};
+
 const applyOrderVerification = async (
   supabase,
   currentOrder,
@@ -543,11 +867,17 @@ const applyOrderVerification = async (
   const normalizedMethod = normalizeVerificationMethod(verificationMethod);
   const now = new Date().toISOString();
   const currentStatus = normalizeOrderStatus(currentOrder.order_status || 'pending');
-  const deliveryMethod = String(currentOrder.delivery_method || 'pickup').toLowerCase();
+  const deliveryMethod = normalizeDeliveryMethod(currentOrder.delivery_method || 'pickup');
   const isTerminal = TERMINAL_ORDER_STATUSES.has(currentStatus);
 
   if (isTerminal) {
     const error = new Error('This order is already finalized and cannot be verified again.');
+    error.status = 409;
+    throw error;
+  }
+
+  if (currentOrder.verification_required !== false && isOrderQrExpired(currentOrder)) {
+    const error = new Error(ORDER_QR_EXPIRED_MESSAGE);
     error.status = 409;
     throw error;
   }
@@ -558,10 +888,7 @@ const applyOrderVerification = async (
     throw error;
   }
 
-  let workingOrder = currentOrder;
-  if (deliveryMethod === 'pickup' && currentStatus === 'ready') {
-    workingOrder = await applyOrderStatusChange(supabase, currentOrder.id, 'delivered');
-  }
+  const workingOrder = currentOrder;
 
   const nextNotifications = [
     ...normalizeNotifications(workingOrder.notifications || []),
@@ -729,6 +1056,81 @@ router.get('/best-sellers', async (req, res, next) => {
   }
 });
 
+router.get('/lalamove/status', requireAuth, requireRole('admin', 'staff'), async (req, res, next) => {
+  try {
+    const shopSettings = await getShopSettings(getSupabaseAdmin());
+    res.json(getLalamoveStatusPayload({
+      includePickupDetails: true,
+      pickup: {
+        name: shopSettings.shopName,
+        phone: shopSettings.phoneNumber,
+        address: shopSettings.address,
+        latitude: shopSettings.latitude,
+        longitude: shopSettings.longitude,
+      },
+    }));
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/webhooks/lalamove', async (req, res, next) => {
+  try {
+    const verification = verifyLalamoveWebhookToken(req.headers || {});
+    if (!verification.ok) {
+      return res.status(400).json({ error: verification.reason });
+    }
+
+    const webhookState = extractLalamoveWebhookState(req.body || {});
+    if (!webhookState.orderId) {
+      return res.status(202).json({ received: true, message: 'Webhook accepted, but no Lalamove order ID was found.' });
+    }
+
+    const supabase = getSupabaseAdmin();
+    const { data: currentOrder, error } = await supabase
+      .from('orders')
+      .select(orderSelect)
+      .eq('lalamove_order_id', webhookState.orderId)
+      .maybeSingle();
+
+    if (error) {
+      throw error;
+    }
+
+    if (!currentOrder) {
+      return res.status(202).json({ received: true, message: 'Webhook accepted, but no matching local order was found.' });
+    }
+
+    const hydratedOrder = await hydrateOrderWithProfile(supabase, currentOrder);
+    const driverData = webhookState.driverId && getLalamoveStatusPayload().credentialsConfigured
+      ? await retrieveLalamoveDriverDetails(webhookState.orderId, webhookState.driverId)
+      : null;
+    const trackingPatch = buildLalamoveTrackingPatch({
+      orderData: {
+        orderId: hydratedOrder.lalamove_order_id || webhookState.orderId,
+        quotationId: hydratedOrder.lalamove_quotation_id,
+        status: webhookState.status || hydratedOrder.lalamove_status,
+        shareLink: hydratedOrder.lalamove_share_link,
+        driverId: webhookState.driverId || hydratedOrder.lalamove_driver_id,
+        priceBreakdown: hydratedOrder.lalamove_price_breakdown || undefined,
+      },
+      driverData,
+      syncedAt: new Date().toISOString(),
+      extraMetadata: {
+        lastWebhook: webhookState.raw,
+      },
+    });
+
+    await applyLalamoveTrackingUpdate(supabase, hydratedOrder, trackingPatch, {
+      eventType: webhookState.eventType,
+    });
+
+    res.json({ received: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
 router.get('/', requireAuth, requireRole('admin', 'staff'), async (req, res, next) => {
   try {
     const supabase = getSupabaseAdmin();
@@ -779,6 +1181,20 @@ router.post('/', requireAuth, async (req, res, next) => {
       delivery_method = 'pickup',
       payment_method = 'cash',
       delivery_distance_km,
+      delivery_latitude,
+      delivery_longitude,
+      delivery_recipient_name = '',
+      delivery_contact_number = '',
+      delivery_street_address = '',
+      delivery_barangay = '',
+      delivery_city = '',
+      delivery_province = '',
+      delivery_postal_code = '',
+      delivery_formatted_address = '',
+      delivery_place_id = '',
+      delivery_instructions = '',
+      delivery_address_id = null,
+      cash_received = null,
     } = req.body || {};
 
     if (!Array.isArray(items) || items.length === 0) {
@@ -787,6 +1203,24 @@ router.post('/', requireAuth, async (req, res, next) => {
 
     const normalizedDeliveryMethod = String(delivery_method || 'pickup').toLowerCase();
     const normalizedPaymentMethod = String(payment_method || 'cash').toLowerCase();
+    let deliveryAddress = normalizeDeliveryAddressFields({
+      ...(req.body || {}),
+      delivery_recipient_name,
+      delivery_contact_number,
+      delivery_street_address,
+      delivery_barangay,
+      delivery_city,
+      delivery_province,
+      delivery_postal_code,
+      delivery_formatted_address,
+      delivery_place_id,
+      delivery_latitude,
+      delivery_longitude,
+    }, {
+      recipientName: customer_name || req.profile?.full_name || req.profile?.username || '',
+      contactNumber: phone_number || req.profile?.phone_number || '',
+      formattedAddress: address || req.profile?.address || '',
+    });
     const requestedStatus = normalizeOrderStatus(order_status);
     const placedByRole = String(req.profile?.role || '').toLowerCase();
     const isStaffWalkInOrder = ['admin', 'staff'].includes(placedByRole) && normalizedDeliveryMethod === 'pickup';
@@ -811,6 +1245,26 @@ router.post('/', requireAuth, async (req, res, next) => {
     }
 
     const supabase = getSupabaseAdmin();
+    const requestedDeliveryAddressId = String(delivery_address_id || '').trim();
+    let savedDeliveryAddress = null;
+
+    if (normalizedDeliveryMethod === 'delivery' && requestedDeliveryAddressId) {
+      savedDeliveryAddress = await getOwnedCustomerAddress(
+        supabase,
+        req.authUser.id,
+        requestedDeliveryAddressId,
+      );
+
+      if (!savedDeliveryAddress) {
+        return res.status(400).json({ error: 'The selected saved delivery address was not found.' });
+      }
+
+      deliveryAddress = toOrderDeliveryAddress(savedDeliveryAddress);
+    }
+
+    if (isCustomerOrder) {
+      await assertShopOpen(supabase);
+    }
     const productsById = await fetchProductsByIds(
       supabase,
       [...new Set(normalizedItems.map((item) => item.product_id))],
@@ -832,29 +1286,229 @@ router.post('/', requireAuth, async (req, res, next) => {
     const subtotal = finalizedItems.reduce((sum, item) => sum + (item.quantity * item.price), 0);
     const finalTotal = subtotal + (normalizedDeliveryMethod === 'delivery' ? DELIVERY_FEE : 0);
     const normalizedDistance = Number(delivery_distance_km);
+    const normalizedLatitude = Number(delivery_latitude);
+    const normalizedLongitude = Number(delivery_longitude);
+    const resolvedLatitude = savedDeliveryAddress ? Number(deliveryAddress.latitude) : normalizedLatitude;
+    const resolvedLongitude = savedDeliveryAddress ? Number(deliveryAddress.longitude) : normalizedLongitude;
     const containsLecheFlan = hasLecheFlanItems(finalizedItems);
+
+    if (normalizedDeliveryMethod === 'delivery') {
+      assertValidDeliveryAddress(deliveryAddress);
+    }
+
     const restrictionMessage = normalizedDeliveryMethod === 'delivery'
       ? getLecheFlanRestrictionMessage(normalizedDistance)
       : '';
+    const shouldStartPending = isCustomerOrder && isCashOnDelivery(
+      normalizedDeliveryMethod,
+      normalizedPaymentMethod,
+    );
     const initialOrderStatus = containsLecheFlan && restrictionMessage
       ? 'cancelled'
-      : (isCustomerOrder ? 'confirmed' : requestedStatus);
+      : (shouldStartPending ? 'pending' : (isCustomerOrder ? 'confirmed' : requestedStatus));
+    const requestedCashReceived = Number(cash_received);
+    const isPosCashPayment = isStaffWalkInOrder && normalizedPaymentMethod === 'cash';
+
+    if (isPosCashPayment && (!Number.isFinite(requestedCashReceived) || requestedCashReceived < finalTotal)) {
+      return res.status(400).json({
+        error: `Cash received must be at least PHP ${finalTotal.toFixed(2)}.`,
+      });
+    }
+
+    const cashReceived = isPosCashPayment ? requestedCashReceived : null;
+    const changeAmount = isPosCashPayment ? Number((requestedCashReceived - finalTotal).toFixed(2)) : null;
 
     const createdOrder = await createFulfilledOrder(supabase, {
       userId: req.authUser.id,
       profile: req.profile,
       customerName: customer_name,
-      phoneNumber: phone_number,
-      address,
+      phoneNumber: phone_number || deliveryAddress.contactNumber,
+      address: deliveryAddress.address || address,
       deliveryMethod: normalizedDeliveryMethod,
       paymentMethod: normalizedPaymentMethod,
       totalPrice: finalTotal,
+      deliveryAddressId: savedDeliveryAddress?.id || null,
+      cashReceived,
+      changeAmount,
       deliveryDistanceKm: Number.isFinite(normalizedDistance) ? normalizedDistance : null,
+      deliveryLatitude: Number.isFinite(resolvedLatitude) ? resolvedLatitude : null,
+      deliveryLongitude: Number.isFinite(resolvedLongitude) ? resolvedLongitude : null,
+      deliveryAddress,
+      deliveryRecipientName: deliveryAddress.recipientName,
+      deliveryContactNumber: deliveryAddress.contactNumber,
+      deliveryStreetAddress: deliveryAddress.streetAddress,
+      deliveryBarangay: deliveryAddress.barangay,
+      deliveryCity: deliveryAddress.city,
+      deliveryProvince: deliveryAddress.province,
+      deliveryPostalCode: deliveryAddress.postalCode,
+      deliveryFormattedAddress: deliveryAddress.formattedAddress,
+      deliveryPlaceId: deliveryAddress.placeId,
+      deliveryInstructions: delivery_instructions,
       orderStatus: initialOrderStatus,
       items: finalizedItems,
     });
 
     res.status(201).json(createdOrder);
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/:id/lalamove/book', requireAuth, requireRole('admin', 'staff'), async (req, res, next) => {
+  try {
+    const supabase = getSupabaseAdmin();
+    const currentOrder = await fetchOrderById(supabase, req.params.id);
+    if (currentOrder.lalamove_order_id) {
+      return res.json({ order: mapOrder(currentOrder), lalamoveLaunch: buildLalamoveBookingLaunch(currentOrder) });
+    }
+    assertLalamoveBookableOrder(currentOrder);
+
+    const instructions = String(
+      req.body?.instructions
+      ?? req.body?.deliveryInstructions
+      ?? req.body?.delivery_instructions
+      ?? currentOrder.delivery_instructions
+      ?? '',
+    ).trim();
+    const deliveryAddress = buildDeliveryAddressFromBody(req.body || {}, currentOrder);
+    const coordinates = getDeliveryCoordinatesFromBody(req.body || {}, {
+      ...currentOrder,
+      delivery_latitude: deliveryAddress.latitude,
+      delivery_longitude: deliveryAddress.longitude,
+    });
+
+    const addressPatch = buildDeliveryAddressPatch({
+      ...deliveryAddress,
+      latitude: coordinates.latitude,
+      longitude: coordinates.longitude,
+    }, instructions);
+    if (!deliveryAddress.recipientName || !deliveryAddress.contactNumber || !addressPatch.address) {
+      return res.status(400).json({ error: 'The saved delivery needs a recipient name, contact number, and address before booking.' });
+    }
+    if (!String(coordinates.latitude ?? '').trim() || !String(coordinates.longitude ?? '').trim() || !isValidDeliveryCoordinates(coordinates)) {
+      return res.status(400).json({ error: ADDRESS_GEOCODE_ERROR });
+    }
+
+    const shopSettings = await getShopSettings(supabase);
+    const bookedOrder = await bookLalamoveOrder({
+      supabase,
+      order: currentOrder,
+      addressPatch,
+      instructions,
+      pickup: {
+        name: shopSettings.shopName,
+        phone: shopSettings.phoneNumber,
+        address: shopSettings.address,
+        latitude: shopSettings.latitude,
+        longitude: shopSettings.longitude,
+      },
+    });
+
+    // The reference is already durable before notifications/inventory updates.
+    let updatedOrder = bookedOrder;
+    let warning = '';
+    try {
+      const latestOrder = await fetchOrderById(supabase, bookedOrder.id);
+      updatedOrder = await applyLalamoveTrackingUpdate(supabase, latestOrder, {}, { booked: true });
+    } catch (trackingError) {
+      console.warn('Lalamove booked; follow-up tracking update failed:', trackingError.message);
+      warning = 'Delivery booked. Refresh tracking to update the order status.';
+    }
+
+    res.status(201).json({
+      order: mapOrder(updatedOrder),
+      lalamoveLaunch: buildLalamoveBookingLaunch(updatedOrder),
+      ...(warning ? { warning } : {}),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/:id/lalamove/sync', requireAuth, requireRole('admin', 'staff'), async (req, res, next) => {
+  try {
+    const supabase = getSupabaseAdmin();
+    const currentOrder = await fetchOrderById(supabase, req.params.id);
+    const updatedOrder = await syncLalamoveTrackingForOrder(supabase, currentOrder);
+    res.json(mapOrder(updatedOrder));
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/:id/lalamove/cancel', requireAuth, requireRole('admin', 'staff'), async (req, res, next) => {
+  try {
+    const supabase = getSupabaseAdmin();
+    const currentOrder = await fetchOrderById(supabase, req.params.id);
+    const shopSettings = await getShopSettings(supabase);
+    const updatedOrder = await cancelLalamoveOrder({
+      supabase,
+      order: currentOrder,
+      actorId: req.user?.id || req.profile?.id || null,
+      pickup: {
+        name: shopSettings.shopName,
+        phone: shopSettings.phoneNumber,
+        address: shopSettings.address,
+        latitude: shopSettings.latitude,
+        longitude: shopSettings.longitude,
+      },
+    });
+    res.json({ order: mapOrder(updatedOrder) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.patch('/:id/lalamove/reference', requireAuth, requireRole('admin', 'staff'), async (req, res, next) => {
+  try {
+    const supabase = getSupabaseAdmin();
+    const currentOrder = await fetchOrderById(supabase, req.params.id);
+    const deliveryMethod = normalizeDeliveryMethod(currentOrder.delivery_method || 'pickup');
+    const reference = String(
+      req.body?.lalamoveOrderId
+      || req.body?.lalamove_order_id
+      || req.body?.orderId
+      || req.body?.reference
+      || '',
+    ).trim();
+    const shareLink = String(req.body?.shareLink || req.body?.lalamove_share_link || '').trim();
+
+    if (deliveryMethod !== 'delivery') {
+      return res.status(400).json({ error: 'Only delivery orders can store a Lalamove booking reference.' });
+    }
+
+    if (!reference) {
+      return res.status(400).json({ error: 'Lalamove booking reference is required.' });
+    }
+
+    if (currentOrder.lalamove_status === 'BOOKING' && Date.now() - toTimestamp(currentOrder.lalamove_last_synced_at) < 60000) {
+      return res.status(409).json({ error: 'The Lalamove booking is still processing. Wait a minute and refresh before saving a reference.' });
+    }
+
+    const now = new Date().toISOString();
+    const notifications = [
+      ...normalizeNotifications(currentOrder.notifications || []),
+      buildNotificationEntry('admin_staff', 'delivery_reference_saved', `Lalamove reference ${reference} was saved for order ${currentOrder.order_code || currentOrder.id}.`),
+    ];
+    const updatedOrder = await updateOrderRecord(supabase, currentOrder.id, {
+      lalamove_order_id: reference,
+      lalamove_status: ['BOOKING', 'BOOKING_UNCONFIRMED'].includes(currentOrder.lalamove_status)
+        ? 'MANUAL_CONFIRMED'
+        : currentOrder.lalamove_status || 'MANUAL_CONFIRMED',
+      lalamove_share_link: shareLink || currentOrder.lalamove_share_link || null,
+      lalamove_booked_at: currentOrder.lalamove_booked_at || now,
+      lalamove_last_synced_at: now,
+      lalamove_booking_error: null,
+      lalamove_metadata: {
+        ...(currentOrder.lalamove_metadata && typeof currentOrder.lalamove_metadata === 'object'
+          ? currentOrder.lalamove_metadata
+          : {}),
+        manualReferenceSavedAt: now,
+      },
+      notifications,
+    });
+
+    res.json(mapOrder(updatedOrder));
   } catch (error) {
     next(error);
   }
@@ -914,8 +1568,19 @@ router.patch('/:id/items', requireAuth, requireRole('admin', 'staff'), async (re
     const paymentMethod = String(req.body?.payment_method || currentOrder.payment_method || 'cash').toLowerCase();
     const normalizedDistanceValue = Number(req.body?.delivery_distance_km ?? currentOrder.delivery_distance_km);
     const deliveryDistanceKm = Number.isFinite(normalizedDistanceValue) ? normalizedDistanceValue : null;
+    const normalizedLatitudeValue = Number(req.body?.delivery_latitude ?? currentOrder.delivery_latitude);
+    const normalizedLongitudeValue = Number(req.body?.delivery_longitude ?? currentOrder.delivery_longitude);
     const subtotal = finalizedItems.reduce((sum, item) => sum + (Number(item.price) || 0) * (Number(item.quantity) || 0), 0);
     const totalPrice = subtotal + (deliveryMethod === 'delivery' ? DELIVERY_FEE : 0);
+    const requestedCashReceived = Number(req.body?.cash_received ?? currentOrder.cash_received);
+    const isCashWalkInOrder = paymentMethod === 'cash' && deliveryMethod === 'pickup';
+    if (isCashWalkInOrder && (!Number.isFinite(requestedCashReceived) || requestedCashReceived < totalPrice)) {
+      return res.status(400).json({
+        error: `Cash received must be at least PHP ${totalPrice.toFixed(2)}.`,
+      });
+    }
+    const cashReceived = isCashWalkInOrder ? requestedCashReceived : null;
+    const changeAmount = isCashWalkInOrder ? Number((requestedCashReceived - totalPrice).toFixed(2)) : null;
     const containsLecheFlan = hasLecheFlanItems(finalizedItems);
     const restrictionMessage = deliveryMethod === 'delivery'
       ? getLecheFlanRestrictionMessage(deliveryDistanceKm)
@@ -927,6 +1592,7 @@ router.patch('/:id/items', requireAuth, requireRole('admin', 'staff'), async (re
       && (
         !currentOrder.verification_required
         || !currentOrder.qr_token
+        || isOrderQrExpired(currentOrder)
         || currentOrder.qr_used_at
       );
     const nextQrToken = verificationRequired
@@ -940,11 +1606,17 @@ router.patch('/:id/items', requireAuth, requireRole('admin', 'staff'), async (re
       delivery_method: deliveryMethod,
       payment_method: paymentMethod,
       delivery_distance_km: deliveryDistanceKm,
+      delivery_latitude: Number.isFinite(normalizedLatitudeValue) ? normalizedLatitudeValue : null,
+      delivery_longitude: Number.isFinite(normalizedLongitudeValue) ? normalizedLongitudeValue : null,
+      delivery_instructions: String(req.body?.delivery_instructions ?? currentOrder.delivery_instructions ?? '').trim() || null,
       total_price: totalPrice,
+      cash_received: cashReceived,
+      change_amount: changeAmount,
       contains_leche_flan: containsLecheFlan,
       verification_required: verificationRequired,
       qr_token: nextQrToken,
       qr_generated_at: nextQrToken ? (shouldRotateQrToken ? now : (currentOrder.qr_generated_at || now)) : null,
+      qr_expires_at: nextQrToken ? (shouldRotateQrToken ? createOrderQrExpiry(now) : currentOrder.qr_expires_at) : null,
       qr_used_at: nextQrToken ? (shouldRotateQrToken ? null : currentOrder.qr_used_at) : null,
       verified_at: nextQrToken ? (shouldRotateQrToken ? null : currentOrder.verified_at) : null,
       verified_by: nextQrToken ? (shouldRotateQrToken ? null : currentOrder.verified_by) : null,
@@ -1007,6 +1679,58 @@ router.patch('/:id/items', requireAuth, requireRole('admin', 'staff'), async (re
   }
 });
 
+router.post('/:id/qr/regenerate', requireAuth, async (req, res, next) => {
+  try {
+    const supabase = getSupabaseAdmin();
+    const currentOrder = await fetchOrderById(supabase, req.params.id);
+    const role = String(req.profile?.role || '').toLowerCase();
+    const isPrivileged = ['admin', 'staff'].includes(role);
+
+    if (!isPrivileged && currentOrder.user_id !== req.authUser.id) {
+      return res.status(404).json({ error: 'Order not found.' });
+    }
+
+    if (currentOrder.verification_required === false || !currentOrder.qr_token) {
+      return res.status(409).json({ error: 'This order does not have a QR code that can be regenerated.' });
+    }
+
+    if (TERMINAL_ORDER_STATUSES.has(normalizeOrderStatus(currentOrder.order_status))) {
+      return res.status(409).json({ error: 'This order is already finalized and its QR code cannot be regenerated.' });
+    }
+
+    if (!currentOrder.qr_used_at && !isOrderQrExpired(currentOrder)) {
+      return res.status(409).json({ error: 'The current QR Code/Order ID is still valid.' });
+    }
+
+    const generatedAt = new Date().toISOString();
+    const { data, error } = await supabase
+      .from('orders')
+      .update({
+        qr_token: generateOrderQrToken(),
+        qr_generated_at: generatedAt,
+        qr_expires_at: createOrderQrExpiry(generatedAt),
+        qr_used_at: null,
+        qr_claimed_at: null,
+        verified_at: null,
+        verified_by: null,
+        verification_method: null,
+      })
+      .eq('id', currentOrder.id)
+      .eq('qr_token', currentOrder.qr_token)
+      .select(orderSelect)
+      .maybeSingle();
+
+    if (error) throw error;
+    if (!data) {
+      return res.status(409).json({ error: 'The order QR code changed. Refresh the order and try again.' });
+    }
+
+    res.json(mapOrder(await hydrateOrderWithProfile(supabase, data)));
+  } catch (error) {
+    next(error);
+  }
+});
+
 router.post('/lookup', requireAuth, requireRole('admin', 'staff'), async (req, res, next) => {
   try {
     const identifier = req.body?.identifier || req.body?.orderCode || req.body?.orderId || '';
@@ -1046,6 +1770,10 @@ router.post('/verify', requireAuth, requireRole('admin', 'staff'), async (req, r
         return res.status(409).json({ error: 'This order has no active QR token.' });
       }
 
+      if (isOrderQrExpired(order)) {
+        return res.status(409).json({ error: ORDER_QR_EXPIRED_MESSAGE });
+      }
+
       if (order.qr_used_at) {
         return res.status(409).json({ error: 'This QR code has already been used.' });
       }
@@ -1053,6 +1781,10 @@ router.post('/verify', requireAuth, requireRole('admin', 'staff'), async (req, r
       order = await fetchOrderByIdentifier(supabase, identifier);
       if (!order) {
         return res.status(404).json({ error: 'Order not found.' });
+      }
+
+      if (order.verification_required !== false && isOrderQrExpired(order)) {
+        return res.status(409).json({ error: ORDER_QR_EXPIRED_MESSAGE });
       }
 
       if (!identifier) {
@@ -1088,10 +1820,25 @@ router.post('/verify', requireAuth, requireRole('admin', 'staff'), async (req, r
 const handleMarkDelivered = async (req, res, next) => {
   try {
     const supabase = getSupabaseAdmin();
+    const currentOrder = await fetchOrderById(supabase, req.params.id);
+    const deliveryMethod = normalizeDeliveryMethod(currentOrder.delivery_method || 'pickup');
+    const currentStatus = normalizeOrderStatus(currentOrder.order_status);
+
+    if (['delivered', 'completed', 'cancelled', 'refunded'].includes(currentStatus)) {
+      return res.status(409).json({ error: 'This order has already been confirmed or finalized.' });
+    }
+
+    if (deliveryMethod === 'pickup' && currentOrder.verification_required !== false && isOrderQrExpired(currentOrder)) {
+      return res.status(409).json({ error: ORDER_QR_EXPIRED_MESSAGE });
+    }
+
     const updatedOrder = await applyOrderStatusChange(supabase, req.params.id, 'delivered');
-    const deliveryMethod = String(updatedOrder.delivery_method || 'pickup').toLowerCase();
 
     if (deliveryMethod !== 'pickup') {
+      return res.json(mapOrder(updatedOrder));
+    }
+
+    if (updatedOrder.verified_at || updatedOrder.qr_used_at) {
       return res.json(mapOrder(updatedOrder));
     }
 
@@ -1219,6 +1966,199 @@ router.post('/:id/cancel', requireAuth, async (req, res, next) => {
     });
 
     res.json(mapOrder(updatedOrder));
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get('/return-refund-requests', requireAuth, requireRole('admin', 'staff'), async (req, res, next) => {
+  try {
+    const supabase = getSupabaseAdmin();
+    const { data, error } = await supabase
+      .from('return_refund_requests')
+      .select('*')
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      throw error;
+    }
+
+    res.json((data || []).map(mapReturnRefundRequest));
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/:id/return-refund-requests', requireAuth, async (req, res, next) => {
+  try {
+    const supabase = getSupabaseAdmin();
+    const currentOrder = await fetchOrderById(supabase, req.params.id);
+    const role = String(req.profile?.role || '').toLowerCase();
+
+    if (currentOrder.user_id !== req.authUser.id && !['admin', 'staff'].includes(role)) {
+      return res.status(404).json({ error: 'Order not found.' });
+    }
+
+    const currentStatus = normalizeOrderStatus(currentOrder.order_status);
+    const existingRequestStatus = String(currentOrder.return_refund_status || 'none').toLowerCase();
+    if (!['delivered', 'completed'].includes(currentStatus)) {
+      return res.status(400).json({ error: 'Return or refund requests are available after the order is delivered or completed.' });
+    }
+
+    if (existingRequestStatus !== 'none') {
+      return res.status(409).json({ error: 'This order already has a return or refund request.' });
+    }
+
+    const requestType = normalizeReturnRefundType(req.body?.request_type || req.body?.requestType);
+    const reason = String(req.body?.reason || '').trim();
+    const customerMessage = String(req.body?.customer_message || req.body?.customerMessage || '').trim();
+    const evidenceImageDataUrl = validateReceiptImageDataUrl(
+      req.body?.evidence_image_data_url
+      || req.body?.evidenceImageDataUrl
+      || req.body?.image_data_url
+      || '',
+    );
+    if (!reason) {
+      return res.status(400).json({ error: 'Select or enter a reason for the return or refund request.' });
+    }
+
+    const now = new Date().toISOString();
+    const history = [buildReturnRefundHistoryEntry({
+      status: 'pending',
+      actorId: req.authUser.id,
+      actorRole: role || 'customer',
+      note: reason,
+      at: now,
+    })];
+    const { data: request, error: requestError } = await supabase
+      .from('return_refund_requests')
+      .insert({
+        order_id: currentOrder.id,
+        user_id: currentOrder.user_id,
+        request_type: requestType,
+        reason,
+        customer_message: customerMessage || null,
+        evidence_image_url: evidenceImageDataUrl,
+        status: 'pending',
+        status_history: history,
+      })
+      .select('*')
+      .single();
+
+    if (requestError) {
+      throw requestError;
+    }
+
+    const requestLabel = requestType === 'return' ? 'return' : 'refund';
+    const notifications = [
+      ...normalizeNotifications(currentOrder.notifications || []),
+      buildNotificationEntry('customer', 'return_refund_requested', `Your ${requestLabel} request for Order ${currentOrder.order_code || currentOrder.id} is pending review.`),
+      buildNotificationEntry('admin_staff', 'return_refund_requested', `New ${requestLabel} request received for Order ${currentOrder.order_code || currentOrder.id}.`),
+    ];
+    const updatedOrder = await updateOrderRecord(supabase, currentOrder.id, {
+      return_refund_status: 'pending',
+      return_refund_request_id: request.id,
+      notifications,
+    });
+
+    res.status(201).json({
+      request: mapReturnRefundRequest(request),
+      order: mapOrder(updatedOrder),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.patch('/return-refund-requests/:requestId', requireAuth, requireRole('admin', 'staff'), async (req, res, next) => {
+  try {
+    const nextStatusRaw = String(req.body?.status || '').trim().toLowerCase();
+    if (!RETURN_REFUND_STATUSES.includes(nextStatusRaw)) {
+      return res.status(400).json({ error: 'status must be pending, approved, processing, refunded, completed, or rejected.' });
+    }
+
+    const supabase = getSupabaseAdmin();
+    const { data: currentRequest, error: requestError } = await supabase
+      .from('return_refund_requests')
+      .select('*')
+      .eq('id', req.params.requestId)
+      .maybeSingle();
+    if (requestError) {
+      throw requestError;
+    }
+    if (!currentRequest) {
+      return res.status(404).json({ error: 'Return or refund request not found.' });
+    }
+
+    const currentStatus = normalizeReturnRefundStatus(currentRequest.status);
+    const nextStatus = normalizeReturnRefundStatus(nextStatusRaw);
+    const reason = String(req.body?.reason || req.body?.rejection_reason || '').trim();
+    if (nextStatus === 'rejected' && !reason) {
+      return res.status(400).json({ error: 'A rejection reason is required.' });
+    }
+    if (!isValidReturnRefundTransition(currentStatus, nextStatus)) {
+      return res.status(409).json({ error: `This request cannot move from ${currentStatus} to ${nextStatus}.` });
+    }
+
+    const now = new Date().toISOString();
+    const timestampFields = {
+      approved: 'approved_at',
+      processing: 'processing_at',
+      refunded: 'refunded_at',
+      completed: 'completed_at',
+      rejected: 'rejected_at',
+    };
+    const history = [
+      ...(Array.isArray(currentRequest.status_history) ? currentRequest.status_history : []),
+      buildReturnRefundHistoryEntry({
+        status: nextStatus,
+        actorId: req.authUser.id,
+        actorRole: req.profile?.role || 'staff',
+        note: reason,
+        at: now,
+      }),
+    ];
+    const { data: updatedRequest, error: updateRequestError } = await supabase
+      .from('return_refund_requests')
+      .update({
+        status: nextStatus,
+        rejection_reason: nextStatus === 'rejected' ? reason : currentRequest.rejection_reason,
+        [timestampFields[nextStatus]]: now,
+        status_history: history,
+      })
+      .eq('id', currentRequest.id)
+      .select('*')
+      .single();
+    if (updateRequestError) {
+      throw updateRequestError;
+    }
+
+    const currentOrder = await fetchOrderById(supabase, currentRequest.order_id);
+    const requestLabel = currentRequest.request_type === 'return' ? 'return' : 'refund';
+    const statusText = nextStatus === 'rejected'
+      ? `${requestLabel} request was rejected. Reason: ${reason}.`
+      : `${requestLabel} request is now ${nextStatus}.`;
+    const statusTimestamps = normalizeStatusTimestamps(currentOrder.status_timestamps || {});
+    if (nextStatus === 'refunded') {
+      statusTimestamps.refunded = now;
+    }
+    const notifications = [
+      ...normalizeNotifications(currentOrder.notifications || []),
+      buildNotificationEntry('customer', `return_refund_${nextStatus}`, `Your ${statusText}`),
+      buildNotificationEntry('admin_staff', `return_refund_${nextStatus}`, `Order ${currentOrder.order_code || currentOrder.id}: ${statusText}`),
+    ];
+    const updatedOrder = await updateOrderRecord(supabase, currentOrder.id, {
+      return_refund_status: nextStatus,
+      return_refund_request_id: currentRequest.id,
+      order_status: ['refunded', 'completed'].includes(nextStatus) ? 'refunded' : currentOrder.order_status,
+      status_timestamps: statusTimestamps,
+      notifications,
+    });
+
+    res.json({
+      request: mapReturnRefundRequest(updatedRequest),
+      order: mapOrder(updatedOrder),
+    });
   } catch (error) {
     next(error);
   }

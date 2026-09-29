@@ -482,3 +482,21 @@
     color: #000 !important;
   }
 }
+/* Screen receipts reflow item values while preserving the printable table. */
+@media screen and (max-width: 600px) {
+  .receipt-shell .receipt-card { min-width: 0; padding: .875rem; }
+  .receipt-shell .receipt-brand { flex-wrap: wrap; gap: .75rem; }
+  .receipt-shell .receipt-brand-copy { min-width: 0; overflow-wrap: anywhere; }
+  .receipt-shell .receipt-brand-copy h2 { font-size: 1.25rem; }
+  .receipt-shell .receipt-status-badge { max-width: 100%; white-space: normal; text-align: center; }
+  .receipt-shell .receipt-items-panel { min-width: 0; padding: .75rem; }
+  .receipt-shell .receipt-card .receipt-table-head { display: none; }
+  .receipt-shell .receipt-card .receipt-table-row { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .5rem; }
+  .receipt-shell .receipt-card .receipt-cell { min-width: 0; overflow-wrap: anywhere; font-size: .875rem; text-align: left; }
+  .receipt-shell .receipt-cell--description { grid-column: 1 / -1; grid-row: 1; }
+  .receipt-shell .receipt-cell--qty { grid-column: 1 / -1; grid-row: 2; }
+  .receipt-shell .receipt-cell--qty::before { content: 'Quantity: '; color: #64748b; }
+  .receipt-shell .receipt-cell--amount:nth-child(3)::before { content: 'Each '; color: #64748b; }
+  .receipt-shell .receipt-cell--amount:nth-child(4)::before { content: 'Total '; color: #64748b; }
+  .receipt-shell .receipt-summary-row { flex-wrap: wrap; gap: .4rem .75rem; }
+}

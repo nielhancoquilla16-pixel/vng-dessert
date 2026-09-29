@@ -1,45 +1,165 @@
-import React, { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import React, { useEffect, useRef, useState } from 'react';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import LoadingButton from '../components/LoadingButton';
+import LocationPinPicker from '../components/LocationPinPicker';
 import { useCart } from '../context/CartContext';
 import { useAuth } from '../context/AuthContext';
 import { useOrders } from '../context/OrderContext';
 import { useProducts } from '../context/ProductContext';
+import { useCustomerAddresses } from '../context/CustomerAddressesContext';
+import { useShopSettings } from '../context/ShopSettingsContext';
 import { apiRequest } from '../lib/api';
-import { CreditCard, Banknote, MapPin, Store, Truck } from 'lucide-react';
+import { CreditCard, Banknote, Store, Truck } from 'lucide-react';
+import {
+  ADDRESS_PIN_ERROR,
+  buildDeliveryAddressText,
+  isValidLocation,
+} from '../lib/deliveryLocation';
 import { hasLecheFlanItems } from '../utils/orderWorkflow';
+import { isWithinOperatingHours } from '../utils/shopHours';
+import { formatCurrency, formatCurrencyText } from '../utils/currency';
 import './Checkout.css';
 
 const DELIVERY_FEE = 50;
 
+const applySavedAddressToForm = (current, savedAddress) => ({
+  ...current,
+  fullName: current.fullName || savedAddress.recipientName,
+  phone: savedAddress.phoneNumber || current.phone,
+  address: savedAddress.formattedAddress,
+  deliveryAddressId: savedAddress.id,
+  deliveryRecipientName: savedAddress.recipientName,
+  deliveryContactNumber: savedAddress.phoneNumber,
+  deliveryStreetAddress: savedAddress.streetAddress,
+  deliveryBarangay: savedAddress.barangay,
+  deliveryCity: savedAddress.city,
+  deliveryProvince: savedAddress.province,
+  deliveryPostalCode: savedAddress.postalCode,
+  deliveryFormattedAddress: savedAddress.formattedAddress,
+  deliveryPlaceId: savedAddress.placeId,
+  deliveryLatitude: savedAddress.latitude ?? '',
+  deliveryLongitude: savedAddress.longitude ?? '',
+});
+
+const getSavedDeliveryAddress = (savedAddress) => {
+  const address = savedAddress.formattedAddress || buildDeliveryAddressText(savedAddress);
+
+  return {
+    recipientName: savedAddress.recipientName || '',
+    contactNumber: savedAddress.phoneNumber || '',
+    streetAddress: savedAddress.streetAddress || '',
+    barangay: savedAddress.barangay || '',
+    city: savedAddress.city || '',
+    province: savedAddress.province || '',
+    postalCode: savedAddress.postalCode || '',
+    formattedAddress: savedAddress.formattedAddress || address,
+    address,
+    placeId: savedAddress.placeId || '',
+    latitude: savedAddress.latitude ?? '',
+    longitude: savedAddress.longitude ?? '',
+  };
+};
+
 const Checkout = () => {
-  const { cartItems, clearCart } = useCart();
+  const { cartItems: allCartItems, removeFromCart } = useCart();
+  const location = useLocation();
+  const selectedCartIds = location.state?.selectedCartIds;
+  const cartItems = Array.isArray(selectedCartIds)
+    ? allCartItems.filter((item) => selectedCartIds.includes(item.id))
+    : allCartItems;
   const { loggedInCustomer, updateLoggedInCustomer } = useAuth();
   const { addOrder, refreshOrders } = useOrders();
   const { validateStockAvailability, refreshProducts } = useProducts();
+  const { shopSettings, isShopOpen, isShopSettingsLoading, shopSettingsError, operatingHoursLabel, refreshShopSettings } = useShopSettings();
+  const canCheckout = isShopOpen && !isShopSettingsLoading && !shopSettingsError;
+  const {
+    addresses,
+    defaultAddress,
+    isAddressesLoading,
+    hasLoadedAddresses,
+    createAddress,
+  } = useCustomerAddresses();
   const navigate = useNavigate();
 
   const [formData, setFormData] = useState({
     fullName: loggedInCustomer?.fullName || loggedInCustomer?.username || '',
-    phone: '',
-    address: '',
+    phone: loggedInCustomer?.phoneNumber || '',
+    address: loggedInCustomer?.address || '',
     deliveryMethod: 'delivery',
     paymentMethod: 'online',
+    deliveryAddressId: '',
     deliveryDistanceKm: '',
+    deliveryRecipientName: loggedInCustomer?.fullName || loggedInCustomer?.username || '',
+    deliveryContactNumber: loggedInCustomer?.phoneNumber || '',
+    deliveryStreetAddress: '',
+    deliveryBarangay: '',
+    deliveryCity: '',
+    deliveryProvince: '',
+    deliveryPostalCode: '',
+    deliveryFormattedAddress: loggedInCustomer?.address || '',
+    deliveryPlaceId: '',
+    deliveryLatitude: '',
+    deliveryLongitude: '',
+    deliveryInstructions: '',
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState('');
+  const [addressStatus, setAddressStatus] = useState('');
+  const [isSavingDeliveryAddress, setIsSavingDeliveryAddress] = useState(false);
+  const [saveAddressAsDefault, setSaveAddressAsDefault] = useState(false);
+  const [savedAddressNotice, setSavedAddressNotice] = useState('');
   const [isPaymentStatusLoading, setIsPaymentStatusLoading] = useState(true);
   const [paymentStatus, setPaymentStatus] = useState({
     configured: false,
     paymentMethodTypes: [],
   });
+  const hasHydratedDefaultAddressRef = useRef(false);
+  const hasManualDeliveryAddressChangeRef = useRef(false);
+  const checkoutCompletedRef = useRef(false);
 
   useEffect(() => {
-    if (cartItems.length === 0 && !isSubmitting) {
+    if (cartItems.length === 0 && !isSubmitting && !checkoutCompletedRef.current) {
       navigate('/cart');
     }
   }, [cartItems, navigate, isSubmitting]);
+
+  useEffect(() => {
+    if (!loggedInCustomer) {
+      return;
+    }
+
+    setFormData((current) => ({
+      ...current,
+      fullName: current.fullName || loggedInCustomer.fullName || loggedInCustomer.username || '',
+      phone: current.phone || loggedInCustomer.phoneNumber || '',
+      address: current.address || loggedInCustomer.address || '',
+      deliveryRecipientName: current.deliveryRecipientName || loggedInCustomer.fullName || loggedInCustomer.username || '',
+      deliveryContactNumber: current.deliveryContactNumber || loggedInCustomer.phoneNumber || '',
+      deliveryFormattedAddress: current.deliveryFormattedAddress || loggedInCustomer.address || '',
+    }));
+  }, [loggedInCustomer]);
+
+  useEffect(() => {
+    hasHydratedDefaultAddressRef.current = false;
+    hasManualDeliveryAddressChangeRef.current = false;
+    setSavedAddressNotice('');
+  }, [loggedInCustomer?.id]);
+
+  useEffect(() => {
+    if (
+      !hasLoadedAddresses
+      || isAddressesLoading
+      || !defaultAddress
+      || hasHydratedDefaultAddressRef.current
+      || hasManualDeliveryAddressChangeRef.current
+    ) {
+      return;
+    }
+
+    setFormData((current) => applySavedAddressToForm(current, defaultAddress));
+    setAddressStatus('');
+    hasHydratedDefaultAddressRef.current = true;
+  }, [defaultAddress, hasLoadedAddresses, isAddressesLoading]);
 
   useEffect(() => {
     let isActive = true;
@@ -91,26 +211,223 @@ const Checkout = () => {
   const total = subtotal + deliveryFee;
   const containsLecheFlan = hasLecheFlanItems(cartItems);
   const deliveryDistance = Number(formData.deliveryDistanceKm);
+  const deliveryAddress = {
+    recipientName: formData.deliveryRecipientName.trim(),
+    contactNumber: formData.deliveryContactNumber.trim(),
+    streetAddress: formData.deliveryStreetAddress.trim(),
+    barangay: formData.deliveryBarangay.trim(),
+    city: formData.deliveryCity.trim(),
+    province: formData.deliveryProvince.trim(),
+    postalCode: formData.deliveryPostalCode.trim(),
+    formattedAddress: formData.deliveryFormattedAddress.trim(),
+    address: formData.deliveryFormattedAddress.trim() || formData.address.trim() || buildDeliveryAddressText({
+      streetAddress: formData.deliveryStreetAddress,
+      barangay: formData.deliveryBarangay,
+      city: formData.deliveryCity,
+      province: formData.deliveryProvince,
+      postalCode: formData.deliveryPostalCode,
+    }),
+    placeId: formData.deliveryPlaceId,
+    latitude: formData.deliveryLatitude,
+    longitude: formData.deliveryLongitude,
+  };
+  const selectedSavedAddress = formData.deliveryAddressId
+    ? addresses.find((address) => address.id === formData.deliveryAddressId) || null
+    : null;
+  const hasSelectedSavedAddress = Boolean(selectedSavedAddress);
+  const selectedDeliveryAddress = selectedSavedAddress
+    ? getSavedDeliveryAddress(selectedSavedAddress)
+    : null;
   const isLecheFlanRestricted = formData.deliveryMethod === 'delivery'
     && containsLecheFlan
     && Number.isFinite(deliveryDistance)
     && deliveryDistance > 3;
 
   const handleChange = (e) => {
+    const { name, value } = e.target;
+    const changesDeliveryRecipient = ['deliveryRecipientName', 'deliveryContactNumber'].includes(name);
+
+    if (changesDeliveryRecipient) {
+      hasManualDeliveryAddressChangeRef.current = true;
+      setSavedAddressNotice('');
+    }
+
     setFormData((current) => ({
       ...current,
-      [e.target.name]: e.target.value,
+      [name]: value,
+      ...(changesDeliveryRecipient ? { deliveryAddressId: '' } : {}),
     }));
+  };
+
+  const handleDeliveryAddressFieldChange = (e) => {
+    const { name, value } = e.target;
+    hasManualDeliveryAddressChangeRef.current = true;
+    setSavedAddressNotice('');
+
+    setFormData((current) => {
+      const next = {
+        ...current,
+        [name]: value,
+        deliveryAddressId: '',
+        deliveryFormattedAddress: '',
+        deliveryPlaceId: '',
+        deliveryLatitude: '',
+        deliveryLongitude: '',
+      };
+      const nextAddress = buildDeliveryAddressText({
+        streetAddress: next.deliveryStreetAddress,
+        barangay: next.deliveryBarangay,
+        city: next.deliveryCity,
+        province: next.deliveryProvince,
+        postalCode: next.deliveryPostalCode,
+      });
+
+      return {
+        ...next,
+        address: nextAddress,
+        deliveryFormattedAddress: nextAddress,
+      };
+    });
+    setSubmitError('');
+    setAddressStatus('Address changed. Select the matching delivery pin on the map again.');
+  };
+
+  const handleDeliveryPinChange = ({ latitude, longitude }) => {
+    hasManualDeliveryAddressChangeRef.current = true;
+    setSavedAddressNotice('');
+    setSubmitError('');
+    setFormData((current) => {
+      const nextAddress = buildDeliveryAddressText({
+        streetAddress: current.deliveryStreetAddress,
+        barangay: current.deliveryBarangay,
+        city: current.deliveryCity,
+        province: current.deliveryProvince,
+        postalCode: current.deliveryPostalCode,
+      });
+      return {
+        ...current,
+        address: nextAddress,
+        deliveryAddressId: '',
+        deliveryFormattedAddress: nextAddress,
+        deliveryPlaceId: '',
+        deliveryLatitude: latitude,
+        deliveryLongitude: longitude,
+      };
+    });
+    setAddressStatus(isValidLocation({ latitude, longitude })
+      ? 'Delivery pin selected. Check that it matches your complete address.'
+      : ADDRESS_PIN_ERROR);
+  };
+
+  const handleSelectSavedAddress = (selectedAddress) => {
+    hasHydratedDefaultAddressRef.current = true;
+    hasManualDeliveryAddressChangeRef.current = true;
+    setSubmitError('');
+    setAddressStatus('');
+    setSavedAddressNotice('');
+    setFormData((current) => applySavedAddressToForm(current, selectedAddress));
+  };
+
+  const handleSaveDeliveryAddress = async () => {
+    setSubmitError('');
+    setSavedAddressNotice('');
+
+    if (!loggedInCustomer) {
+      setSubmitError('Please log in first before saving a delivery address.');
+      return;
+    }
+
+    if (!hasLoadedAddresses || isAddressesLoading) {
+      setSubmitError('Your saved delivery addresses are still loading. Please wait a moment and try again.');
+      return;
+    }
+
+    if (!deliveryAddress.recipientName || !deliveryAddress.contactNumber) {
+      setSubmitError('Recipient name and contact number are required before saving an address.');
+      return;
+    }
+
+    if (!deliveryAddress.streetAddress || !deliveryAddress.city || !deliveryAddress.province) {
+      setSubmitError('Street address, city/municipality, and province are required before saving an address.');
+      return;
+    }
+
+    if (!isValidLocation(deliveryAddress)) {
+      setSubmitError(ADDRESS_PIN_ERROR);
+      return;
+    }
+
+    setIsSavingDeliveryAddress(true);
+    try {
+      const savedAddress = await createAddress({
+        label: 'Home',
+        recipientName: deliveryAddress.recipientName,
+        phoneNumber: deliveryAddress.contactNumber,
+        streetAddress: deliveryAddress.streetAddress,
+        barangay: deliveryAddress.barangay,
+        city: deliveryAddress.city,
+        province: deliveryAddress.province,
+        postalCode: deliveryAddress.postalCode,
+        formattedAddress: deliveryAddress.formattedAddress || deliveryAddress.address,
+        placeId: deliveryAddress.placeId,
+        latitude: deliveryAddress.latitude,
+        longitude: deliveryAddress.longitude,
+        isDefault: addresses.length === 0 || saveAddressAsDefault,
+      });
+
+      hasHydratedDefaultAddressRef.current = true;
+      hasManualDeliveryAddressChangeRef.current = false;
+      setFormData((current) => applySavedAddressToForm(current, savedAddress));
+      setSaveAddressAsDefault(Boolean(savedAddress.isDefault));
+      setSavedAddressNotice(savedAddress.isDefault
+        ? 'Delivery address saved as your default for future orders.'
+        : 'Delivery address saved. It is selected for this order.');
+    } catch (error) {
+      setSubmitError(error.message || 'Unable to save the delivery address right now.');
+    } finally {
+      setIsSavingDeliveryAddress(false);
+    }
   };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    if (isSubmitting) return;
     setIsSubmitting(true);
     setSubmitError('');
 
     try {
       if (!loggedInCustomer) {
         throw new Error('Please log in first before checking out.');
+      }
+
+      const latestShopSettings = await refreshShopSettings();
+      const shopReferenceTime = latestShopSettings.serverTime
+        ? new Date(latestShopSettings.serverTime)
+        : undefined;
+      if (!isWithinOperatingHours(latestShopSettings, shopReferenceTime)) {
+        throw new Error('The shop is closed for orders. Your cart is saved; please return during our ordering hours.');
+      }
+
+      const checkoutDeliveryAddress = selectedDeliveryAddress || deliveryAddress;
+      const checkoutDeliveryLatitude = Number(checkoutDeliveryAddress.latitude);
+      const checkoutDeliveryLongitude = Number(checkoutDeliveryAddress.longitude);
+
+      if (formData.deliveryMethod === 'delivery') {
+        if (!hasLoadedAddresses || isAddressesLoading) {
+          throw new Error('Your saved delivery address is still loading. Please wait a moment and try again.');
+        }
+
+        if (!checkoutDeliveryAddress.recipientName || !checkoutDeliveryAddress.contactNumber) {
+          throw new Error('Recipient name and contact number are required before booking delivery.');
+        }
+
+        if (!checkoutDeliveryAddress.streetAddress || !checkoutDeliveryAddress.city || !checkoutDeliveryAddress.province) {
+          throw new Error('Street address, city/municipality, and province are required before booking delivery.');
+        }
+
+        if (!isValidLocation(checkoutDeliveryAddress)) {
+          throw new Error(ADDRESS_PIN_ERROR);
+        }
       }
 
       if (formData.deliveryMethod === 'delivery' && containsLecheFlan && (!Number.isFinite(deliveryDistance) || deliveryDistance <= 0)) {
@@ -126,8 +443,10 @@ const Checkout = () => {
       if (submittedFullName) {
         await updateLoggedInCustomer({
           fullName: submittedFullName,
-          address: formData.address.trim(),
           phoneNumber: formData.phone.trim(),
+          ...(hasSelectedSavedAddress
+            ? {}
+            : { address: formData.deliveryMethod === 'delivery' ? checkoutDeliveryAddress.address : formData.address.trim() }),
         });
       }
 
@@ -148,13 +467,15 @@ const Checkout = () => {
           .join(', ');
 
         setSubmitError(`Not enough stock for: ${shortageSummary}. Please update your cart and try again.`);
-        setIsSubmitting(false);
         return;
       }
 
+      const selectedAddressId = hasSelectedSavedAddress ? formData.deliveryAddressId : '';
+      const isDeliveryOrder = formData.deliveryMethod === 'delivery';
+
       if (formData.paymentMethod === 'online') {
         if (!paymentStatus.configured) {
-          throw new Error('Online payment is not configured yet. Switch to cash for now, or add the PayMongo keys and restart the backend.');
+          throw new Error('Error 503: Online payment is temporarily unavailable. Please choose cash or try again later.');
         }
 
         const checkoutSession = await apiRequest('/api/payments/checkout-sessions', {
@@ -162,10 +483,27 @@ const Checkout = () => {
           body: JSON.stringify({
             customerName: submittedFullName || loggedInCustomer.username || 'Customer',
             phoneNumber: formData.phone.trim(),
-            address: formData.address.trim(),
+            address: isDeliveryOrder ? checkoutDeliveryAddress.address : formData.address.trim(),
             deliveryMethod: formData.deliveryMethod,
             paymentMethod: 'online',
-            deliveryDistanceKm: formData.deliveryMethod === 'delivery' ? deliveryDistance : null,
+            deliveryAddressId: isDeliveryOrder ? selectedAddressId : '',
+            deliveryDistanceKm: isDeliveryOrder ? deliveryDistance : null,
+            deliveryLatitude: isDeliveryOrder && Number.isFinite(checkoutDeliveryLatitude)
+              ? checkoutDeliveryLatitude
+              : null,
+            deliveryLongitude: isDeliveryOrder && Number.isFinite(checkoutDeliveryLongitude)
+              ? checkoutDeliveryLongitude
+              : null,
+            deliveryRecipientName: isDeliveryOrder ? checkoutDeliveryAddress.recipientName : '',
+            deliveryContactNumber: isDeliveryOrder ? checkoutDeliveryAddress.contactNumber : '',
+            deliveryStreetAddress: isDeliveryOrder ? checkoutDeliveryAddress.streetAddress : '',
+            deliveryBarangay: isDeliveryOrder ? checkoutDeliveryAddress.barangay : '',
+            deliveryCity: isDeliveryOrder ? checkoutDeliveryAddress.city : '',
+            deliveryProvince: isDeliveryOrder ? checkoutDeliveryAddress.province : '',
+            deliveryPostalCode: isDeliveryOrder ? checkoutDeliveryAddress.postalCode : '',
+            deliveryFormattedAddress: isDeliveryOrder ? checkoutDeliveryAddress.formattedAddress || checkoutDeliveryAddress.address : '',
+            deliveryPlaceId: isDeliveryOrder ? checkoutDeliveryAddress.placeId : '',
+            deliveryInstructions: formData.deliveryInstructions.trim(),
             lineItems,
           }),
         }, {
@@ -180,8 +518,11 @@ const Checkout = () => {
           throw new Error('PayMongo did not return a checkout reference.');
         }
 
-        await clearCart();
+        for (const item of cartItems) {
+          await removeFromCart(item.id);
+        }
         void refreshOrders();
+        checkoutCompletedRef.current = true;
         navigate(`/checkout/paymongo/success?reference=${encodeURIComponent(checkoutSession.referenceNumber)}&stage=payment-selection`);
         return;
       }
@@ -190,23 +531,41 @@ const Checkout = () => {
         customer: submittedFullName || (loggedInCustomer ? loggedInCustomer.username : 'Guest'),
         customerUsername: loggedInCustomer?.username || '',
         phoneNumber: formData.phone,
-        address: formData.address,
-        subtext: formData.deliveryMethod === 'delivery'
-          ? formData.address
-          : 'Pick-up / Pay at Store',
+        address: isDeliveryOrder ? checkoutDeliveryAddress.address : formData.address,
+        subtext: isDeliveryOrder ? checkoutDeliveryAddress.address : 'Pick-up / Pay at Store',
         lineItems,
         totalAmount: total,
         total: `PHP ${total.toFixed(2)}`,
         paymentMethod: formData.paymentMethod,
         deliveryMethod: formData.deliveryMethod,
-        status: 'confirmed',
-        deliveryDistanceKm: formData.deliveryMethod === 'delivery' && Number.isFinite(deliveryDistance)
-          ? deliveryDistance
+        deliveryAddressId: isDeliveryOrder ? selectedAddressId : '',
+        status: isDeliveryOrder && formData.paymentMethod === 'cash' ? 'pending' : 'confirmed',
+        deliveryDistanceKm: isDeliveryOrder && Number.isFinite(deliveryDistance) ? deliveryDistance : null,
+        deliveryLatitude: isDeliveryOrder && Number.isFinite(checkoutDeliveryLatitude)
+          ? checkoutDeliveryLatitude
           : null,
+        deliveryLongitude: isDeliveryOrder && Number.isFinite(checkoutDeliveryLongitude)
+          ? checkoutDeliveryLongitude
+          : null,
+        deliveryRecipientName: isDeliveryOrder ? checkoutDeliveryAddress.recipientName : '',
+        deliveryContactNumber: isDeliveryOrder ? checkoutDeliveryAddress.contactNumber : '',
+        deliveryStreetAddress: isDeliveryOrder ? checkoutDeliveryAddress.streetAddress : '',
+        deliveryBarangay: isDeliveryOrder ? checkoutDeliveryAddress.barangay : '',
+        deliveryCity: isDeliveryOrder ? checkoutDeliveryAddress.city : '',
+        deliveryProvince: isDeliveryOrder ? checkoutDeliveryAddress.province : '',
+        deliveryPostalCode: isDeliveryOrder ? checkoutDeliveryAddress.postalCode : '',
+        deliveryFormattedAddress: isDeliveryOrder ? checkoutDeliveryAddress.formattedAddress || checkoutDeliveryAddress.address : '',
+        deliveryPlaceId: isDeliveryOrder ? checkoutDeliveryAddress.placeId : '',
+        deliveryInstructions: formData.deliveryInstructions.trim(),
       });
 
       await refreshProducts();
-      await clearCart();
+      for (const item of cartItems) {
+        await removeFromCart(item.id);
+      }
+      // Cart cleanup must not redirect a completed checkout back to an empty cart
+      // while React Router is transitioning to the order confirmation page.
+      checkoutCompletedRef.current = true;
       navigate('/orders');
     } catch (error) {
       const shortageItems = error?.details?.shortages;
@@ -226,13 +585,16 @@ const Checkout = () => {
 
   return (
     <div className="checkout-container">
-      <div className="page-header" style={{ background: '#fef08a', padding: '2rem', borderRadius: '1rem', marginBottom: '2rem' }}>
-        <h1 className="page-title">Checkout</h1>
-        <p className="page-subtitle">Complete your order details below.</p>
+      <div className="checkout-page-heading">
+        <Link to="/cart" className="checkout-back-link">← Back to cart</Link>
+        <h1>Checkout</h1>
+        <p>Just a few details, then your treats are on their way.</p>
+        <p>Ordering hours: {operatingHoursLabel}.</p>
+        {!canCheckout && <p role="status">{isShopSettingsLoading ? 'Checking shop hours…' : shopSettingsError ? 'We cannot confirm shop hours right now. Please try again shortly.' : 'The shop is closed for orders. Your cart is saved for later.'}</p>}
       </div>
 
       <div className="checkout-content">
-        <form className="checkout-form" onSubmit={handleSubmit}>
+        <form id="customer-checkout-form" className="checkout-form" onSubmit={handleSubmit}>
           {submitError && (
             <div
               style={{
@@ -247,7 +609,7 @@ const Checkout = () => {
                 fontWeight: 600,
               }}
             >
-              {submitError}
+              {formatCurrencyText(submitError)}
             </div>
           )}
 
@@ -264,17 +626,19 @@ const Checkout = () => {
                 lineHeight: 1.6,
               }}
             >
-              Online payment is currently unavailable. Cash checkout still works, or you can add PayMongo to the backend and restart the server.
+              Online payment is currently unavailable. You can pay with cash when your order arrives or at pick-up.
             </div>
           )}
 
           <div className="form-section">
             <h2 className="section-title">1. Contact Information</h2>
             <div className="form-group">
-              <label>Full Name</label>
+              <label htmlFor="checkout-fullName">Full Name</label>
               <input
                 type="text"
-                name="fullName"
+                id="checkout-fullName"
+                  autoComplete="name"
+                  name="fullName"
                 className="text-input"
                 value={formData.fullName}
                 onChange={handleChange}
@@ -283,10 +647,12 @@ const Checkout = () => {
               />
             </div>
             <div className="form-group">
-              <label>Contact Number</label>
+              <label htmlFor="checkout-phone">Contact Number</label>
               <input
                 type="text"
-                name="phone"
+                id="checkout-phone"
+                  autoComplete="tel"
+                  name="phone"
                 className="text-input"
                 value={formData.phone}
                 onChange={handleChange}
@@ -306,12 +672,12 @@ const Checkout = () => {
                   value="delivery"
                   checked={formData.deliveryMethod === 'delivery'}
                   onChange={handleChange}
-                  style={{ display: 'none' }}
+                  className="checkout-method-radio"
                 />
                 <Truck size={24} className="method-icon" />
                 <div className="method-details">
                   <span className="method-name">Delivery</span>
-                  <span className="method-desc">We deliver to your door (+PHP 50.00)</span>
+                  <span className="method-desc">We deliver to your door</span>
                 </div>
               </label>
 
@@ -322,7 +688,7 @@ const Checkout = () => {
                   value="pickup"
                   checked={formData.deliveryMethod === 'pickup'}
                   onChange={handleChange}
-                  style={{ display: 'none' }}
+                  className="checkout-method-radio"
                 />
                 <Store size={24} className="method-icon" />
                 <div className="method-details">
@@ -335,28 +701,195 @@ const Checkout = () => {
 
           {formData.deliveryMethod === 'delivery' && (
             <div className="form-section">
-              <h2 className="section-title">Delivery Address</h2>
-              <div className="form-group">
-                <label>Complete Address</label>
-                <div className="input-with-icon">
-                  <MapPin size={20} className="input-icon" style={{ top: '1rem', transform: 'none' }} />
-                  <textarea
-                    name="address"
+              <h2 className="section-title">Delivery address</h2>
+              <div className="checkout-saved-addresses">
+                <div className="checkout-saved-addresses-heading">
+                  <div>
+                    <strong>Saved Delivery Addresses</strong>
+                  </div>
+                  <button type="button" className="checkout-manage-addresses" onClick={() => navigate('/profile')}>
+                    Manage
+                  </button>
+                </div>
+
+                {!hasLoadedAddresses || isAddressesLoading ? (
+                  <p className="checkout-saved-addresses-empty">Loading saved addresses...</p>
+                ) : addresses.length === 0 ? (
+                  <p className="checkout-saved-addresses-empty">Save the completed address below to use it automatically on future orders.</p>
+                ) : (
+                  <div className="checkout-saved-address-grid">
+                    {addresses.map((savedAddress) => (
+                      <button
+                        key={savedAddress.id}
+                        type="button"
+                        className={`checkout-saved-address-card ${formData.deliveryAddressId === savedAddress.id ? 'is-selected' : ''}`}
+                        onClick={() => handleSelectSavedAddress(savedAddress)}
+                      >
+                        <span className="checkout-saved-address-card-topline">
+                          <strong>{savedAddress.label}</strong>
+                          {savedAddress.isDefault && <em>Default</em>}
+                        </span>
+                        <span>{savedAddress.recipientName}</span>
+                        <small>{savedAddress.phoneNumber}</small>
+                        <small>{savedAddress.formattedAddress}</small>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="checkout-address-grid">
+                <div className="form-group">
+                  <label htmlFor="checkout-deliveryRecipientName">Recipient Name</label>
+                  <input
+                    type="text"
+                    id="checkout-deliveryRecipientName"
+                  autoComplete="shipping name"
+                  name="deliveryRecipientName"
                     className="text-input"
-                    value={formData.address}
+                    value={formData.deliveryRecipientName}
                     onChange={handleChange}
-                    required
-                    placeholder="House/Unit No., Street, Barangay, City"
-                    style={{ paddingLeft: '3rem', minHeight: '80px', paddingTop: '1rem' }}
-                  ></textarea>
+                    required={!hasSelectedSavedAddress}
+                    placeholder="Juan Dela Cruz"
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label htmlFor="checkout-deliveryContactNumber">Contact Number</label>
+                  <input
+                    type="tel"
+                    id="checkout-deliveryContactNumber"
+                  autoComplete="shipping tel"
+                  name="deliveryContactNumber"
+                    className="text-input"
+                    value={formData.deliveryContactNumber}
+                    onChange={handleChange}
+                    required={!hasSelectedSavedAddress}
+                    placeholder="09123456789"
+                  />
+                </div>
+
+                <div className="form-group checkout-address-grid-wide">
+                  <label htmlFor="checkout-deliveryStreetAddress">Street Address</label>
+                  <input
+                    type="text"
+                    id="checkout-deliveryStreetAddress"
+                  autoComplete="shipping address-line1"
+                  name="deliveryStreetAddress"
+                    className="text-input"
+                    value={formData.deliveryStreetAddress}
+                    onChange={handleDeliveryAddressFieldChange}
+                    required={!hasSelectedSavedAddress}
+                    placeholder="House/unit number and street"
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label htmlFor="checkout-deliveryBarangay">Barangay (optional)</label>
+                  <input
+                    type="text"
+                    id="checkout-deliveryBarangay"
+                  autoComplete="shipping address-line2"
+                  name="deliveryBarangay"
+                    className="text-input"
+                    value={formData.deliveryBarangay}
+                    onChange={handleDeliveryAddressFieldChange}
+                    placeholder="Barangay"
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label htmlFor="checkout-deliveryCity">City/Municipality</label>
+                  <input
+                    type="text"
+                    id="checkout-deliveryCity"
+                  autoComplete="shipping address-level2"
+                  name="deliveryCity"
+                    className="text-input"
+                    value={formData.deliveryCity}
+                    onChange={handleDeliveryAddressFieldChange}
+                    required={!hasSelectedSavedAddress}
+                    placeholder="City or municipality"
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label htmlFor="checkout-deliveryProvince">Province</label>
+                  <input
+                    type="text"
+                    id="checkout-deliveryProvince"
+                  autoComplete="shipping address-level1"
+                  name="deliveryProvince"
+                    className="text-input"
+                    value={formData.deliveryProvince}
+                    onChange={handleDeliveryAddressFieldChange}
+                    required={!hasSelectedSavedAddress}
+                    placeholder="Province"
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label htmlFor="checkout-deliveryPostalCode">ZIP/Postal Code (optional)</label>
+                  <input
+                    type="text"
+                    id="checkout-deliveryPostalCode"
+                  autoComplete="shipping postal-code"
+                  name="deliveryPostalCode"
+                    inputMode="numeric"
+                    className="text-input"
+                    value={formData.deliveryPostalCode}
+                    onChange={handleDeliveryAddressFieldChange}
+                    placeholder="Postal code"
+                  />
                 </div>
               </div>
 
+              <LocationPinPicker
+                latitude={formData.deliveryLatitude}
+                longitude={formData.deliveryLongitude}
+                initialCenter={shopSettings}
+                onChange={handleDeliveryPinChange}
+                label="Delivery location"
+                disabled={isSubmitting || isSavingDeliveryAddress}
+              />
+              {addressStatus && <p className="checkout-address-status" role="status">{addressStatus}</p>}
+
+              {!hasSelectedSavedAddress && (
+                <div className="checkout-save-address">
+                  <div>
+                    <strong>Save this delivery address</strong>
+                    <span>Keep it in your account so you can select it on future orders.</span>
+                  </div>
+                  <label className="checkout-save-address-default">
+                    <input
+                      type="checkbox"
+                      checked={addresses.length === 0 || saveAddressAsDefault}
+                      disabled={addresses.length === 0}
+                      onChange={(event) => setSaveAddressAsDefault(event.target.checked)}
+                    />
+                    <span>{addresses.length === 0 ? 'This will be your default address' : 'Make this my default address'}</span>
+                  </label>
+                  <LoadingButton
+                    type="button"
+                    className="checkout-save-address-button"
+                    isLoading={isSavingDeliveryAddress}
+                    onClick={handleSaveDeliveryAddress}
+                  >
+                    Save Address
+                  </LoadingButton>
+                </div>
+              )}
+
+              {savedAddressNotice && <p className="checkout-save-address-notice">{savedAddressNotice}</p>}
+
               <div className="form-group">
-                <label>Delivery Distance (km)</label>
+                <label htmlFor="checkout-deliveryDistanceKm">Delivery Distance (km)</label>
                 <input
                   type="number"
+                  id="checkout-deliveryDistanceKm"
+                  autoComplete="off"
                   name="deliveryDistanceKm"
+                  inputMode="decimal"
                   className="text-input"
                   value={formData.deliveryDistanceKm}
                   onChange={handleChange}
@@ -365,9 +898,6 @@ const Checkout = () => {
                   required={containsLecheFlan}
                   placeholder="e.g. 2.5"
                 />
-                <p className="checkout-helper-copy">
-                  Enter the estimated distance from the store to your delivery address. Leche flan delivery is limited to 3 km only.
-                </p>
               </div>
 
               {containsLecheFlan && (
@@ -377,6 +907,20 @@ const Checkout = () => {
                     : 'Your cart contains leche flan. Delivery distance must be 3 km or less.'}
                 </div>
               )}
+
+              <div className="form-group">
+                <label htmlFor="checkout-deliveryInstructions">Special Delivery Instructions</label>
+                <textarea
+                  id="checkout-deliveryInstructions"
+                  autoComplete="off"
+                  name="deliveryInstructions"
+                  className="text-input"
+                  value={formData.deliveryInstructions}
+                  onChange={handleChange}
+                  placeholder="Gate code, landmark, preferred handoff note"
+                  style={{ minHeight: '74px' }}
+                />
+              </div>
             </div>
           )}
 
@@ -390,7 +934,7 @@ const Checkout = () => {
                   value="online"
                   checked={formData.paymentMethod === 'online'}
                   onChange={handleChange}
-                  style={{ display: 'none' }}
+                  className="checkout-method-radio"
                   disabled={!paymentStatus.configured}
                 />
                 <CreditCard size={24} className="method-icon" style={{ color: '#3b82f6' }} />
@@ -399,7 +943,7 @@ const Checkout = () => {
                   <span className="method-desc">
                     {paymentStatus.configured
                       ? 'Generate your order reference instantly, then continue through PayMongo.'
-                      : 'Online payment is not configured yet on the backend.'}
+                      : 'Online payment is temporarily unavailable. Please choose cash or try again later.'}
                   </span>
                 </div>
               </label>
@@ -411,7 +955,7 @@ const Checkout = () => {
                   value="cash"
                   checked={formData.paymentMethod === 'cash'}
                   onChange={handleChange}
-                  style={{ display: 'none' }}
+                  className="checkout-method-radio"
                 />
                 <Banknote size={24} className="method-icon" style={{ color: '#10b981' }} />
                 <div className="method-details">
@@ -460,11 +1004,6 @@ const Checkout = () => {
             )}
           </div>
 
-          <LoadingButton type="submit" className="btn-primary place-order-btn" isLoading={isSubmitting}>
-            {formData.paymentMethod === 'online'
-              ? 'Review QR and Continue'
-              : 'Place Order'}
-          </LoadingButton>
         </form>
 
         <div className="checkout-summary">
@@ -478,7 +1017,7 @@ const Checkout = () => {
                     <span className="summary-item-qty">{item.quantity}x</span>
                     <span className="summary-item-name">{item.name}</span>
                   </div>
-                  <span className="summary-item-price">PHP {(item.price * item.quantity).toFixed(2)}</span>
+                  <span className="summary-item-price">{formatCurrency(item.price * item.quantity)}</span>
                 </div>
               ))}
             </div>
@@ -487,11 +1026,11 @@ const Checkout = () => {
 
             <div className="summary-row">
               <span>Subtotal</span>
-              <span>PHP {subtotal.toFixed(2)}</span>
+              <span>{formatCurrency(subtotal)}</span>
             </div>
             <div className="summary-row">
               <span>Delivery Fee</span>
-              <span>PHP {deliveryFee.toFixed(2)}</span>
+              <span>{formatCurrency(deliveryFee)}</span>
             </div>
             {formData.deliveryMethod === 'delivery' && containsLecheFlan && (
               <div className="summary-row">
@@ -506,8 +1045,14 @@ const Checkout = () => {
 
             <div className="summary-total">
               <span>Total</span>
-              <span className="amount">PHP {total.toFixed(2)}</span>
+              <span className="amount">{formatCurrency(total)}</span>
             </div>
+            <LoadingButton type="submit" form="customer-checkout-form" className="btn-primary place-order-btn" isLoading={isSubmitting} disabled={!canCheckout}>
+              {isShopSettingsLoading ? 'Checking hours' : shopSettingsError ? 'Hours unavailable' : !isShopOpen ? 'Shop closed' : formData.paymentMethod === 'online'
+                ? 'Review QR and Continue'
+                : 'Place Order'}
+            </LoadingButton>
+            <p className="checkout-helper-copy">Review your details and total before placing your order.</p>
           </div>
         </div>
       </div>

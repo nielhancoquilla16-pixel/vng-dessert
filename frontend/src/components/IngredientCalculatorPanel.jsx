@@ -469,7 +469,7 @@ const IngredientCalculatorPanel = ({
                       <input
                         type="number"
                         min="0"
-                        step="0.01"
+                        step="0.25"
                         className="ingredient-calculator-input"
                         value={ingredient.quantity}
                         onChange={(event) => handleQuantityChange(ingredient.key, event.target.value)}

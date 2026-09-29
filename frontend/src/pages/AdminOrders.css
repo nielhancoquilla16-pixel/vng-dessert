@@ -48,7 +48,9 @@
 .admin-orders-page span,
 .admin-orders-page strong,
 .admin-orders-page button,
-.admin-orders-page input {
+.admin-orders-page input,
+.admin-orders-page textarea,
+.admin-orders-page a {
   font-family: var(--font-heading);
   color: inherit;
 }
@@ -108,6 +110,103 @@
   border: 1px solid #fecaca;
   background: #fef2f2;
   color: #b91c1c;
+}
+
+.admin-orders-page .admin-orders-refund-queue,
+.admin-orders-page .admin-orders-refund-detail {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+  border: 1px solid #fdba74;
+  border-radius: 16px;
+  background: #fffaf5;
+}
+
+.admin-orders-page .admin-orders-refund-queue-head,
+.admin-orders-page .admin-orders-refund-detail-head,
+.admin-orders-page .admin-orders-refund-row,
+.admin-orders-page .admin-orders-refund-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.admin-orders-page .admin-orders-refund-queue h2,
+.admin-orders-page .admin-orders-refund-detail p {
+  margin: 0;
+}
+
+.admin-orders-page .admin-orders-refund-count,
+.admin-orders-page .admin-orders-refund-status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 28px;
+  padding: 0 10px;
+  border: 1px solid #fdba74;
+  border-radius: 999px;
+  background: #fff7ed;
+  color: #c2410c;
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.admin-orders-page .admin-orders-refund-list,
+.admin-orders-page .admin-orders-refund-history {
+  display: grid;
+  gap: 8px;
+}
+
+.admin-orders-page .admin-orders-refund-row {
+  width: 100%;
+  padding: 12px;
+  border: 1px solid #fed7aa;
+  border-radius: 10px;
+  background: #ffffff;
+  color: #0f172a;
+  text-align: left;
+  cursor: pointer;
+}
+
+.admin-orders-page .admin-orders-refund-row:hover {
+  border-color: #fb923c;
+}
+
+.admin-orders-page .admin-orders-refund-row > span:first-child,
+.admin-orders-page .admin-orders-refund-history > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.admin-orders-page .admin-orders-refund-row small,
+.admin-orders-page .admin-orders-refund-history span,
+.admin-orders-page .admin-orders-refund-history small,
+.admin-orders-page .admin-orders-refund-empty {
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.admin-orders-page .admin-orders-refund-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.admin-orders-page .admin-orders-refund-rejection {
+  padding: 10px 12px;
+  border: 1px solid #fecaca;
+  border-radius: 10px;
+  background: #fef2f2;
+  color: #b91c1c;
+}
+
+.admin-orders-page .admin-orders-refund-actions {
+  flex-wrap: wrap;
+  justify-content: flex-start;
 }
 
 .admin-orders-page .admin-orders-search-input {
@@ -428,6 +527,219 @@
   color: #0f172a;
 }
 
+.admin-orders-page .admin-orders-lalamove-panel {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+  border: 1px solid #bae6fd;
+  border-radius: 22px;
+  background: linear-gradient(180deg, #f0f9ff 0%, #ffffff 100%);
+}
+
+.admin-orders-page .admin-orders-lalamove-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  color: #075985;
+}
+
+.admin-orders-page .admin-orders-lalamove-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.admin-orders-page .admin-orders-lalamove-address-box {
+  grid-column: 1 / -1;
+}
+
+.admin-orders-page .admin-orders-lalamove-note,
+.admin-orders-page .admin-orders-lalamove-error {
+  padding: 12px 14px;
+  border-radius: 14px;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.5;
+}
+
+.admin-orders-page .admin-orders-lalamove-note {
+  border: 1px solid #bfdbfe;
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
+.admin-orders-page .admin-orders-lalamove-error {
+  border: 1px solid #fecaca;
+  background: #fef2f2;
+  color: #b91c1c;
+}
+
+.admin-orders-page .admin-orders-lalamove-cancellation {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid #fecaca;
+  border-radius: 14px;
+  background: #fff7f7;
+  color: #991b1b;
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.admin-orders-page .admin-orders-lalamove-cancellation p {
+  margin: 0;
+}
+
+.admin-orders-page .admin-orders-address-section {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid #dbeafe;
+  border-radius: 16px;
+  background: #f8fbff;
+}
+
+.admin-orders-page .admin-orders-address-title {
+  margin-top: 4px;
+  color: #0f172a;
+  font-size: 15px;
+  font-weight: 800;
+  line-height: 1.2;
+}
+
+.admin-orders-page .admin-orders-address-status {
+  padding: 10px 12px;
+  border: 1px solid #fed7aa;
+  border-radius: 12px;
+  background: #fff7ed;
+  color: #9a3412;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.45;
+}
+
+.admin-orders-page .admin-orders-map-preview {
+  overflow: hidden;
+  min-height: 220px;
+  border: 1px solid #bfdbfe;
+  border-radius: 14px;
+  background: #e0f2fe;
+}
+
+.admin-orders-page .admin-orders-map-preview iframe {
+  display: block;
+  width: 100%;
+  height: 220px;
+  border: 0;
+}
+
+.admin-orders-page .admin-orders-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.admin-orders-page .admin-orders-form-field {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+}
+
+.admin-orders-page .admin-orders-form-field--wide {
+  grid-column: 1 / -1;
+}
+
+.admin-orders-page .admin-orders-form-field span {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #4f6d95;
+}
+
+.admin-orders-page .admin-orders-form-field input,
+.admin-orders-page .admin-orders-form-field textarea {
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 12px;
+  border: 1px solid #cbd5e1;
+  border-radius: 12px;
+  background: #ffffff;
+  color: #0f172a;
+  font-size: 14px;
+  outline: none;
+}
+
+.admin-orders-page .admin-orders-form-field textarea {
+  min-height: 78px;
+  resize: vertical;
+}
+
+.admin-orders-page .admin-orders-form-field input:focus,
+.admin-orders-page .admin-orders-form-field textarea:focus {
+  border-color: #38bdf8;
+  box-shadow: 0 0 0 4px rgba(14, 165, 233, 0.12);
+}
+
+.pac-container {
+  z-index: 10000;
+}
+
+.admin-orders-page .admin-orders-lalamove-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.admin-orders-page .admin-orders-reference-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.admin-orders-page .admin-orders-action-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 0 14px;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.admin-orders-page .admin-orders-action-button:disabled,
+.admin-orders-page .admin-orders-action-button[aria-disabled="true"] {
+  opacity: 0.68;
+  cursor: not-allowed;
+}
+
+.admin-orders-page .admin-orders-action-button--primary {
+  background: #0284c7;
+  color: #ffffff;
+}
+
+.admin-orders-page .admin-orders-action-button--ghost {
+  border-color: #bae6fd;
+  background: #ffffff;
+  color: #0369a1;
+}
+
+.admin-orders-page .admin-orders-action-button--danger {
+  border-color: #fecaca;
+  background: #fff1f2;
+  color: #b91c1c;
+}
+
 .admin-orders-page .admin-orders-item-row {
   min-height: 72px;
   padding: 14px 16px;
@@ -460,6 +772,120 @@
   font-weight: 800;
   color: #10224a;
   text-align: right;
+}
+
+.spin {
+  animation: admin-orders-spin 1s linear infinite;
+}
+
+@keyframes admin-orders-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.admin-orders-page .admin-orders-rejection-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(15, 23, 42, 0.5);
+}
+
+.admin-orders-page .admin-orders-rejection-dialog {
+  display: grid;
+  gap: 16px;
+  width: min(100%, 520px);
+  padding: 22px;
+  border: 1px solid #fdba74;
+  border-radius: 12px;
+  background: #fffaf5;
+  box-shadow: 0 24px 64px rgba(15, 23, 42, 0.28);
+}
+
+.admin-orders-page .admin-orders-rejection-dialog h2 {
+  margin: 0;
+  color: #0f172a;
+  font-size: 22px;
+  line-height: 1.2;
+}
+
+.admin-orders-page .admin-orders-rejection-dialog > p {
+  margin: 0;
+  color: #475569;
+  line-height: 1.5;
+}
+
+.admin-orders-page .admin-orders-rejection-field {
+  display: grid;
+  gap: 8px;
+}
+
+.admin-orders-page .admin-orders-rejection-field > span {
+  color: #475569;
+  font-size: 13px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.admin-orders-page .admin-orders-rejection-field textarea {
+  width: 100%;
+  min-height: 130px;
+  padding: 12px 14px;
+  border: 1px solid #d9e1eb;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #0f172a;
+  font: inherit;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.admin-orders-page .admin-orders-rejection-field textarea:focus {
+  border-color: #fb923c;
+  outline: 3px solid rgba(251, 146, 60, 0.2);
+}
+
+.admin-orders-page .admin-orders-rejection-error {
+  padding: 10px 12px;
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+  background: #fef2f2;
+  color: #b91c1c;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.admin-orders-page .admin-orders-rejection-actions {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.admin-orders-page .admin-orders-refund-evidence {
+  display: grid;
+  gap: 8px;
+  width: fit-content;
+  max-width: 100%;
+  color: #9a3412;
+  font-size: 13px;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.admin-orders-page .admin-orders-refund-evidence img {
+  display: block;
+  width: min(100%, 360px);
+  max-height: 280px;
+  object-fit: cover;
+  border: 1px solid #fed7aa;
+  border-radius: 8px;
 }
 
 @media (max-width: 1100px) {
@@ -495,8 +921,16 @@
   }
 
   .admin-orders-page .admin-orders-info-grid,
-  .admin-orders-page .admin-orders-detail-grid {
+  .admin-orders-page .admin-orders-detail-grid,
+  .admin-orders-page .admin-orders-lalamove-grid,
+  .admin-orders-page .admin-orders-refund-detail-grid,
+  .admin-orders-page .admin-orders-reference-row,
+  .admin-orders-page .admin-orders-form-grid {
     grid-template-columns: 1fr;
+  }
+
+  .admin-orders-page .admin-orders-form-field--wide {
+    grid-column: auto;
   }
 
   .admin-orders-page .admin-orders-detail-id {

@@ -129,6 +129,7 @@
   top: 1.5rem;
   right: 2rem;
   z-index: 52;
+  touch-action: none;
 }
 
 .admin-notification-button {
@@ -165,7 +166,9 @@
 }
 
 .admin-alert-dropdown {
-  width: min(360px, calc(100vw - 2rem));
+  position: absolute;
+  top: 100%;
+  width: min(var(--notification-panel-width, 360px), calc(100vw - 2rem));
   margin-top: 0.9rem;
   background: rgba(255, 255, 255, 0.98);
   border: 1px solid rgba(148, 163, 184, 0.18);
@@ -174,6 +177,16 @@
   overflow: hidden;
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
+}
+
+.admin-alert-shell.panel-opens-left .admin-alert-dropdown {
+  right: 0;
+  left: auto;
+}
+
+.admin-alert-shell.panel-opens-right .admin-alert-dropdown {
+  right: auto;
+  left: 0;
 }
 
 .admin-alert-dropdown-head {

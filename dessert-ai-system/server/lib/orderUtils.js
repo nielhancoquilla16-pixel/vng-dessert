@@ -1,4 +1,8 @@
+import { publicErrorMessage } from './publicErrors.js';
 import { randomUUID } from 'node:crypto';
+import { getExpiryStatus } from './expiry.js';
+import { mapReturnRefundRequest, normalizeReturnRefundStatus } from './returnRefund.js';
+import { createOrderQrExpiry, getOrderQrExpiry, isOrderQrExpired } from './orderQr.js';
 
 const ORDER_STATUS_SEQUENCE = ['pending', 'confirmed', 'preparing', 'ready', 'out-for-delivery', 'delivered', 'completed', 'cancelled', 'refunded'];
 const ORDER_STATUS_ALIASES = new Map([
@@ -14,6 +18,7 @@ export const VALID_ORDER_STATUSES = ORDER_STATUS_SEQUENCE;
 export const DELIVERY_FEE = 50;
 export const DEFAULT_READY_NOTIFICATION_MESSAGE = 'Your order is ready for pickup. Please proceed to the cashier and present your QR code.';
 export const ORDER_QR_PREFIX = 'vng-order:';
+export const ADDRESS_GEOCODE_ERROR = "Select the customer's exact delivery location on the map to set a valid pin.";
 
 const STATUS_TIMESTAMP_KEYS = {
   pending: 'pending',
@@ -30,6 +35,17 @@ const STATUS_TIMESTAMP_KEYS = {
 export const normalizeOrderStatus = (value = '') => {
   const normalized = String(value || '').trim().toLowerCase();
   return ORDER_STATUS_ALIASES.get(normalized) || normalized;
+};
+
+export const normalizeDeliveryMethod = (value = 'pickup') => {
+  const normalized = String(value || 'pickup').trim().toLowerCase().replace(/[ _]+/g, '-');
+  if (['pickup', 'pick-up', 'collection', 'in-store'].includes(normalized)) {
+    return 'pickup';
+  }
+  if (normalized === 'home-delivery') {
+    return 'delivery';
+  }
+  return normalized;
 };
 
 export const normalizeReviewStatus = (value = '') => {
@@ -66,6 +82,7 @@ export const normalizeStatusTimestamps = (value = {}) => {
 export const normalizeNotifications = (value = []) => (
   Array.isArray(value)
     ? value.map((entry) => ({
+        id: String(entry?.id || entry?.notificationId || '').trim(),
         audience: String(entry?.audience || 'customer').toLowerCase(),
         type: String(entry?.type || 'info').toLowerCase(),
         message: String(entry?.message || entry?.title || '').trim(),
@@ -91,9 +108,208 @@ export const getLecheFlanRestrictionMessage = (distanceKm) => (
 );
 
 export const isCashOnDelivery = (deliveryMethod = 'pickup', paymentMethod = 'cash') => (
-  String(deliveryMethod || 'pickup').toLowerCase() === 'delivery'
+  normalizeDeliveryMethod(deliveryMethod) === 'delivery'
   && String(paymentMethod || 'cash').toLowerCase() === 'cash'
 );
+
+const normalizeText = (value = '') => String(value || '').trim();
+
+const firstText = (...values) => (
+  values
+    .map((value) => normalizeText(value))
+    .find(Boolean) || ''
+);
+
+const firstDefined = (...values) => values.find((value) => value !== undefined && value !== null && value !== '');
+
+const normalizeCoordinate = (value) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
+export const buildDeliveryAddressText = ({
+  streetAddress = '',
+  barangay = '',
+  city = '',
+  province = '',
+  postalCode = '',
+} = {}) => (
+  [streetAddress, barangay, city, province, postalCode]
+    .map((entry) => normalizeText(entry))
+    .filter(Boolean)
+    .join(', ')
+);
+
+export const normalizeDeliveryAddressFields = (source = {}, fallback = {}) => {
+  const nested = source.deliveryAddress && typeof source.deliveryAddress === 'object'
+    ? source.deliveryAddress
+    : {};
+  const recipientName = firstText(
+    source.deliveryRecipientName,
+    source.delivery_recipient_name,
+    source.recipientName,
+    nested.recipientName,
+    fallback.recipientName,
+  );
+  const contactNumber = firstText(
+    source.deliveryContactNumber,
+    source.delivery_contact_number,
+    source.contactNumber,
+    nested.contactNumber,
+    fallback.contactNumber,
+  );
+  const streetAddress = firstText(
+    source.deliveryStreetAddress,
+    source.delivery_street_address,
+    source.streetAddress,
+    nested.streetAddress,
+    fallback.streetAddress,
+  );
+  const barangay = firstText(
+    source.deliveryBarangay,
+    source.delivery_barangay,
+    source.barangay,
+    nested.barangay,
+    fallback.barangay,
+  );
+  const city = firstText(
+    source.deliveryCity,
+    source.delivery_city,
+    source.city,
+    nested.city,
+    fallback.city,
+  );
+  const province = firstText(
+    source.deliveryProvince,
+    source.delivery_province,
+    source.province,
+    nested.province,
+    fallback.province,
+  );
+  const postalCode = firstText(
+    source.deliveryPostalCode,
+    source.delivery_postal_code,
+    source.postalCode,
+    nested.postalCode,
+    fallback.postalCode,
+  );
+  const structuredAddress = buildDeliveryAddressText({
+    streetAddress,
+    barangay,
+    city,
+    province,
+    postalCode,
+  });
+  const formattedAddress = firstText(
+    source.deliveryFormattedAddress,
+    source.delivery_formatted_address,
+    source.formattedAddress,
+    nested.formattedAddress,
+    source.address,
+    fallback.formattedAddress,
+    fallback.address,
+    structuredAddress,
+  );
+  const latitude = normalizeCoordinate(firstDefined(
+    source.deliveryLatitude,
+    source.delivery_latitude,
+    source.destinationLatitude,
+    source.destination_latitude,
+    source.latitude,
+    nested.latitude,
+    fallback.latitude,
+  ));
+  const longitude = normalizeCoordinate(firstDefined(
+    source.deliveryLongitude,
+    source.delivery_longitude,
+    source.destinationLongitude,
+    source.destination_longitude,
+    source.longitude,
+    nested.longitude,
+    fallback.longitude,
+  ));
+
+  return {
+    recipientName,
+    contactNumber,
+    streetAddress,
+    barangay,
+    city,
+    province,
+    postalCode,
+    formattedAddress,
+    address: formattedAddress || structuredAddress,
+    placeId: firstText(
+      source.deliveryPlaceId,
+      source.delivery_place_id,
+      source.placeId,
+      nested.placeId,
+      fallback.placeId,
+    ),
+    latitude,
+    longitude,
+  };
+};
+
+export const isValidDeliveryCoordinates = ({ latitude, longitude } = {}) => {
+  if (latitude == null || longitude == null || String(latitude).trim() === '' || String(longitude).trim() === '') {
+    return false;
+  }
+
+  const lat = Number(latitude);
+  const lng = Number(longitude);
+
+  return Number.isFinite(lat)
+    && Number.isFinite(lng)
+    && !(lat === 0 && lng === 0)
+    && lat >= -90
+    && lat <= 90
+    && lng >= -180
+    && lng <= 180;
+};
+
+const LALAMOVE_STATUS_LABELS = {
+  ASSIGNING_DRIVER: 'Pending Driver',
+  ON_GOING: 'Driver Assigned',
+  PICKED_UP: 'Picked Up',
+  COMPLETED: 'Delivered',
+  CANCELED: 'Cancelled',
+  CANCELLED: 'Cancelled',
+  REJECTED: 'Cancelled',
+  EXPIRED: 'Cancelled',
+};
+
+const normalizeLalamoveStatus = (value = '') => (
+  String(value || '')
+    .trim()
+    .replace(/[\s-]+/g, '_')
+    .toUpperCase()
+);
+
+const getLalamoveStatusLabel = (value = '') => {
+  const normalized = normalizeLalamoveStatus(value);
+  return LALAMOVE_STATUS_LABELS[normalized] || (normalized ? normalized.replace(/_/g, ' ') : 'Not Booked');
+};
+
+const normalizeLalamoveDriverInfo = (value = {}) => {
+  const source = value && typeof value === 'object' ? value : {};
+  const coordinates = source.coordinates && typeof source.coordinates === 'object'
+    ? source.coordinates
+    : {};
+
+  return {
+    driverId: source.driverId || source.driver_id || '',
+    name: source.name || '',
+    phone: source.phone || '',
+    plateNumber: source.plateNumber || source.plate_number || '',
+    photo: source.photo || '',
+    coordinates: {
+      latitude: coordinates.latitude || coordinates.lat || null,
+      longitude: coordinates.longitude || coordinates.lng || null,
+      updatedAt: coordinates.updatedAt || coordinates.updated_at || null,
+    },
+  };
+};
 
 export const shouldRequireOrderVerification = (deliveryMethod = 'pickup', paymentMethod = 'cash') => (
   !isCashOnDelivery(deliveryMethod, paymentMethod)
@@ -250,6 +466,9 @@ export const orderSelect = `
   address,
   delivery_method,
   payment_method,
+  delivery_address_id,
+  cash_received,
+  change_amount,
   total_price,
   order_status,
   review_status,
@@ -257,11 +476,37 @@ export const orderSelect = `
   review_status_updated_at,
   cancellation_reason,
   delivery_distance_km,
+  delivery_recipient_name,
+  delivery_contact_number,
+  delivery_street_address,
+  delivery_barangay,
+  delivery_city,
+  delivery_province,
+  delivery_postal_code,
+  delivery_formatted_address,
+  delivery_place_id,
+  delivery_latitude,
+  delivery_longitude,
+  delivery_instructions,
   contains_leche_flan,
   inventory_deducted_at,
+  lalamove_order_id,
+  lalamove_quotation_id,
+  lalamove_status,
+  lalamove_share_link,
+  lalamove_driver_id,
+  lalamove_driver_info,
+  lalamove_price_breakdown,
+  lalamove_distance_meters,
+  lalamove_estimated_delivery_at,
+  lalamove_booked_at,
+  lalamove_last_synced_at,
+  lalamove_booking_error,
+  lalamove_metadata,
   verification_required,
   qr_token,
   qr_generated_at,
+  qr_expires_at,
   qr_used_at,
   verified_at,
   verified_by,
@@ -273,6 +518,8 @@ export const orderSelect = `
   ready_notification_message,
   receipt_image_url,
   receipt_received_at,
+  return_refund_status,
+  return_refund_request_id,
   notifications,
   status_timestamps,
   updated_at,
@@ -286,8 +533,30 @@ export const orderSelect = `
       id,
       product_name,
       category,
-      image_url
+      image_url,
+      availability,
+      expiration_date,
+      expiration_at
     )
+  ),
+  return_refund_requests!return_refund_requests_order_id_fkey (
+    id,
+    order_id,
+    user_id,
+    request_type,
+    reason,
+    customer_message,
+    evidence_image_url,
+    status,
+    rejection_reason,
+    status_history,
+    approved_at,
+    processing_at,
+    refunded_at,
+    completed_at,
+    rejected_at,
+    created_at,
+    updated_at
   ),
   order_issue_reports (
     id,
@@ -468,6 +737,9 @@ export const mapOrder = (row) => {
           productName: item.products.product_name,
           category: item.products.category,
           imageUrl: item.products.image_url,
+          availability: item.products.availability || 'available',
+          expirationDate: item.products.expiration_date || '',
+          expirationAt: item.products.expiration_at || null,
         }
       : null,
   }));
@@ -477,7 +749,7 @@ export const mapOrder = (row) => {
     || row.profiles?.username
     || 'Customer';
 
-  const deliveryMethod = String(row.delivery_method || 'pickup').toLowerCase();
+  const deliveryMethod = normalizeDeliveryMethod(row.delivery_method || 'pickup');
   const paymentMethod = String(row.payment_method || 'cash').toLowerCase();
   const paymentCheckouts = (row.payment_checkouts || [])
     .map(normalizePaymentCheckout)
@@ -500,7 +772,62 @@ export const mapOrder = (row) => {
       const rightTime = new Date(right.createdAt || right.detectionDate || 0).getTime();
       return rightTime - leftTime;
     });
+  const returnRefundRequests = (row.return_refund_requests || [])
+    .map(mapReturnRefundRequest)
+    .sort((left, right) => new Date(right.submittedAt || right.updatedAt || 0).getTime()
+      - new Date(left.submittedAt || left.updatedAt || 0).getTime());
+  const latestReturnRefundRequest = returnRefundRequests[0] || null;
+  const storedReturnRefundStatus = String(row.return_refund_status || 'none').toLowerCase();
+  const returnRefundStatus = latestReturnRefundRequest?.status
+    || (storedReturnRefundStatus === 'none' ? 'none' : normalizeReturnRefundStatus(storedReturnRefundStatus));
   const deliveryDistanceKm = Number(row.delivery_distance_km);
+  const deliveryLatitude = Number(row.delivery_latitude);
+  const deliveryLongitude = Number(row.delivery_longitude);
+  const deliveryAddress = normalizeDeliveryAddressFields({
+    delivery_recipient_name: row.delivery_recipient_name,
+    delivery_contact_number: row.delivery_contact_number,
+    delivery_street_address: row.delivery_street_address,
+    delivery_barangay: row.delivery_barangay,
+    delivery_city: row.delivery_city,
+    delivery_province: row.delivery_province,
+    delivery_postal_code: row.delivery_postal_code,
+    delivery_formatted_address: row.delivery_formatted_address,
+    delivery_place_id: row.delivery_place_id,
+    delivery_latitude: row.delivery_latitude,
+    delivery_longitude: row.delivery_longitude,
+  }, {
+    recipientName: customerName,
+    contactNumber: row.phone_number || '',
+    formattedAddress: row.address || '',
+  });
+  const lalamoveStatus = normalizeLalamoveStatus(row.lalamove_status || '');
+  const lalamoveDriverInfo = normalizeLalamoveDriverInfo(row.lalamove_driver_info || {
+    driverId: row.lalamove_driver_id || '',
+  });
+  const lalamovePriceBreakdown = row.lalamove_price_breakdown && typeof row.lalamove_price_breakdown === 'object'
+    ? row.lalamove_price_breakdown
+    : null;
+  const lalamoveTracking = {
+    booked: Boolean(row.lalamove_order_id),
+    orderId: row.lalamove_order_id || '',
+    quotationId: row.lalamove_quotation_id || '',
+    status: lalamoveStatus,
+    statusLabel: getLalamoveStatusLabel(lalamoveStatus),
+    shareLink: row.lalamove_share_link || '',
+    driverId: row.lalamove_driver_id || lalamoveDriverInfo.driverId || '',
+    driver: lalamoveDriverInfo,
+    priceBreakdown: lalamovePriceBreakdown,
+    totalFee: lalamovePriceBreakdown?.total || '',
+    currency: lalamovePriceBreakdown?.currency || 'PHP',
+    distanceMeters: Number.isFinite(Number(row.lalamove_distance_meters))
+      ? Number(row.lalamove_distance_meters)
+      : null,
+    estimatedDeliveryAt: row.lalamove_estimated_delivery_at || null,
+    bookedAt: row.lalamove_booked_at || null,
+    lastSyncedAt: row.lalamove_last_synced_at || null,
+    bookingError: row.lalamove_booking_error ? publicErrorMessage('', 500) : '',
+    metadata: null, // Provider diagnostics remain internal.
+  };
   const containsLecheFlan = Boolean(
     row.contains_leche_flan
     || hasLecheFlanItems(mappedItems),
@@ -523,9 +850,11 @@ export const mapOrder = (row) => {
   const qrToken = verificationRequired ? String(row.qr_token || '').toUpperCase() : '';
   const qrPayload = buildOrderQrPayload(qrToken);
   const qrUsedAt = row.qr_used_at || row.qr_claimed_at || null;
+  const qrExpiresAt = getOrderQrExpiry(row);
   const qrActive = verificationRequired
     && Boolean(qrToken)
     && !qrUsedAt
+    && !isOrderQrExpired(row)
     && !['completed', 'cancelled', 'refunded', 'delivered'].includes(normalizedStatus);
   const feedbackToken = !['pending', 'cancelled', 'refunded'].includes(normalizedStatus)
     ? String(row.feedback_token || '').toUpperCase()
@@ -546,7 +875,27 @@ export const mapOrder = (row) => {
     address: row.address || '',
     deliveryMethod,
     paymentMethod,
+    deliveryAddressId: row.delivery_address_id || null,
+    cashReceived: Number.isFinite(Number(row.cash_received)) ? Number(row.cash_received) : null,
+    changeAmount: Number.isFinite(Number(row.change_amount)) ? Number(row.change_amount) : null,
     deliveryDistanceKm: Number.isFinite(deliveryDistanceKm) ? deliveryDistanceKm : null,
+    deliveryLatitude: Number.isFinite(deliveryLatitude) ? deliveryLatitude : null,
+    deliveryLongitude: Number.isFinite(deliveryLongitude) ? deliveryLongitude : null,
+    deliveryCoordinates: {
+      latitude: Number.isFinite(deliveryLatitude) ? deliveryLatitude : null,
+      longitude: Number.isFinite(deliveryLongitude) ? deliveryLongitude : null,
+    },
+    deliveryRecipientName: deliveryAddress.recipientName,
+    deliveryContactNumber: deliveryAddress.contactNumber,
+    deliveryStreetAddress: deliveryAddress.streetAddress,
+    deliveryBarangay: deliveryAddress.barangay,
+    deliveryCity: deliveryAddress.city,
+    deliveryProvince: deliveryAddress.province,
+    deliveryPostalCode: deliveryAddress.postalCode,
+    deliveryFormattedAddress: deliveryAddress.formattedAddress,
+    deliveryPlaceId: deliveryAddress.placeId,
+    deliveryAddress,
+    deliveryInstructions: row.delivery_instructions || '',
     isCodOrder: isCashOnDelivery(deliveryMethod, paymentMethod),
     containsLecheFlan,
     subtext,
@@ -558,6 +907,10 @@ export const mapOrder = (row) => {
     reviewStatus: normalizedReviewStatus,
     reviewReason: row.review_reason || '',
     reviewStatusUpdatedAt: row.review_status_updated_at || null,
+    returnRefundStatus,
+    returnRefundRequestId: row.return_refund_request_id || latestReturnRefundRequest?.id || null,
+    returnRefundRequests,
+    latestReturnRefundRequest,
     cancellationReason: row.cancellation_reason || '',
     inventoryDeductedAt: row.inventory_deducted_at || null,
     createdAt,
@@ -573,6 +926,8 @@ export const mapOrder = (row) => {
     qrToken,
     qrPayload,
     qrGeneratedAt: row.qr_generated_at || null,
+    qrExpiresAt,
+    qrExpired: verificationRequired && Boolean(qrToken) && isOrderQrExpired(row),
     qrUsedAt,
     feedbackToken,
     feedbackTokenGeneratedAt: row.feedback_token_generated_at || null,
@@ -592,6 +947,13 @@ export const mapOrder = (row) => {
       deliveryMethod,
       paymentCheckoutStatus,
     }),
+    lalamove: lalamoveTracking,
+    lalamoveTracking,
+    lalamoveBooked: lalamoveTracking.booked,
+    lalamoveStatus: lalamoveTracking.status,
+    lalamoveStatusLabel: lalamoveTracking.statusLabel,
+    lalamoveShareLink: lalamoveTracking.shareLink,
+    lalamoveDriver: lalamoveTracking.driver,
     receiptImageUrl: row.receipt_image_url || '',
     receiptReceivedAt: row.receipt_received_at || null,
     notifications,
@@ -660,12 +1022,23 @@ export const getShortagesForItems = (normalizedItems = [], productsById = new Ma
   normalizedItems.forEach((item) => {
     const matchingProduct = productsById.get(item.product_id);
     const availableStock = Number(matchingProduct?.stock_quantity) || 0;
-    if (!matchingProduct || availableStock < item.quantity) {
+    const expiryStatus = getExpiryStatus({
+      expirationAt: matchingProduct?.expiration_at,
+      expirationDate: matchingProduct?.expiration_date,
+    });
+    const unavailable = !matchingProduct
+      || matchingProduct.availability === 'hidden'
+      || matchingProduct.availability === 'expired'
+      || expiryStatus === 'expired';
+    if (unavailable || availableStock < item.quantity) {
       shortages.push({
         productId: item.product_id,
         productName: matchingProduct?.product_name || item.name || 'Unknown Product',
-        available: availableStock,
+        available: unavailable ? 0 : availableStock,
         requested: item.quantity,
+        reason: expiryStatus === 'expired' || matchingProduct?.availability === 'expired'
+          ? 'expired'
+          : (matchingProduct?.availability === 'hidden' ? 'unavailable' : 'out_of_stock'),
       });
     }
   });
@@ -729,8 +1102,24 @@ export const createFulfilledOrder = async (
     deliveryMethod = 'pickup',
     paymentMethod = 'cash',
     totalPrice = 0,
+    deliveryAddressId = null,
+    cashReceived = null,
+    changeAmount = null,
     orderStatus = 'pending',
     deliveryDistanceKm = null,
+    deliveryAddress = {},
+    deliveryRecipientName = '',
+    deliveryContactNumber = '',
+    deliveryStreetAddress = '',
+    deliveryBarangay = '',
+    deliveryCity = '',
+    deliveryProvince = '',
+    deliveryPostalCode = '',
+    deliveryFormattedAddress = '',
+    deliveryPlaceId = '',
+    deliveryLatitude = null,
+    deliveryLongitude = null,
+    deliveryInstructions = '',
     items = [],
   },
 ) => {
@@ -738,6 +1127,34 @@ export const createFulfilledOrder = async (
   const normalizedDeliveryMethod = String(deliveryMethod || 'pickup').toLowerCase();
   const normalizedPaymentMethod = String(paymentMethod || 'cash').toLowerCase();
   const normalizedDistance = Number(deliveryDistanceKm);
+  const normalizedLatitude = Number(deliveryLatitude);
+  const normalizedLongitude = Number(deliveryLongitude);
+  const normalizedDeliveryAddress = normalizeDeliveryAddressFields({
+    deliveryAddress,
+    deliveryRecipientName,
+    deliveryContactNumber,
+    deliveryStreetAddress,
+    deliveryBarangay,
+    deliveryCity,
+    deliveryProvince,
+    deliveryPostalCode,
+    deliveryFormattedAddress,
+    deliveryPlaceId,
+    deliveryLatitude,
+    deliveryLongitude,
+    address,
+  }, {
+    recipientName: customerName || profile?.full_name || profile?.username || 'Customer',
+    contactNumber: phoneNumber || profile?.phone_number || '',
+    formattedAddress: address || profile?.address || '',
+  });
+  const persistedAddress = normalizedDeliveryAddress.address || address || profile?.address || null;
+  const persistedLatitude = Number.isFinite(normalizedLatitude)
+    ? normalizedLatitude
+    : normalizedDeliveryAddress.latitude;
+  const persistedLongitude = Number.isFinite(normalizedLongitude)
+    ? normalizedLongitude
+    : normalizedDeliveryAddress.longitude;
   const now = new Date().toISOString();
   const containsLecheFlan = hasLecheFlanItems(items);
   const verificationRequired = shouldRequireOrderVerification(
@@ -769,9 +1186,12 @@ export const createFulfilledOrder = async (
       order_code: orderCode,
       customer_name: customerName || profile?.full_name || profile?.username || 'Customer',
       phone_number: phoneNumber || profile?.phone_number || null,
-      address: address || profile?.address || null,
+      address: persistedAddress,
       delivery_method: normalizedDeliveryMethod,
       payment_method: normalizedPaymentMethod,
+      delivery_address_id: deliveryAddressId || null,
+      cash_received: Number.isFinite(Number(cashReceived)) ? Number(cashReceived) : null,
+      change_amount: Number.isFinite(Number(changeAmount)) ? Number(changeAmount) : null,
       total_price: Number(totalPrice) || 0,
       order_status: normalizedStatus,
       review_status: 'none',
@@ -779,11 +1199,24 @@ export const createFulfilledOrder = async (
       review_status_updated_at: null,
       cancellation_reason: cancellationReason || null,
       delivery_distance_km: Number.isFinite(normalizedDistance) ? normalizedDistance : null,
+      delivery_recipient_name: normalizedDeliveryAddress.recipientName || null,
+      delivery_contact_number: normalizedDeliveryAddress.contactNumber || null,
+      delivery_street_address: normalizedDeliveryAddress.streetAddress || null,
+      delivery_barangay: normalizedDeliveryAddress.barangay || null,
+      delivery_city: normalizedDeliveryAddress.city || null,
+      delivery_province: normalizedDeliveryAddress.province || null,
+      delivery_postal_code: normalizedDeliveryAddress.postalCode || null,
+      delivery_formatted_address: normalizedDeliveryAddress.formattedAddress || persistedAddress,
+      delivery_place_id: normalizedDeliveryAddress.placeId || null,
+      delivery_latitude: Number.isFinite(persistedLatitude) ? persistedLatitude : null,
+      delivery_longitude: Number.isFinite(persistedLongitude) ? persistedLongitude : null,
+      delivery_instructions: String(deliveryInstructions || '').trim() || null,
       contains_leche_flan: containsLecheFlan,
       inventory_deducted_at: null,
       verification_required: verificationRequired,
       qr_token: qrToken,
       qr_generated_at: qrToken ? now : null,
+      qr_expires_at: qrToken ? createOrderQrExpiry(now) : null,
       qr_used_at: null,
       verified_at: null,
       verified_by: null,

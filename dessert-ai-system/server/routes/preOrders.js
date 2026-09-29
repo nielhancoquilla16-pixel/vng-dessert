@@ -18,6 +18,13 @@ import {
 } from '../lib/preOrderUtils.js';
 import { requireAuth } from '../middleware/requireAuth.js';
 import { requireRole } from '../middleware/requireRole.js';
+import { getExpiryStatus } from '../lib/expiry.js';
+import {
+  getOperatingHoursMessage,
+  getShopSettings,
+  isAvailablePreorderTime,
+  isWithinOperatingHours,
+} from '../lib/shopSettings.js';
 
 const router = express.Router();
 
@@ -179,9 +186,21 @@ router.post('/', requireAuth, async (req, res, next) => {
     const scheduledDate = normalizedMethod === 'pickup' ? normalizedPickupDate : normalizedPreferredDate;
     const scheduledTime = normalizedMethod === 'pickup' ? normalizedPickupTime : normalizedPreferredTime;
     const supabase = getSupabaseAdmin();
+    const shopSettings = await getShopSettings(supabase);
+
+    if (!isWithinOperatingHours(shopSettings)) {
+      return res.status(403).json({ error: getOperatingHoursMessage(shopSettings) });
+    }
+
+    if (!isAvailablePreorderTime(shopSettings, scheduledTime)) {
+      return res.status(400).json({
+        error: `Select a pre-order time between ${shopSettings.openingTime} and ${shopSettings.closingTime} (Philippine time).`,
+      });
+    }
+
     const { data: product, error: productError } = await supabase
       .from('products')
-      .select('id, product_name, category, image_url, price, availability')
+      .select('id, product_name, category, image_url, price, availability, expiration_date, expiration_at')
       .eq('id', normalizedProductId)
       .maybeSingle();
 
@@ -189,7 +208,10 @@ router.post('/', requireAuth, async (req, res, next) => {
       throw productError;
     }
 
-    if (!product || product.availability === 'hidden') {
+    if (!product || product.availability === 'hidden' || product.availability === 'expired' || getExpiryStatus({
+      expirationAt: product.expiration_at,
+      expirationDate: product.expiration_date,
+    }) === 'expired') {
       return res.status(404).json({ error: 'Product not found.' });
     }
 

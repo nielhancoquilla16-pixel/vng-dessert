@@ -1,9 +1,4 @@
-const pesoFormatter = new Intl.NumberFormat('en-PH', {
-  style: 'currency',
-  currency: 'PHP',
-  minimumFractionDigits: 2,
-  maximumFractionDigits: 2,
-});
+import { formatCurrency } from './currency';
 
 export const REPORT_PAYMENT_OPTIONS = [
   { value: 'cash', label: 'Cash' },
@@ -18,7 +13,7 @@ export const REPORT_PAYMENT_FILTER_OPTIONS = [
   ...REPORT_PAYMENT_OPTIONS,
 ];
 
-export const formatPeso = (value = 0) => pesoFormatter.format(Number(value) || 0);
+export const formatPeso = formatCurrency;
 
 export const formatPaymentType = (value = 'cash') => {
   const normalized = String(value || 'cash').toLowerCase();

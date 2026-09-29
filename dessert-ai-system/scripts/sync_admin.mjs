@@ -18,9 +18,9 @@ if (!supabaseUrl || !supabaseServiceRoleKey) {
 const supabase = createClient(supabaseUrl, supabaseServiceRoleKey);
 
 async function syncAdmin() {
-  const email = 'hanielcoquillajr16@gmail.com';
-  const password = 'AdminPassword123!';
-  const username = 'admin';
+  const email = '';
+  const password = '';
+  const username = '';
 
   console.log(`Checking if auth user exists for ${email}...`);
   const { data: { users }, error: uError } = await supabase.auth.admin.listUsers();

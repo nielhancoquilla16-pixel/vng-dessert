@@ -1,0 +1,7 @@
+.mobile-bottom-nav { position: fixed; z-index: 80; bottom: 0; inset-inline: 0; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: .1rem; padding: .35rem max(.35rem, env(safe-area-inset-right)) max(.35rem, env(safe-area-inset-bottom)) max(.35rem, env(safe-area-inset-left)); background: #fff; border-top: 1px solid #eee2d4; box-shadow: 0 -4px 20px #65360b0a; }
+.mobile-tab { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 56px; min-width: 0; gap: .15rem; padding: .2rem 0; color: #665b51; font-size: .6875rem; font-weight: 600; line-height: 1.4; border-radius: 12px; }
+.mobile-tab.active { color: #a33e09; background: #fff4e6; }
+.mobile-tab-icon { display: grid; place-items: center; position: relative; min-height: 25px; width: 36px; }
+.mobile-tab.active .mobile-tab-icon::before { content: ''; position: absolute; top: -6px; width: 20px; height: 3px; background: #c7500b; border-radius: 4px; }
+.mobile-tab-badge { position: absolute; top: -5px; left: 23px; min-width: 17px; padding: 0 .2rem; line-height: 17px; background: #b43217; color: #fff; font-size: .625rem; border-radius: 20px; border: 1px solid #fff; }
+@media (min-width: 901px) { .mobile-bottom-nav { display: none; } }

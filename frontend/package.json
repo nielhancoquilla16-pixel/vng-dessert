@@ -13,6 +13,7 @@
     "@supabase/supabase-js": "^2.99.3",
     "@zxing/browser": "^0.1.5",
     "@zxing/library": "^0.21.3",
+    "leaflet": "^1.9.4",
     "lucide-react": "^0.577.0",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",

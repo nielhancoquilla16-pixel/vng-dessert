@@ -1,0 +1,220 @@
+.customer-dashboard-page {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 1rem 0 2rem;
+  overflow-wrap: anywhere;
+}
+
+.customer-dashboard-alert {
+  margin-bottom: 1rem;
+  padding: 0.9rem 1rem;
+  border-radius: 0.85rem;
+  background: #f0fdf4;
+  color: #15803d;
+  border: 1px solid #bbf7d0;
+  font-weight: 800;
+}
+
+.customer-dashboard-hero {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 1rem;
+  padding: 1.5rem;
+  border-radius: 1rem;
+  background: linear-gradient(135deg, #fff7ed, #ffffff);
+  border: 1px solid rgba(251, 146, 60, 0.22);
+  box-shadow: 0 14px 32px rgba(15, 23, 42, 0.06);
+}
+
+.customer-dashboard-eyebrow {
+  margin: 0 0 0.4rem;
+  color: #c2410c;
+  font-size: 0.8rem;
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.customer-dashboard-hero h1 {
+  margin: 0;
+  color: #0f172a;
+  font-size: clamp(1.9rem, 4vw, 2.45rem);
+}
+
+.customer-status {
+  min-height: 40px;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0 0.9rem;
+  border-radius: 999px;
+  background: #fef2f2;
+  color: #b91c1c;
+  font-weight: 800;
+}
+
+.customer-status.verified {
+  background: #f0fdf4;
+  color: #15803d;
+}
+
+.customer-dashboard-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
+.customer-dashboard-tile {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.85rem;
+  padding: 1.2rem;
+  border-radius: 1rem;
+  background: #ffffff;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  color: inherit;
+  text-decoration: none;
+  min-width: 0;
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.06);
+}
+
+.customer-dashboard-tile svg {
+  color: #f97316;
+  flex: 0 0 auto;
+}
+
+.customer-dashboard-tile h2 {
+  margin: 0 0 0.35rem;
+  color: #0f172a;
+  font-size: 1.05rem;
+}
+
+.customer-dashboard-tile p {
+  margin: 0;
+  color: #64748b;
+  line-height: 1.55;
+}
+
+.customer-dashboard-delivery {
+  display: grid;
+  gap: 1rem;
+  margin-top: 1rem;
+  padding: 1.2rem;
+  border-radius: 1rem;
+  border: 1px solid #bae6fd;
+  background: linear-gradient(180deg, #f0f9ff 0%, #ffffff 100%);
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.06);
+}
+
+.customer-dashboard-delivery-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  color: #0369a1;
+}
+
+.customer-dashboard-delivery-header p {
+  margin: 0 0 0.35rem;
+  color: #0284c7;
+  font-size: 0.78rem;
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.customer-dashboard-delivery-header h2 {
+  margin: 0;
+  color: #0f172a;
+  font-size: 1.2rem;
+}
+
+.customer-dashboard-delivery-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.customer-dashboard-delivery-grid > div {
+  min-height: 72px;
+  padding: 0.9rem 1rem;
+  border-radius: 0.85rem;
+  border: 1px solid #dbeafe;
+  background: #ffffff;
+}
+
+.customer-dashboard-delivery-grid span {
+  display: block;
+  margin-bottom: 0.28rem;
+  color: #64748b;
+  font-size: 0.72rem;
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.customer-dashboard-delivery-grid strong {
+  display: block;
+  color: #0f172a;
+  line-height: 1.25;
+}
+
+.customer-dashboard-delivery-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  justify-self: start;
+  gap: 0.45rem;
+  min-height: 44px;
+  padding: 0.65rem 0.95rem;
+  border-radius: 0.85rem;
+  background: #0284c7;
+  color: #ffffff;
+  font-weight: 900;
+  text-decoration: none;
+}
+
+@media (max-width: 760px) {
+  .customer-dashboard-page {
+    padding: 0.25rem 0 1.5rem;
+  }
+
+  .customer-dashboard-hero {
+    align-items: flex-start;
+    flex-direction: column;
+    padding: 1rem;
+  }
+
+  .customer-dashboard-hero h1 {
+    font-size: 1.5rem;
+    line-height: 1.25;
+  }
+
+  .customer-dashboard-tile,
+  .customer-dashboard-delivery {
+    padding: 1rem;
+  }
+
+  .customer-dashboard-tile > div,
+  .customer-dashboard-hero > div,
+  .customer-dashboard-delivery-header > div {
+    min-width: 0;
+  }
+
+  .customer-dashboard-delivery-header svg,
+  .customer-dashboard-delivery-link svg,
+  .customer-status svg {
+    flex-shrink: 0;
+  }
+
+  .customer-status {
+    padding: 0.5rem 0.75rem;
+  }
+
+  .customer-dashboard-grid,
+  .customer-dashboard-delivery-grid {
+    grid-template-columns: 1fr;
+  }
+}

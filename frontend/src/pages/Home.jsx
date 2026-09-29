@@ -1,18 +1,22 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { MapPin, Sparkles, ShoppingCart } from 'lucide-react';
+import { ArrowRight, MapPin, Sparkles } from 'lucide-react';
 import { useProducts } from '../context/ProductContext';
 import { useAI } from '../context/AIContext';
 import { useContent } from '../context/ContentContext';
+import { useShopSettings } from '../context/ShopSettingsContext';
 import { apiRequest } from '../lib/api';
 import { resolveAssetUrl } from '../lib/publicUrl';
 import { formatCurrency } from '../utils/orderAnalytics';
 import MediaEmbed from '../components/MediaEmbed';
+import ShopProductCard from '../components/ShopProductCard';
 import './Home.css';
 
 const BEST_SELLER_LIMIT = 3;
+const FALLBACK_SHOP_LOCATION = { latitude: 14.455378, longitude: 120.974665 };
 
 const normalizeBestSeller = (product = {}, fallbackRank = 1) => ({
+  ...product,
   id: product.id,
   name: product.name || product.productName || product.product_name || 'Dessert Item',
   productName: product.productName || product.product_name || product.name || 'Dessert Item',
@@ -40,19 +44,6 @@ const buildFallbackBestSellers = (products = []) => (
     }, index + 1))
 );
 
-const getAverageUnitsLabel = (product) => {
-  const explicitAverage = Number(product.averageUnitsPerOrder);
-  if (explicitAverage > 0) {
-    return `${explicitAverage} pcs/order`;
-  }
-
-  if (product.orderCount > 0 && product.soldCount > 0) {
-    return `${(product.soldCount / product.orderCount).toFixed(1)} pcs/order`;
-  }
-
-  return 'Fresh Daily';
-};
-
 const ProductPreviewCollage = ({ product, variant = 'card' }) => (
   <div className={`preview-collage preview-collage-${variant}`}>
     <div className="preview-collage-main">
@@ -70,6 +61,33 @@ const Home = () => {
   const { products, isProductsLoading } = useProducts();
   const { getSmartRecommendations } = useAI();
   const { siteVideos, defaultVideos } = useContent();
+  const { shopSettings } = useShopSettings();
+  const storeLatitude = Number(shopSettings.latitude);
+  const storeLongitude = Number(shopSettings.longitude);
+  const hasSavedShopLocation = String(shopSettings.latitude ?? '').trim() !== ''
+    && String(shopSettings.longitude ?? '').trim() !== ''
+    && Number.isFinite(storeLatitude)
+    && Number.isFinite(storeLongitude)
+    && storeLatitude >= -90
+    && storeLatitude <= 90
+    && storeLongitude >= -180
+    && storeLongitude <= 180
+    && (storeLatitude !== 0 || storeLongitude !== 0);
+  const mapLocation = hasSavedShopLocation
+    ? { latitude: storeLatitude, longitude: storeLongitude }
+    : FALLBACK_SHOP_LOCATION;
+  const openStreetMapUrl = 'https://www.openstreetmap.org/#map=16/'
+    + mapLocation.latitude + '/' + mapLocation.longitude;
+  const mapBox = [
+    mapLocation.longitude - 0.008,
+    mapLocation.latitude - 0.005,
+    mapLocation.longitude + 0.008,
+    mapLocation.latitude + 0.005,
+  ].join(',');
+  const streetViewUrl = hasSavedShopLocation
+    ? 'https://www.google.com/maps/@?api=1&map_action=pano&viewpoint='
+      + storeLatitude + ',' + storeLongitude
+    : '';
   const safeSiteVideos = useMemo(() => {
     const normalized = (Array.isArray(siteVideos) ? siteVideos : [])
       .filter((video) => video && String(video.src || '').trim());
@@ -133,8 +151,12 @@ const Home = () => {
 
   const storeProducts = products.filter((product) => !product.type || product.type === 'product');
   const fallbackBestSellers = buildFallbackBestSellers(storeProducts);
-  const hasLiveBestSellers = bestSellers.length > 0;
-  const displayedBestSellers = hasLiveBestSellers ? bestSellers : fallbackBestSellers;
+  const liveBestSellers = bestSellers
+    .filter((product) => product.soldCount > 0 && storeProducts.some((item) => String(item.id) === String(product.id)))
+    .slice(0, BEST_SELLER_LIMIT)
+    .map((product) => ({ ...product, ...storeProducts.find((item) => String(item.id) === String(product.id)), rank: product.rank }));
+  const hasLiveBestSellers = liveBestSellers.length > 0;
+  const displayedBestSellers = hasLiveBestSellers ? liveBestSellers : fallbackBestSellers;
   const featuredProduct = displayedBestSellers[0] || null;
   const recommendationSeedId = featuredProduct?.id || storeProducts[0]?.id;
   const aiRecommendations = getSmartRecommendations(recommendationSeedId).slice(0, 3);
@@ -144,11 +166,12 @@ const Home = () => {
   return (
     <div className="home-container">
       {showWelcome && (
-        <div className="welcome-banner">
+        <div className="welcome-banner" role="status">
           {welcomeMessage}
           <button
             onClick={() => setShowWelcome(false)}
             className="welcome-banner-close"
+            aria-label="Dismiss welcome message"
           >
             &times;
           </button>
@@ -157,23 +180,18 @@ const Home = () => {
 
       <section className="hero-section">
         <div className="hero-content">
+          <span className="hero-eyebrow">A little sweetness, every day</span>
           <h1 className="hero-title">
-            Welcome to <span className="highlight">V &amp; G</span> Leche Flan
+            Your favorite <span className="highlight">Filipino desserts.</span>
           </h1>
 
           <p className="hero-description">
-            Leche Flan is our pambansang dessert, and this homepage now puts your real best sellers first.
-            The featured product and the top ranked cards below stay synced to actual customer orders, so the desserts
-            people keep buying are always the ones we highlight.
+            Creamy leche flan and sweet treats from V &amp; G, made for sharing.
           </p>
 
-          <div className="hero-proof-strip">
-            <span className="hero-proof-pill">Fresh Daily Batches</span>
-          </div>
-
           <div className="hero-actions">
-            <Link to="/products" className="btn-primary hero-cta">Order Now</Link>
-            <Link to="/about" className="btn-secondary hero-cta">Learn More About Us</Link>
+            <Link to="/products" className="btn-primary hero-cta">Explore desserts <ArrowRight size={18} aria-hidden="true" /></Link>
+            <Link to="/about" className="hero-about-link">Our story</Link>
           </div>
         </div>
 
@@ -202,128 +220,65 @@ const Home = () => {
                   <span className="premium-price">{formatCurrency(featuredProduct.price)}</span>
                 </div>
 
-                <p className="hero-image-copy">{featuredProduct.description}</p>
-
                 <div className="spotlight-metrics">
                   <span className="metric-pill metric-pill-highlight">
-                    {hasLiveBestSellers ? '#1 Best Seller' : 'Fresh Pick'}
+                    {hasLiveBestSellers ? `#${featuredProduct.rank} Best Seller` : 'Fresh Pick'}
                   </span>
-                  <span className="metric-pill">Fresh Daily</span>
                   <span className="metric-pill metric-pill-soft">{featuredProduct.category}</span>
                 </div>
-
-                {hasLiveBestSellers ? (
-                  <>
-
-                    <p className="spotlight-summary">
-                      {`${featuredProduct.soldCount} total units sold across ${featuredProduct.orderCount} customer orders.`}
-                    </p>
-                  </>
-                ) : null}
               </div>
             </>
           ) : null}
         </div>
+        {!isProductsLoading && !isBestSellersLoading && displayedBestSellers.length === 0 && (
+          <p>Our menu is on its way. Please check back shortly for available desserts.</p>
+        )}
       </section>
 
       <section className="best-sellers-section">
-        <div className="section-header">
-          <span className="section-eyebrow">Best Sellers</span>
-          <h2>Customer favorites</h2>
-        
+        <div className="section-header shop-section-heading">
+          <div>
+            <span className="section-eyebrow">{hasLiveBestSellers ? 'Most loved' : 'From our kitchen'}</span>
+            <h2>{hasLiveBestSellers ? 'Customer favorites' : 'Discover our desserts'}</h2>
           </div>
+          <Link to="/products" className="home-view-all">View all <ArrowRight size={16} aria-hidden="true" /></Link>
+        </div>
 
-        <div className="best-sellers-grid">
+        <div className="shop-product-grid">
           {(isProductsLoading || (isBestSellersLoading && !displayedBestSellers.length)) ? (
             [1, 2, 3].map((item) => (
-              <div key={item} className="skeleton-card">
-                <div className="skeleton" style={{ width: '120px', height: '24px', borderRadius: '999px', marginBottom: '1rem' }}></div>
-                <div className="skeleton skeleton-image" style={{ height: '260px', marginBottom: '1rem' }}></div>
-                <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
-                  <div className="skeleton" style={{ width: '116px', height: '34px', borderRadius: '999px' }}></div>
-                  <div className="skeleton" style={{ width: '102px', height: '34px', borderRadius: '999px' }}></div>
-                </div>
-                <div className="skeleton skeleton-title" style={{ width: '75%' }}></div>
-                <div className="skeleton skeleton-text"></div>
-                <div className="skeleton skeleton-text" style={{ width: '60%' }}></div>
-                <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', marginTop: '1rem' }}>
-                  <div className="skeleton" style={{ width: '110px', height: '34px', borderRadius: '999px' }}></div>
-                  <div className="skeleton" style={{ width: '110px', height: '34px', borderRadius: '999px' }}></div>
-                  <div className="skeleton" style={{ width: '140px', height: '34px', borderRadius: '999px' }}></div>
-                </div>
+              <div key={item} className="home-product-skeleton" aria-label="Loading desserts">
+                <div className="skeleton home-skeleton-image" />
+                <div className="skeleton skeleton-title" />
+                <div className="skeleton skeleton-text" />
               </div>
             ))
           ) : (
             displayedBestSellers.map((product, index) => (
-              <div key={product.id || `${product.name}-${index}`} className="best-seller-card">
-                <div className="rank-badge">#{index + 1} Best Seller</div>
-
-                <ProductPreviewCollage product={product} />
-
-                <div className="premium-card-content">
-                  <div className="product-card-heading">
-                    <h3>{product.name}</h3>
-                    <span className="premium-price">{formatCurrency(product.price)}</span>
-                  </div>
-
-                  <p>{product.description}</p>
-
-                  <div className="metric-pill-row">
-                    <span className="metric-pill metric-pill-highlight">
-                      {hasLiveBestSellers ? `${product.soldCount} units sold` : 'Fresh Daily'}
-                    </span>
-                    <span className="metric-pill">
-                      {hasLiveBestSellers ? `${product.orderCount} orders` : 'Made fresh'}
-                    </span>
-                    <span className="metric-pill metric-pill-soft">
-                      {hasLiveBestSellers ? `Avg ${getAverageUnitsLabel(product)}` : 'Ready to order'}
-                    </span>
-                  </div>
-
-                  <Link to="/products" className="btn-primary best-seller-cta">
-                    View in Shop
-                  </Link>
-                </div>
-              </div>
+              <ShopProductCard
+                key={product.id || `${product.name}-${index}`}
+                product={product}
+                badge={hasLiveBestSellers ? `#${product.rank} Best seller` : undefined}
+              />
             ))
           )}
         </div>
       </section>
 
-      {(!isProductsLoading && products.length > 0) && (
+      {(!isProductsLoading && aiRecommendations.length > 0) && (
         <section className="ai-home-recommendations">
           <div className="section-header">
             <div className="ai-section-label">
               <Sparkles size={18} style={{ color: '#b45309' }} />
-              <span>AI Powered</span>
+              <span>Picked for you</span>
             </div>
-            <h2>Personalized Picks for You</h2>
-            <p>Our AI looked at your dessert catalog and paired treats that fit the current bestseller spotlight.</p>
+            <h2>Something else to love</h2>
+            <p>Find your next favorite treat.</p>
           </div>
 
-          <div className="best-sellers-grid">
+          <div className="shop-product-grid">
             {aiRecommendations.map((product) => (
-              <div key={product.id} className="best-seller-card ai-card">
-                <ProductPreviewCollage product={normalizeBestSeller(product)} />
-
-                <div className="premium-card-content">
-                  <div className="product-card-heading">
-                    <h3>{product.name}</h3>
-                    <span className="premium-price ai-price">{formatCurrency(product.price)}</span>
-                  </div>
-
-                  <p>{product.description}</p>
-
-                  <div className="metric-pill-row">
-                    <span className="metric-pill metric-pill-soft">Pairs well with best sellers</span>
-                    <span className="metric-pill">Fresh Daily</span>
-                  </div>
-
-                  <Link to="/products" className="btn-primary ai-card-cta">
-                    <ShoppingCart size={18} /> Shop Now
-                  </Link>
-                </div>
-              </div>
+              <ShopProductCard key={product.id} product={product} />
             ))}
           </div>
         </section>
@@ -346,19 +301,35 @@ const Home = () => {
               <p style={{ color: '#64748b', fontSize: '0.9rem' }}>OpenStreetMap</p>
             </div>
             <a
-              href="https://www.openstreetmap.org/#map=15/14.455378/120.974665"
+              href={openStreetMapUrl}
               target="_blank"
               rel="noopener noreferrer"
               className="btn-rose"
             >
               Open in OpenStreetMap
             </a>
+            {hasSavedShopLocation ? (
+              <a
+                href={streetViewUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="btn-rose"
+              >
+                Open Street View
+              </a>
+            ) : (
+              <button type="button" className="btn-rose" disabled title="The saved shop location is not configured yet.">
+                Open Street View
+              </button>
+            )}
           </div>
 
           <div className="map-container">
             <iframe
               title="Shop Location"
-              src="https://www.openstreetmap.org/export/embed.html?bbox=120.974665,14.455378,120.974665,14.455378&layer=mapnik&marker=14.455378,120.974665"
+              loading="lazy"
+              src={'https://www.openstreetmap.org/export/embed.html?bbox=' + mapBox
+                + '&layer=mapnik&marker=' + mapLocation.latitude + ',' + mapLocation.longitude}
             ></iframe>
             <div style={{ padding: '0.5rem 1rem', fontSize: '0.8rem', color: '#64748b' }}>
               View on <a href="https://www.openstreetmap.org/" style={{ color: '#0ea5e9' }}>OpenStreetMap</a>

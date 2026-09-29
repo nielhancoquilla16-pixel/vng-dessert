@@ -4,6 +4,7 @@ import { CartProvider } from './context/CartContext';
 import Layout from './components/Layout';
 import ApiStatusBanner from './components/ApiStatusBanner';
 import AppErrorBoundary from './components/AppErrorBoundary';
+import RequireRole from './components/RequireRole';
 import Home from './pages/Home';
 import Products from './pages/Products';
 import Cart from './pages/Cart';
@@ -13,8 +14,11 @@ import Login from './pages/Login';
 import Orders from './pages/Orders';
 import Checkout from './pages/Checkout';
 import CheckoutPayMongoReturn from './pages/CheckoutPayMongoReturn';
+import CustomerDashboard from './pages/CustomerDashboard';
 import CustomerProfile from './pages/CustomerProfile';
+import Account from './pages/Account';
 import Feedback from './pages/Feedback';
+import AccessDenied from './pages/AccessDenied';
 
 import AdminLayout from './components/AdminLayout';
 import AdminDashboard from './pages/AdminDashboard';
@@ -28,6 +32,7 @@ import AdminQR from './pages/AdminQR';
 import AdminFeedback from './pages/AdminFeedback';
 import AdminStaff from './pages/AdminStaff';
 import AdminContent from './pages/AdminContent';
+import StaffDashboard from './pages/StaffDashboard';
 
 import { AuthProvider } from './context/AuthContext';
 import { ProductProvider } from './context/ProductContext';
@@ -37,7 +42,8 @@ import { PreOrderProvider } from './context/PreOrderContext';
 import { AIProvider } from './context/AIContext';
 import { ContentProvider } from './context/ContentContext';
 import { SalesReportProvider } from './context/SalesReportContext';
-import FloatingAI from './components/FloatingAI';
+import { ShopSettingsProvider } from './context/ShopSettingsContext';
+import { CustomerAddressesProvider } from './context/CustomerAddressesContext';
 import { normalizeBasePath } from './lib/publicUrl';
 
 const routerBasename = normalizeBasePath(import.meta.env.BASE_URL).replace(/\/$/, '') || '/';
@@ -45,17 +51,18 @@ const routerBasename = normalizeBasePath(import.meta.env.BASE_URL).replace(/\/$/
 function App() {
   return (
   <AuthProvider>
-    <ProductProvider>
-      <InventoryAlertProvider>
-        <OrderProvider>
-          <SalesReportProvider>
-            <PreOrderProvider>
-              <AIProvider>
-                <ContentProvider>
-                  <CartProvider>
+    <ShopSettingsProvider>
+      <CustomerAddressesProvider>
+      <ProductProvider>
+        <InventoryAlertProvider>
+          <OrderProvider>
+            <SalesReportProvider>
+              <PreOrderProvider>
+                <AIProvider>
+                  <ContentProvider>
+                    <CartProvider>
                     <AppErrorBoundary>
                       <>
-                        <FloatingAI />
                         <ApiStatusBanner />
                         <BrowserRouter basename={routerBasename}>
                           <Routes>
@@ -63,21 +70,24 @@ function App() {
                             <Route path="/" element={<Layout />}>
                               <Route index element={<Home />} />
                               <Route path="products" element={<Products />} />
-                              <Route path="cart" element={<Cart />} />
+                              <Route path="cart" element={<RequireRole allowedRoles={['customer']}><Cart /></RequireRole>} />
                               <Route path="contact" element={<Contact />} />
                               <Route path="about" element={<About />} />
                               <Route path="login" element={<Login />} />
-                              <Route path="profile" element={<CustomerProfile />} />
-                              <Route path="orders" element={<Orders />} />
-                              <Route path="checkout" element={<Checkout />} />
-                              <Route path="checkout/paymongo/success" element={<CheckoutPayMongoReturn mode="success" />} />
-                              <Route path="checkout/paymongo/cancel" element={<CheckoutPayMongoReturn mode="cancel" />} />
+                              <Route path="account" element={<Account />} />
+                              <Route path="403" element={<AccessDenied />} />
+                              <Route path="customer/dashboard" element={<RequireRole allowedRoles={['customer']}><CustomerDashboard /></RequireRole>} />
+                              <Route path="profile" element={<RequireRole allowedRoles={['customer']}><CustomerProfile /></RequireRole>} />
+                              <Route path="orders" element={<RequireRole allowedRoles={['customer']}><Orders /></RequireRole>} />
+                              <Route path="checkout" element={<RequireRole allowedRoles={['customer']}><Checkout /></RequireRole>} />
+                              <Route path="checkout/paymongo/success" element={<RequireRole allowedRoles={['customer']}><CheckoutPayMongoReturn mode="success" /></RequireRole>} />
+                              <Route path="checkout/paymongo/cancel" element={<RequireRole allowedRoles={['customer']}><CheckoutPayMongoReturn mode="cancel" /></RequireRole>} />
                               <Route path="feedback/:token" element={<Feedback />} />
                             </Route>
 
                             {/* Admin Routes */}
-                            <Route path="/admin" element={<AdminLayout />}>
-                              <Route path="dashboard" element={<AdminDashboard />} />
+                            <Route path="/admin" element={<RequireRole allowedRoles={['admin', 'staff']}><AdminLayout /></RequireRole>}>
+                              <Route path="dashboard" element={<RequireRole allowedRoles={['admin']}><AdminDashboard /></RequireRole>} />
                               <Route path="products" element={<AdminProducts />} />
                               <Route path="orders" element={<AdminOrders />} />
                               <Route path="pre-orders" element={<AdminPreOrders />} />
@@ -86,21 +96,28 @@ function App() {
                               <Route path="reports" element={<AdminReports />} />
                               <Route path="feedback" element={<AdminFeedback />} />
                               <Route path="qr" element={<AdminQR />} />
-                              <Route path="staff" element={<AdminStaff />} />
-                              <Route path="content" element={<AdminContent />} />
+                              <Route path="staff" element={<RequireRole allowedRoles={['admin']}><AdminStaff /></RequireRole>} />
+                              <Route path="content" element={<RequireRole allowedRoles={['admin']}><AdminContent /></RequireRole>} />
+                            </Route>
+
+                            {/* Staff Routes */}
+                            <Route path="/staff" element={<RequireRole allowedRoles={['staff']}><AdminLayout /></RequireRole>}>
+                              <Route path="dashboard" element={<StaffDashboard />} />
                             </Route>
                           </Routes>
                         </BrowserRouter>
                       </>
                     </AppErrorBoundary>
-                  </CartProvider>
-                </ContentProvider>
-              </AIProvider>
-            </PreOrderProvider>
-          </SalesReportProvider>
-        </OrderProvider>
-      </InventoryAlertProvider>
-    </ProductProvider>
+                    </CartProvider>
+                  </ContentProvider>
+                </AIProvider>
+              </PreOrderProvider>
+            </SalesReportProvider>
+          </OrderProvider>
+        </InventoryAlertProvider>
+      </ProductProvider>
+      </CustomerAddressesProvider>
+    </ShopSettingsProvider>
   </AuthProvider>
   );
 }

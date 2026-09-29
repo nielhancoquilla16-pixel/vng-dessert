@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { UserPlus, Trash2, Key, Calendar, ShieldCheck, Camera, ImagePlus, Save, X, Edit2 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import { PASSWORD_POLICY_MESSAGE, validatePassword } from '../utils/passwordValidation';
 import './AdminStaff.css';
 
 const MAX_PROFILE_IMAGE_BYTES = 2 * 1024 * 1024;
@@ -127,6 +128,12 @@ const AdminStaff = () => {
     setActionError('');
     setActionNotice('');
 
+    const passwordValidation = validatePassword(newStaff.password);
+    if (!passwordValidation.valid) {
+      setFormError(passwordValidation.message);
+      return;
+    }
+
     try {
       await createStaffAccount(newStaff);
       setIsCreateModalOpen(false);
@@ -209,6 +216,14 @@ const AdminStaff = () => {
     setActionError('');
     setActionNotice('');
 
+    if (editStaff.password) {
+      const passwordValidation = validatePassword(editStaff.password);
+      if (!passwordValidation.valid) {
+        setEditFormError(passwordValidation.message);
+        return;
+      }
+    }
+
     try {
       await updateStaffAccount(editingStaffId, editStaff);
       handleCloseEditModal();
@@ -262,8 +277,9 @@ const AdminStaff = () => {
       return;
     }
 
-    if (nextPassword.length < 8) {
-      setResetFormError('Temporary passwords must be at least 8 characters long.');
+    const passwordValidation = validatePassword(nextPassword);
+    if (!passwordValidation.valid) {
+      setResetFormError(passwordValidation.message);
       return;
     }
 
@@ -641,8 +657,17 @@ const AdminStaff = () => {
                   placeholder="Enter temporary password"
                   value={newStaff.password}
                   onChange={(e) => setNewStaff({ ...newStaff, password: e.target.value })}
+                  maxLength={20}
                   required
                 />
+                <p style={{
+                  margin: '0.35rem 0 0',
+                  color: newStaff.password && !validatePassword(newStaff.password).valid ? '#b91c1c' : '#64748b',
+                  fontSize: '0.78rem',
+                  lineHeight: 1.4,
+                }}>
+                  {PASSWORD_POLICY_MESSAGE}
+                </p>
               </div>
 
               <div className="modal-form-group">
@@ -700,7 +725,7 @@ const AdminStaff = () => {
               <div style={{ background: '#f8fafc', padding: '1rem', borderRadius: '0.75rem', marginBottom: '1.5rem', fontSize: '0.85rem', color: '#64748b' }}>
                 <p style={{ margin: 0, fontWeight: 600, color: '#475569' }}>Account Notes:</p>
                 <ul style={{ margin: '0.5rem 0 0 1.25rem' }}>
-                  <li>Supabase Auth will handle the secure login.</li>
+                  <li>Staff can sign in securely using their account details.</li>
                   <li>Use unique email addresses for every staff member.</li>
                   <li>PNG and JPG/JPEG images up to 2MB are supported.</li>
                 </ul>
@@ -719,7 +744,12 @@ const AdminStaff = () => {
                 >
                   Cancel
                 </button>
-                <button type="submit" className="btn-add-item" style={{ flex: 1, justifyContent: 'center' }}>
+                <button
+                  type="submit"
+                  className="btn-add-item"
+                  style={{ flex: 1, justifyContent: 'center' }}
+                  disabled={!validatePassword(newStaff.password).valid}
+                >
                   <Key size={16} /> Create Account
                 </button>
               </div>
@@ -762,8 +792,17 @@ const AdminStaff = () => {
                   placeholder="Enter a temporary password"
                   value={resetPasswordForm.password}
                   onChange={(e) => setResetPasswordForm((current) => ({ ...current, password: e.target.value }))}
+                  maxLength={20}
                   required
                 />
+                <p style={{
+                  margin: '0.35rem 0 0',
+                  color: resetPasswordForm.password && !validatePassword(resetPasswordForm.password).valid ? '#b91c1c' : '#64748b',
+                  fontSize: '0.78rem',
+                  lineHeight: 1.4,
+                }}>
+                  {PASSWORD_POLICY_MESSAGE}
+                </p>
               </div>
 
               <div className="modal-form-group">
@@ -774,6 +813,7 @@ const AdminStaff = () => {
                   placeholder="Re-enter the temporary password"
                   value={resetPasswordForm.confirmPassword}
                   onChange={(e) => setResetPasswordForm((current) => ({ ...current, confirmPassword: e.target.value }))}
+                  maxLength={20}
                   required
                 />
               </div>
@@ -788,7 +828,11 @@ const AdminStaff = () => {
                   className="btn-pos-cancel"
                   style={{ flex: 1 }}
                   onClick={handleCloseResetModal}
-                  disabled={resettingId === resetStaffInfo.id}
+                  disabled={
+                    resettingId === resetStaffInfo.id
+                    || !validatePassword(resetPasswordForm.password).valid
+                    || resetPasswordForm.password !== resetPasswordForm.confirmPassword
+                  }
                 >
                   Cancel
                 </button>
@@ -873,7 +917,16 @@ const AdminStaff = () => {
                   placeholder="Leave blank to keep current password"
                   value={editStaff.password}
                   onChange={(e) => setEditStaff({ ...editStaff, password: e.target.value })}
+                  maxLength={20}
                 />
+                <p style={{
+                  margin: '0.35rem 0 0',
+                  color: editStaff.password && !validatePassword(editStaff.password).valid ? '#b91c1c' : '#64748b',
+                  fontSize: '0.78rem',
+                  lineHeight: 1.4,
+                }}>
+                  {PASSWORD_POLICY_MESSAGE}
+                </p>
               </div>
 
               <div className="modal-form-group">
@@ -946,7 +999,12 @@ const AdminStaff = () => {
                 >
                   Cancel
                 </button>
-                <button type="submit" className="btn-add-item" style={{ flex: 1, justifyContent: 'center' }}>
+                <button
+                  type="submit"
+                  className="btn-add-item"
+                  style={{ flex: 1, justifyContent: 'center' }}
+                  disabled={Boolean(editStaff.password) && !validatePassword(editStaff.password).valid}
+                >
                   <Save size={16} /> Update Account
                 </button>
               </div>

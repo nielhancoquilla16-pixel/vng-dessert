@@ -1,22 +1,27 @@
-/* Base Layout */
-.app-container {
-  display: flex;
-  flex-direction: column;
-  min-height: 100vh;
-  overflow-x: clip;
+:root { --mobile-nav-height: calc(4.25rem + env(safe-area-inset-bottom, 0px)); }
+html { scroll-padding-top: 6rem; scroll-padding-bottom: calc(var(--mobile-nav-height) + 1rem); }
+.app-container { display: flex; flex-direction: column; min-height: 100vh; min-height: 100dvh; animation: none; overflow: visible; padding-bottom: var(--mobile-nav-height); background: #fffaf3; }
+.app-container .main-content { flex: 1; padding: 1rem max(.85rem, env(safe-area-inset-right)) 2rem max(.85rem, env(safe-area-inset-left)); max-width: 1280px; margin: 0 auto; width: 100%; min-width: 0; }
+.app-container :where(button, a, input, select, textarea) { -webkit-tap-highlight-color: transparent; touch-action: manipulation; scroll-margin-block: 6rem calc(var(--mobile-nav-height) + 1rem); }
+:where(button, a, input, select, textarea, summary, [tabindex]):focus-visible { outline: 3px solid #9a4608; outline-offset: 3px; }
+.app-container :where(input, select, textarea) { max-width: 100%; min-width: 0; }
+.app-container :where(img, video, iframe) { max-width: 100%; }
+.app-container :where(h1, h2, h3, p) { overflow-wrap: anywhere; }
+@media (max-width: 900px) {
+  .app-container :where(input, select, textarea) { font-size: 1rem; }
+  .app-container .footer { padding: 1.5rem 1rem 1rem; }
+  .app-container .footer-container { grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1rem; }
+  .app-container .footer-column:first-child { grid-column: 1 / -1; }
+  .app-container .footer-brand-title { font-size: 1.1rem; margin-bottom: .35rem; }
+  .app-container .footer-description { max-width: 32rem; font-size: .875rem; }
+  .app-container .footer-column h3 { margin-bottom: .25rem; font-size: .95rem; }
+  .app-container .footer-links { gap: 0; }
+  .app-container :is(.footer-link, .footer-social-link) { display: flex; align-items: center; min-height: 44px; }
+  .app-container .footer-bottom { padding-top: 1rem; }
+  .customer-reminder-banner { grid-template-columns: auto minmax(0, 1fr); gap: .65rem; padding: .85rem; border-radius: 14px; }
+  .customer-reminder-actions { grid-column: 1 / -1; }
+  .customer-reminder-copy p:last-child { font-size: .875rem; }
+  .api-status-banner { position: relative; font-size: .875rem; align-items: flex-start; }
 }
-
-.main-content {
-  flex: 1;
-  padding: clamp(1rem, 3vw, 2rem);
-  max-width: 1280px;
-  margin: 0 auto;
-  width: 100%;
-}
-
-/* Responsive */
-@media (max-width: 768px) {
-  .main-content {
-    padding: 0.85rem;
-  }
-}
+@media (min-width: 901px) { :root { --mobile-nav-height: 0px; } .app-container .main-content { padding: 1.75rem 2rem 3rem; } }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; transition-duration: .01ms !important; } }

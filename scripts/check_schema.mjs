@@ -59,6 +59,9 @@ const requiredSchema = {
     'address',
     'delivery_method',
     'payment_method',
+    'delivery_address_id',
+    'cash_received',
+    'change_amount',
     'total_price',
     'order_status',
     'review_status',
@@ -69,10 +72,20 @@ const requiredSchema = {
     'contains_leche_flan',
     'inventory_deducted_at',
     'qr_claimed_at',
+    'verification_required',
+    'qr_token',
+    'qr_generated_at',
+    'qr_expires_at',
+    'qr_used_at',
+    'verified_at',
+    'verified_by',
+    'verification_method',
     'ready_notified_at',
     'ready_notification_message',
     'receipt_image_url',
     'receipt_received_at',
+    'feedback_token',
+    'feedback_token_generated_at',
     'notifications',
     'status_timestamps',
     'updated_at',
@@ -94,6 +107,7 @@ const requiredSchema = {
     'phone_number',
     'address',
     'delivery_method',
+    'delivery_address_id',
     'delivery_distance_km',
     'line_items',
     'payment_intent_id',
@@ -156,6 +170,48 @@ const requiredSchema = {
     'cart_id',
     'product_id',
     'quantity',
+  ],
+  customer_addresses: [
+    'id',
+    'user_id',
+    'label',
+    'recipient_name',
+    'phone_number',
+    'street_address',
+    'barangay',
+    'city',
+    'province',
+    'region',
+    'postal_code',
+    'formatted_address',
+    'place_id',
+    'latitude',
+    'longitude',
+    'is_default',
+    'created_at',
+    'updated_at',
+  ],
+  order_feedback: [
+    'id',
+    'order_id',
+    'rating',
+    'product_rating',
+    'service_rating',
+    'fulfillment_rating',
+    'comment',
+    'customer_name',
+    'customer_id',
+    'is_anonymous',
+    'status',
+    'purchased_items',
+    'transaction_at',
+    'submitted_at',
+    'viewed_at',
+    'viewed_by',
+    'acknowledged_at',
+    'acknowledged_by',
+    'created_at',
+    'updated_at',
   ],
 };
 
@@ -233,7 +289,9 @@ async function checkSchema() {
 
   if (!hasIssues) {
     console.log('All required tables and columns are present.');
+  } else {
+    process.exitCode = 1;
   }
 }
 
-checkSchema();
+await checkSchema();

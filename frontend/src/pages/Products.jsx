@@ -1,402 +1,298 @@
-import React, { useState, useRef, useEffect } from 'react';
+﻿import { useState, useRef, useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { useNavigate } from 'react-router-dom';
-import { CalendarDays, Search, Plus, Sparkles, X, Send } from 'lucide-react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import { CalendarDays, Search, Plus, Minus, Sparkles, X, Send, ShoppingBag } from 'lucide-react';
 import { useProducts } from '../context/ProductContext';
 import { useCart } from '../context/CartContext';
 import { useAI } from '../context/AIContext';
 import { useAuth } from '../context/AuthContext';
+import { useShopSettings } from '../context/ShopSettingsContext';
+import { formatCurrency } from '../utils/orderAnalytics';
+import { formatCurrencyText } from '../utils/currency';
+import { getPreOrderUnavailableReason as getProductPreOrderUnavailableReason } from '../utils/preOrders';
+import useDialogFocus from '../hooks/useDialogFocus';
 import PreOrderModal from '../components/PreOrderModal';
+import ShopProductCard from '../components/ShopProductCard';
 import './Products.css';
 
 const Products = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('All Categories');
   const { products, isProductsLoading } = useProducts();
-  const { addToCart } = useCart();
+  const { addToCart, cartItems } = useCart();
   const { queryProductAI } = useAI();
   const { loggedInCustomer } = useAuth();
+  const { isShopOpen, isShopSettingsLoading, shopSettingsError, operatingHoursLabel, closingTimeLabel } = useShopSettings();
   const navigate = useNavigate();
-
-  // AI Chat State
+  const [searchParams, setSearchParams] = useSearchParams();
   const [chatProduct, setChatProduct] = useState(null);
   const [preOrderProduct, setPreOrderProduct] = useState(null);
   const [messages, setMessages] = useState([]);
   const [inputValue, setInputValue] = useState('');
   const [isSending, setIsSending] = useState(false);
+  const [detailQuantity, setDetailQuantity] = useState(1);
+  const [isAdding, setIsAdding] = useState(false);
+  const [purchaseMessage, setPurchaseMessage] = useState('');
+  const [purchaseError, setPurchaseError] = useState(false);
   const messagesEndRef = useRef(null);
+  const chatRequestRef = useRef(0);
 
-  useEffect(() => {
-    if (chatProduct) {
-      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-      document.body.style.overflow = 'hidden';
-    } else {
-      document.body.style.overflow = 'unset';
-    }
-    return () => { document.body.style.overflow = 'unset'; };
-  }, [messages, chatProduct]);
-
-  const storeProducts = products.filter(p => !p.type || p.type === 'product');
-  const categories = ['All Categories', ...new Set(storeProducts.map(p => p.category))];
-
-  const filteredProducts = storeProducts.filter(product => {
-    const matchesSearch =
-      product.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (product.description || '').toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesCategory =
-      selectedCategory === 'All Categories' || product.category === selectedCategory;
-    return matchesSearch && matchesCategory;
+  const storeProducts = products.filter((product) => !product.type || product.type === 'product');
+  const categories = ['All Categories', ...new Set(storeProducts.map((product) => product.category).filter(Boolean))];
+  const detailProduct = storeProducts.find((product) => String(product.id) === searchParams.get('product')) || null;
+  const filteredProducts = storeProducts.filter((product) => {
+    const query = searchTerm.trim().toLowerCase();
+    const matchesSearch = product.name.toLowerCase().includes(query)
+      || (product.description || '').toLowerCase().includes(query);
+    return matchesSearch && (selectedCategory === 'All Categories' || product.category === selectedCategory);
   });
 
-  function openChat(product) {
-    setChatProduct(product);
-    setMessages([
-      {
-        role: 'ai',
-        text: `Hi! I'm your Llama AI assistant for V&G. Ask me anything about **${product.name}** or our shop — location, hours, delivery, ingredients, and more!`
-      }
-    ]);
-    setInputValue('');
+  const remainingStock = (product) => Math.max(0,
+    (Number(product?.stock) || 0)
+    - (cartItems.find((item) => String(item.id) === String(product?.id))?.quantity || 0),
+  );
+  const areShopHoursKnown = !isShopSettingsLoading && !shopSettingsError;
+  const getPreOrderUnavailableReason = (product) => getProductPreOrderUnavailableReason(product, {
+    isShopOpen, isShopSettingsLoading, shopSettingsError,
+  });
+  const canAddProductToCart = (product) => remainingStock(product) > 0
+    && product?.availability !== 'expired'
+    && product?.availability !== 'hidden'
+    && !product?.isExpired
+    && areShopHoursKnown && isShopOpen;
+  const getAvailability = (product) => product.availability === 'expired' || product.availability === 'hidden'
+    ? 'Unavailable' : Number(product.stock) > 0 ? `${product.stock} available` : 'Out of stock';
+  const purchaseLabel = (product) => isShopSettingsLoading ? 'Checking hours'
+    : shopSettingsError ? 'Hours unavailable' : !isShopOpen ? 'Shop closed'
+    : getAvailability(product) === 'Unavailable' ? 'Unavailable'
+      : Number(product.stock) <= 0 ? 'Out of stock'
+        : remainingStock(product) <= 0 ? 'Cart limit reached' : 'Add to Cart';
+
+  function closeDetails() {
+    setSearchParams((params) => {
+      const next = new URLSearchParams(params);
+      next.delete('product');
+      return next;
+    }, { replace: true });
+  }
+
+  function openDetails(product) {
+    setDetailQuantity(1);
+    setPurchaseMessage('');
+    setSearchParams((params) => {
+      const next = new URLSearchParams(params);
+      next.set('product', product.id);
+      return next;
+    });
   }
 
   function closeChat() {
+    chatRequestRef.current += 1;
     setChatProduct(null);
     setMessages([]);
     setInputValue('');
+    setIsSending(false);
+  }
+
+  const detailDialogRef = useDialogFocus({ isOpen: Boolean(detailProduct), onClose: closeDetails });
+  const chatDialogRef = useDialogFocus({ isOpen: Boolean(chatProduct), onClose: closeChat });
+
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ block: 'nearest' });
+  }, [messages, isSending]);
+
+  function openChat(product) {
+    closeDetails();
+    chatRequestRef.current += 1;
+    setChatProduct(product);
+    setMessages([{ role: 'ai', text: `Hi! Ask me about ${product.name}, ingredients, delivery, or our shop.` }]);
+    setInputValue('');
+    setPurchaseMessage('');
   }
 
   function openPreOrder(product) {
+    if (getPreOrderUnavailableReason(product)) return;
+    closeDetails();
     if (!loggedInCustomer) {
       navigate('/login');
       return;
     }
-
     setPreOrderProduct(product);
   }
 
-  function closePreOrder() {
-    setPreOrderProduct(null);
-  }
-
-  async function sendMessage(e) {
-    e.preventDefault();
-    const text = inputValue.trim();
-    if (!text || isSending) return;
-
-    setInputValue('');
-    setMessages(prev => [...prev, { role: 'user', text }]);
-    setIsSending(true);
-
+  async function purchaseProduct(product, quantity = 1) {
+    if (!canAddProductToCart(product) || isAdding) return;
+    setIsAdding(true);
+    setPurchaseMessage('');
+    setPurchaseError(false);
     try {
-      const reply = await queryProductAI(chatProduct, text);
-      setMessages(prev => [...prev, { role: 'ai', text: reply }]);
-    } catch {
-      setMessages(prev => [...prev, { role: 'ai', text: 'Sorry, something went wrong. Please try again.' }]);
+      await addToCart(product, quantity);
+      setPurchaseMessage(`${quantity === 1 ? 'Item' : `${quantity} items`} added to your cart.`);
+    } catch (error) {
+      setPurchaseError(true);
+      setPurchaseMessage(error.message || 'Could not add this item. Please try again.');
     } finally {
-      setIsSending(false);
+      setIsAdding(false);
     }
   }
 
-  return (
-    <div>
-      <div className="page-header">
-        <h1 className="page-title">Our Products</h1>
-        <p className="page-subtitle">Browse our delicious selection of Filipino desserts.</p>
-      </div>
+  async function sendMessage(event) {
+    event.preventDefault();
+    const text = inputValue.trim();
+    if (!text || isSending) return;
+    const requestId = chatRequestRef.current;
+    setInputValue('');
+    setMessages((previous) => [...previous, { role: 'user', text }]);
+    setIsSending(true);
+    try {
+      const reply = await queryProductAI(chatProduct, text);
+      if (requestId === chatRequestRef.current) setMessages((previous) => [...previous, { role: 'ai', text: reply }]);
+    } catch {
+      if (requestId === chatRequestRef.current) setMessages((previous) => [...previous, { role: 'ai', text: 'Sorry, something went wrong. Please try again.' }]);
+    } finally {
+      if (requestId === chatRequestRef.current) setIsSending(false);
+    }
+  }
 
-      <div className="controls-bar">
-        <div className="control-group">
-          <label>Search Products</label>
-          <div className="input-with-icon">
-            <Search className="input-icon" size={20} />
+  const selectedQuantity = Math.max(1, Math.min(detailQuantity, remainingStock(detailProduct)));
+
+  return (
+    <div className="products-page">
+      <header className="products-heading">
+        <div>
+          <span className="products-eyebrow">Sweet moments start here</span>
+          <h1>Our desserts</h1>
+          <p>Ordering hours: {operatingHoursLabel}.</p>
+          {shopSettingsError && <p role="status">We cannot confirm shop hours right now. Please try again shortly.</p>}
+        </div>
+        <span className={`shop-hours-tag${isShopOpen ? '' : ' is-closed'}`} role="status">
+          <span aria-hidden="true" />{isShopSettingsLoading ? 'Checking shop hours' : shopSettingsError ? 'Hours unavailable' : isShopOpen ? `Open until ${closingTimeLabel}` : 'Currently closed'}
+        </span>
+      </header>
+
+      <div className="catalog-controls" role="search" aria-label="Find desserts">
+        <div className="catalog-search-group">
+          <label htmlFor="dessert-search">Search desserts</label>
+          <div className="catalog-search-field">
+            <Search size={20} aria-hidden="true" />
             <input
-              type="text"
-              className="text-input"
-              style={{ paddingLeft: '3rem' }}
-              placeholder="Search by name or description..."
+              id="dessert-search"
+              type="search"
+              placeholder="Search your favorites"
               value={searchTerm}
-              onChange={e => setSearchTerm(e.target.value)}
+              onChange={(event) => setSearchTerm(event.target.value)}
             />
           </div>
         </div>
-
-        <div className="control-group">
-          <label>Filter by Category</label>
-          <select
-            className="select-input"
-            value={selectedCategory}
-            onChange={e => setSelectedCategory(e.target.value)}
-          >
-            {categories.map(cat => (
-              <option key={cat} value={cat}>{cat}</option>
-            ))}
+        <div className="catalog-category-group">
+          <label htmlFor="dessert-category">Category</label>
+          <select id="dessert-category" value={selectedCategory} onChange={(event) => setSelectedCategory(event.target.value)}>
+            {categories.map((category) => <option key={category} value={category}>{category}</option>)}
           </select>
         </div>
       </div>
 
-      <div className="product-grid">
-        {isProductsLoading ? (
-          [1, 2, 3, 4, 5, 6].map(i => (
-            <div key={i} className="skeleton-card" style={{ height: '380px', padding: '0', overflow: 'hidden' }}>
-              <div className="skeleton skeleton-image" style={{ height: '220px', borderRadius: '0', margin: '0' }}></div>
-              <div style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column', flex: 1 }}>
-                <div className="skeleton skeleton-title" style={{ width: '70%', height: '24px', marginBottom: 'auto' }}></div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginTop: '1rem' }}>
-                  <div>
-                    <div className="skeleton" style={{ width: '60px', height: '22px', marginBottom: '8px' }}></div>
-                    <div className="skeleton" style={{ width: '80px', height: '16px' }}></div>
-                  </div>
-                  <div className="skeleton" style={{ width: '100px', height: '40px', borderRadius: '8px' }}></div>
-                </div>
-              </div>
-            </div>
-          ))
-        ) : (
-          filteredProducts.map(product => (
-            <div key={product.id} className="product-card">
-              <div className="product-image-container" style={{ position: 'relative' }}>
-                <span className="category-badge">{product.category}</span>
-                <img src={product.image} alt={product.name} className="product-image" />
-                {/* Ask AI button — inline style for guaranteed visibility */}
-                <button
-                  style={{
-                    position: 'absolute',
-                    top: '12px',
-                    right: '12px',
-                    zIndex: 20,
-                    background: 'rgba(99, 102, 241, 0.95)',
-                    color: 'white',
-                    border: 'none',
-                    padding: '6px 14px',
-                    borderRadius: '999px',
-                    fontSize: '0.75rem',
-                    fontWeight: 700,
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '6px',
-                    cursor: 'pointer',
-                    boxShadow: '0 4px 12px rgba(99,102,241,0.4)',
-                    pointerEvents: 'auto',
-                  }}
-                  onClick={() => openChat(product)}
-                >
-                  <Sparkles size={13} /> Ask AI
-                </button>
-              </div>
-
-              <div className="product-info">
-                <h3 className="product-title">{product.name}</h3>
-                <div className="product-meta">
-                  <div>
-                    <div className="product-price">₱{product.price}</div>
-                    <div className="product-stock">Stock: {product.stock}</div>
-                  </div>
-                  <div className="product-actions">
-                    <button
-                      className="btn-primary btn-icon"
-                      disabled={Number(product.stock) <= 0}
-                      onClick={() => addToCart(product)}
-                    >
-                      <Plus size={16} /> {Number(product.stock) <= 0 ? 'Out of Stock' : 'Add to Cart'}
-                    </button>
-                    <button
-                      className="btn-preorder"
-                      type="button"
-                      onClick={() => openPreOrder(product)}
-                    >
-                      <CalendarDays size={16} /> Pre-Order
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </div>
-          ))
-        )}
-      </div>
-
-      {/* AI Chat Modal */}
-      {chatProduct && createPortal(
-        <div
-          style={{
-            position: 'fixed',
-            top: 0, left: 0, right: 0, bottom: 0,
-            background: 'rgba(0,0,0,0.7)',
-            zIndex: 9999,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            padding: '1rem',
-          }}
-          onClick={e => { if (e.target === e.currentTarget) closeChat(); }}
-        >
-          <div
-            style={{
-              background: 'white',
-              borderRadius: '1.5rem',
-              width: '100%',
-              maxWidth: '540px',
-              height: '75vh',
-              display: 'flex',
-              flexDirection: 'column',
-              overflow: 'hidden',
-              boxShadow: '0 25px 50px rgba(0,0,0,0.3)',
-              animation: 'modalSlide 0.3s ease',
-            }}
-          >
-            {/* Header */}
-            <div style={{
-              padding: '1.25rem 1.5rem',
-              background: 'linear-gradient(135deg, #6366f1, #a855f7)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-            }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                <div style={{
-                  width: 40, height: 40,
-                  background: 'rgba(255,255,255,0.2)',
-                  borderRadius: '0.75rem',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  color: 'white'
-                }}>
-                  <Sparkles size={20} />
-                </div>
-                <div>
-                  <div style={{ color: 'white', fontWeight: 700, fontSize: '1rem' }}>Llama AI Assistant</div>
-                  <div style={{ color: 'rgba(255,255,255,0.7)', fontSize: '0.75rem' }}>{chatProduct.name}</div>
-                </div>
-              </div>
-              <button
-                onClick={closeChat}
-                style={{
-                  background: 'rgba(255,255,255,0.2)',
-                  border: 'none', color: 'white',
-                  width: 36, height: 36,
-                  borderRadius: '50%',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  cursor: 'pointer',
-                }}
-              >
-                <X size={18} />
-              </button>
-            </div>
-
-            {/* Messages */}
-            <div style={{
-              flex: 1,
-              overflowY: 'auto',
-              padding: '1.5rem',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '1rem',
-              background: '#f8fafc',
-            }}>
-              {messages.map((msg, i) => (
-                <div key={i} style={{
-                  alignSelf: msg.role === 'user' ? 'flex-end' : 'flex-start',
-                  maxWidth: '85%',
-                  padding: '0.875rem 1.125rem',
-                  borderRadius: msg.role === 'user' ? '1rem 1rem 0.25rem 1rem' : '1rem 1rem 1rem 0.25rem',
-                  background: msg.role === 'user' ? '#6366f1' : 'white',
-                  color: msg.role === 'user' ? 'white' : '#334155',
-                  fontSize: '0.9rem',
-                  lineHeight: 1.5,
-                  boxShadow: msg.role === 'user' ? '0 4px 12px rgba(99,102,241,0.25)' : '0 2px 8px rgba(0,0,0,0.06)',
-                  border: msg.role === 'ai' ? '1px solid #e2e8f0' : 'none',
-                }}>
-                  {msg.text}
-                </div>
-              ))}
-
-              {isSending && (
-                <div style={{
-                  alignSelf: 'flex-start',
-                  background: 'white',
-                  border: '1px solid #e2e8f0',
-                  borderRadius: '1rem 1rem 1rem 0.25rem',
-                  padding: '0.875rem 1.25rem',
-                  display: 'flex', gap: '4px',
-                }}>
-                  {[0,1,2].map(i => (
-                    <span key={i} style={{
-                      width: 6, height: 6,
-                      background: '#94a3b8',
-                      borderRadius: '50%',
-                      display: 'inline-block',
-                      animation: `typingDot 1.4s ${i * 0.2}s infinite`,
-                    }} />
-                  ))}
-                </div>
-              )}
-              <div ref={messagesEndRef} />
-            </div>
-
-            {/* Input */}
-            <form
-              onSubmit={sendMessage}
-              style={{
-                padding: '1rem 1.5rem',
-                background: 'white',
-                borderTop: '1px solid #e2e8f0',
-                display: 'flex',
-                gap: '0.75rem',
-              }}
-            >
-              <input
-                type="text"
-                value={inputValue}
-                onChange={e => setInputValue(e.target.value)}
-                placeholder="Ask anything — location, price, ingredients..."
-                disabled={isSending}
-                style={{
-                  flex: 1,
-                  padding: '0.7rem 1rem',
-                  border: '1.5px solid #e2e8f0',
-                  borderRadius: '0.75rem',
-                  outline: 'none',
-                  fontSize: '0.9rem',
-                  fontFamily: 'inherit',
-                }}
-              />
-              <button
-                type="submit"
-                disabled={isSending || !inputValue.trim()}
-                style={{
-                  width: 42, height: 42,
-                  background: '#6366f1',
-                  color: 'white',
-                  border: 'none',
-                  borderRadius: '0.75rem',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  cursor: isSending || !inputValue.trim() ? 'not-allowed' : 'pointer',
-                  opacity: isSending || !inputValue.trim() ? 0.5 : 1,
-                  flexShrink: 0,
-                }}
-              >
-                <Send size={18} />
-              </button>
-            </form>
-
-            {/* Add to Cart footer */}
-            <div style={{ padding: '0 1.5rem 1.25rem' }}>
-              <button
-                className="btn-primary"
-                style={{ width: '100%', padding: '0.875rem', borderRadius: '0.75rem' }}
-                onClick={() => { addToCart(chatProduct); closeChat(); }}
-              >
-                Add to Cart • ₱{chatProduct.price}
-              </button>
-            </div>
+      <p className="catalog-result-count" role="status" aria-live="polite">
+        {isProductsLoading ? 'Finding your treats…' : `${filteredProducts.length} ${filteredProducts.length === 1 ? 'dessert' : 'desserts'} to explore`}
+      </p>
+      <div className="shop-product-grid">
+        {isProductsLoading ? [1, 2, 3, 4, 5, 6].map((item) => (
+          <div className="catalog-skeleton" key={item} aria-hidden="true">
+            <div className="skeleton catalog-skeleton-image" />
+            <div className="skeleton skeleton-title" />
+            <div className="skeleton skeleton-text" />
           </div>
-        </div>,
-        document.body
+        )) : filteredProducts.map((product) => (
+          <ShopProductCard
+            key={product.id}
+            product={product}
+            onDetails={openDetails}
+            onPreOrder={openPreOrder}
+            preOrderUnavailableReason={getPreOrderUnavailableReason(product)}
+          />
+        ))}
+      </div>
+      {!isProductsLoading && filteredProducts.length === 0 && (
+        <div className="catalog-empty">
+          <ShoppingBag size={32} aria-hidden="true" />
+          <h2>{storeProducts.length ? 'No desserts found' : 'Our menu is on its way'}</h2>
+          <p>{storeProducts.length ? 'Try another search or browse all categories.' : 'Please check back shortly for available desserts.'}</p>
+          {(searchTerm || selectedCategory !== 'All Categories') && <button type="button" onClick={() => { setSearchTerm(''); setSelectedCategory('All Categories'); }}>Clear filters</button>}
+        </div>
       )}
 
-      <PreOrderModal
-        product={preOrderProduct}
-        isOpen={Boolean(preOrderProduct)}
-        onClose={closePreOrder}
-      />
+      {detailProduct && createPortal(
+        <div className="dessert-dialog-backdrop" onClick={(event) => { if (event.target === event.currentTarget) closeDetails(); }}>
+          <section className="dessert-detail-dialog" ref={detailDialogRef} tabIndex={-1} role="dialog" aria-modal="true" aria-labelledby="dessert-detail-title">
+            <header className="dessert-dialog-header">
+              <span>Made for sweet moments</span>
+              <button type="button" className="dessert-icon-button" onClick={closeDetails} aria-label="Close product details"><X size={22} /></button>
+            </header>
+            <div className="dessert-detail-scroll">
+              <img className="dessert-detail-image" src={detailProduct.image} alt={detailProduct.name} />
+              <div className="dessert-detail-info">
+                <span className="products-eyebrow">{detailProduct.category}</span>
+                <h2 id="dessert-detail-title">{detailProduct.name}</h2>
+                <div className="dessert-detail-price">{formatCurrency(detailProduct.price)}</div>
+                <p className="dessert-detail-stock">{getAvailability(detailProduct)}</p>
+                <p className="dessert-detail-description">{detailProduct.description || 'A sweet treat from V & G Leche Flan.'}</p>
+                <p className="dessert-hours-note">Ordering hours: {operatingHoursLabel}.</p>
+                <div className="dessert-detail-extras">
+                  <button type="button" onClick={() => openChat(detailProduct)}><Sparkles size={17} aria-hidden="true" /> Ask about this dessert</button>
+                  <button
+                    type="button"
+                    disabled={Boolean(getPreOrderUnavailableReason(detailProduct))}
+                    aria-describedby={getPreOrderUnavailableReason(detailProduct) ? 'dessert-preorder-reason' : undefined}
+                    onClick={() => openPreOrder(detailProduct)}
+                  ><CalendarDays size={17} aria-hidden="true" /> Pre-order for later</button>
+                </div>
+                {getPreOrderUnavailableReason(detailProduct) && (
+                  <p className="shop-preorder-reason" id="dessert-preorder-reason">{getPreOrderUnavailableReason(detailProduct)}</p>
+                )}
+              </div>
+            </div>
+            <footer className="dessert-detail-footer">
+              <div className="dessert-purchase-row">
+                <div className="dessert-quantity" role="group" aria-label="Quantity">
+                  <button type="button" aria-label="Decrease quantity" disabled={selectedQuantity <= 1 || isAdding} onClick={() => setDetailQuantity(selectedQuantity - 1)}><Minus size={18} /></button>
+                  <output aria-live="polite">{selectedQuantity}</output>
+                  <button type="button" aria-label="Increase quantity" disabled={selectedQuantity >= remainingStock(detailProduct) || isAdding || !canAddProductToCart(detailProduct)} onClick={() => setDetailQuantity(selectedQuantity + 1)}><Plus size={18} /></button>
+                </div>
+                <button className="shop-add-button" type="button" disabled={!canAddProductToCart(detailProduct) || isAdding} onClick={() => void purchaseProduct(detailProduct, selectedQuantity)}>
+                  {isAdding ? 'Adding…' : purchaseLabel(detailProduct)}{canAddProductToCart(detailProduct) && <span>{formatCurrency(detailProduct.price * selectedQuantity)}</span>}
+                </button>
+              </div>
+              <p className={`dessert-purchase-message${purchaseError ? ' has-error' : ''}`} role="status">{purchaseMessage}</p>
+            </footer>
+          </section>
+        </div>, document.body,
+      )}
+
+      {chatProduct && createPortal(
+        <div className="dessert-dialog-backdrop" onClick={(event) => { if (event.target === event.currentTarget) closeChat(); }}>
+          <section className="dessert-chat-dialog" ref={chatDialogRef} tabIndex={-1} role="dialog" aria-modal="true" aria-labelledby="dessert-chat-title">
+            <header className="dessert-chat-header">
+              <div><h2 id="dessert-chat-title"><Sparkles size={20} aria-hidden="true" /> Dessert assistant</h2><p>{chatProduct.name}</p></div>
+              <button type="button" className="dessert-icon-button" onClick={closeChat} aria-label="Close dessert assistant"><X size={22} /></button>
+            </header>
+            <div className="dessert-chat-messages" role="log" aria-live="polite" aria-relevant="additions text">
+              {messages.map((message, index) => <div key={index} className={`dessert-chat-message ${message.role === 'user' ? 'from-user' : 'from-assistant'}`}>{message.role === 'user' ? message.text : formatCurrencyText(message.text)}</div>)}
+              {isSending && <p className="dessert-chat-thinking">Finding an answer…</p>}
+              <div ref={messagesEndRef} />
+            </div>
+            <form className="dessert-chat-form" onSubmit={sendMessage}>
+              <input type="text" aria-label="Ask about this dessert" value={inputValue} onChange={(event) => setInputValue(event.target.value)} placeholder="Ask about this dessert…" disabled={isSending} />
+              <button type="submit" className="dessert-icon-button" aria-label="Send message" disabled={isSending || !inputValue.trim()}><Send size={20} /></button>
+            </form>
+            <footer className="dessert-chat-footer">
+              <button className="shop-add-button" type="button" disabled={!canAddProductToCart(chatProduct) || isAdding} onClick={() => void purchaseProduct(chatProduct)}>{isAdding ? 'Adding…' : purchaseLabel(chatProduct)} · {formatCurrency(chatProduct.price)}</button>
+              <p className={`dessert-purchase-message${purchaseError ? ' has-error' : ''}`} role="status">{purchaseMessage}</p>
+            </footer>
+          </section>
+        </div>, document.body,
+      )}
+
+      <PreOrderModal product={preOrderProduct} isOpen={Boolean(preOrderProduct)} onClose={() => setPreOrderProduct(null)} />
     </div>
   );
 };

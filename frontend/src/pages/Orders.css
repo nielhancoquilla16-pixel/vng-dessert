@@ -407,6 +407,16 @@
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8);
 }
 
+.order-feedback-panel {
+  background: linear-gradient(180deg, #eff6ff 0%, #ffffff 100%);
+  border-color: #bfdbfe;
+}
+
+.order-feedback-panel .order-panel-kicker,
+.order-feedback-panel .order-qr-code-label {
+  color: #2563eb;
+}
+
 .order-qr-header,
 .receipt-panel-header,
 .received-proof-header,
@@ -1182,6 +1192,64 @@
   color: #92400e;
 }
 
+.customer-delivery-panel {
+  display: grid;
+  gap: 0.9rem;
+  padding: 1rem;
+  border-radius: 1.2rem;
+  border: 1px solid #bae6fd;
+  background: linear-gradient(180deg, #f0f9ff 0%, #ffffff 100%);
+}
+
+.customer-delivery-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  color: #0369a1;
+}
+
+.customer-delivery-header h3 {
+  margin: 0;
+  color: #0f172a;
+  font-size: 1.15rem;
+}
+
+.customer-delivery-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.customer-delivery-grid > div {
+  min-height: 76px;
+  padding: 0.9rem 1rem;
+  border-radius: 1rem;
+  border: 1px solid #dbeafe;
+  background: #ffffff;
+}
+
+.customer-delivery-grid span {
+  display: block;
+  margin-bottom: 0.25rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 0.7rem;
+  color: #64748b;
+  font-weight: 800;
+}
+
+.customer-delivery-grid strong {
+  display: block;
+  color: #0f172a;
+  line-height: 1.25;
+}
+
+.customer-delivery-link {
+  justify-self: start;
+  text-decoration: none;
+}
+
 .customer-order-actions {
   display: flex;
   flex-wrap: wrap;
@@ -1486,6 +1554,44 @@
   box-shadow: 0 14px 28px rgba(249, 115, 22, 0.24);
 }
 
+.order-confirmation-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  background: rgba(15, 23, 42, 0.48);
+}
+
+.order-confirmation-dialog {
+  width: min(100%, 460px);
+  display: grid;
+  gap: 1rem;
+  padding: 1.5rem;
+  border: 1px solid #fed7aa;
+  border-radius: 12px;
+  background: #ffffff;
+  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.26);
+}
+
+.order-confirmation-dialog h2,
+.order-confirmation-dialog p {
+  margin: 0;
+}
+
+.order-confirmation-dialog p {
+  color: #475569;
+  line-height: 1.5;
+}
+
+.order-confirmation-actions {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
 .checkout-helper-copy {
   margin: 0.45rem 0 0;
   color: #64748b;
@@ -1532,6 +1638,16 @@
   }
 }
 
+.order-field-optional {
+  color: #94a3b8;
+  font-weight: 700;
+  text-transform: none;
+}
+
+.order-evidence-link {
+  display: block;
+}
+
 @media (max-width: 1024px) {
   .customer-order-header {
     align-items: flex-start;
@@ -1550,6 +1666,7 @@
 
   .orders-summary-grid,
   .customer-order-summary,
+  .customer-delivery-grid,
   .order-form-grid,
   .order-form-meta {
     grid-template-columns: 1fr;
@@ -1568,4 +1685,66 @@
   .workflow-rail {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+}
+/* Customer order cards share a compact, flexible layout with the storefront. */
+.orders-workflow-page { padding: 0; margin-bottom: 1rem; min-width: 0; gap: 1rem; }
+.orders-workflow-page :where(div, section, article) { min-width: 0; }
+.orders-customer-heading h1 { font-size: clamp(1.6rem, 3vw, 2.25rem); line-height: 1.2; margin: 0 0 .4rem; }
+.orders-customer-heading p { color: var(--text-muted); line-height: 1.5; }
+.orders-workflow-page .orders-section,
+.orders-workflow-page .orders-notification-panel { border-radius: 1rem; box-shadow: 0 4px 16px rgba(88,51,15,.03); }
+.orders-workflow-page .customer-order-card { border-radius: .875rem; box-shadow: none; }
+.orders-workflow-page .customer-order-title-block h2 { font-size: 1.15rem; line-height: 1.4; overflow-wrap: anywhere; }
+.orders-workflow-page .orders-section-header h2 { font-size: 1.25rem; line-height: 1.35; }
+.orders-workflow-page .order-button { min-height: 44px; min-width: 44px; line-height: 1.4; border-radius: .75rem; text-align: center; }
+.orders-workflow-page .order-button svg { flex-shrink: 0; }
+.orders-workflow-page .order-input,
+.orders-workflow-page .order-textarea { min-height: 44px; min-width: 0; max-width: 100%; font-size: 1rem; scroll-margin-block: 5.5rem; }
+.orders-workflow-page .order-form-field label { text-transform: none; letter-spacing: normal; font-size: .875rem; color: #475569; }
+.orders-workflow-page .customer-order-item { flex-wrap: wrap; gap: .4rem .75rem; }
+.orders-workflow-page .customer-order-item > div { flex: 1 1 150px; }
+.orders-workflow-page .customer-order-item span { white-space: normal; }
+.orders-workflow-page :is(.customer-order-note, .customer-order-feed-item, .orders-notification-title, .customer-order-summary, .order-qr-code-label, .order-form-meta, .order-upload-card, .customer-delivery-grid, .customer-order-item) { overflow-wrap: anywhere; }
+.orders-workflow-page .orders-alert-card > svg,
+.orders-workflow-page .customer-order-note > svg { flex-shrink: 0; }
+.orders-workflow-page .order-upload-card { position: relative; }
+.orders-workflow-page .order-hidden-input { display: block; position: absolute; width: 1px; height: 1px; opacity: 0; }
+.orders-workflow-page .order-upload-card:focus-within { outline: 3px solid #9a3412; outline-offset: 3px; }
+.order-confirmation-backdrop { z-index: 1200; padding: max(1rem, env(safe-area-inset-top)) 1rem max(1rem, env(safe-area-inset-bottom)); overflow-y: auto; }
+.order-confirmation-dialog { max-height: calc(100vh - 2rem); max-height: calc(100dvh - 2rem); overflow-y: auto; overscroll-behavior: contain; overflow-wrap: anywhere; }
+@media (max-width: 768px) {
+  .orders-workflow-page { padding: 0; }
+  .orders-workflow-page .orders-summary-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .5rem; }
+  .orders-workflow-page .orders-summary-card { display: block; border-radius: .875rem; padding: .75rem .5rem; box-shadow: none; }
+  .orders-workflow-page .orders-summary-card p { min-height: 2.7em; font-size: .75rem; letter-spacing: normal; text-transform: none; line-height: 1.35; color: #64748b; }
+  .orders-workflow-page .orders-summary-icon { display: none; }
+  .orders-workflow-page .orders-summary-card strong { margin-top: .35rem; font-size: 1.5rem; }
+  .orders-workflow-page .orders-section,
+  .orders-workflow-page .orders-notification-panel { padding: .875rem; }
+  .orders-workflow-page .customer-order-card { padding: .875rem; gap: .875rem; }
+  .orders-workflow-page .customer-order-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .5rem; }
+  .orders-workflow-page .customer-order-summary > div { padding: .75rem .625rem; border-radius: .75rem; }
+  .orders-workflow-page .customer-order-summary strong { font-size: .9375rem; }
+  .orders-workflow-page .orders-notification-card { flex-wrap: wrap; padding: .875rem; gap: .65rem; }
+  .orders-workflow-page .orders-notification-body { flex-basis: calc(100% - 3.25rem); }
+  .orders-workflow-page .orders-notification-action { width: 100%; margin: 0; }
+  .orders-workflow-page .customer-order-actions { align-items: stretch; gap: .5rem; }
+  .orders-workflow-page .customer-order-actions > * { flex: 1 1 160px; }
+  .orders-workflow-page .order-action-panel,
+  .orders-workflow-page .customer-order-items,
+  .orders-workflow-page .customer-delivery-panel,
+  .orders-workflow-page .customer-order-note { padding: .75rem; border-radius: .75rem; }
+  .orders-workflow-page .workflow-rail { padding: .75rem; border-radius: .75rem; gap: 1rem .5rem; }
+  .orders-workflow-page .orders-section-actions { justify-content: flex-start; }
+  .orders-workflow-page .orders-empty-state { min-height: 180px; padding: 1.25rem .75rem; border-radius: .875rem; }
+  .orders-workflow-page .order-qr-header { flex-wrap: wrap; }
+  .orders-workflow-page .order-qr-body { gap: .75rem; }
+  .orders-workflow-page .order-qr-image { height: auto; }
+}
+@media (max-width: 359px) {
+  .orders-workflow-page .customer-order-summary { grid-template-columns: minmax(0, 1fr); }
+  .orders-workflow-page .customer-order-card { padding: .75rem; }
+  .orders-workflow-page .orders-section { padding: .75rem; }
+  .order-confirmation-dialog { padding: 1rem; }
+  .order-confirmation-actions > * { width: 100%; }
 }

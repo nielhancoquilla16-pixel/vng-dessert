@@ -10,16 +10,6 @@ begin
 end;
 $$;
 
-create or replace function public.get_my_role()
-returns text
-language sql
-stable
-as $$
-  select role
-  from public.profiles
-  where id = auth.uid()
-$$;
-
 create table if not exists public.profiles (
   id uuid primary key references auth.users(id) on delete cascade,
   username text,
@@ -31,8 +21,26 @@ create table if not exists public.profiles (
   terms_accepted boolean not null default false,
   terms_accepted_at timestamptz,
   terms_version text,
+  email_verified boolean not null default false,
+  email_verified_at timestamptz,
+  email_verification_sent_at timestamptz,
+  email_verification_expires_at timestamptz,
+  email_verification_attempts integer not null default 0,
+  failed_login_attempts integer not null default 0,
+  locked_until timestamptz,
+  last_login_at timestamptz,
   created_at timestamptz not null default timezone('utc', now())
 );
+
+create or replace function public.get_my_role()
+returns text
+language sql
+stable
+as $$
+  select role
+  from public.profiles
+  where id = auth.uid()
+$$;
 
 create table if not exists public.inventory (
   id uuid primary key default gen_random_uuid(),
@@ -74,6 +82,32 @@ create table if not exists public.orders (
   payment_method text not null default 'cash' check (payment_method in ('cash', 'gcash')),
   total_price numeric(10, 2) not null default 0 check (total_price >= 0),
   order_status text not null default 'pending' check (order_status in ('pending', 'confirmed', 'preparing', 'ready', 'processing', 'completed', 'received', 'delivered', 'cancelled')),
+  delivery_distance_km numeric(10, 2),
+  delivery_recipient_name text,
+  delivery_contact_number text,
+  delivery_street_address text,
+  delivery_barangay text,
+  delivery_city text,
+  delivery_province text,
+  delivery_postal_code text,
+  delivery_formatted_address text,
+  delivery_place_id text,
+  delivery_latitude numeric(12, 8),
+  delivery_longitude numeric(12, 8),
+  delivery_instructions text,
+  lalamove_order_id text,
+  lalamove_quotation_id text,
+  lalamove_status text,
+  lalamove_share_link text,
+  lalamove_driver_id text,
+  lalamove_driver_info jsonb not null default '{}'::jsonb,
+  lalamove_price_breakdown jsonb,
+  lalamove_distance_meters integer,
+  lalamove_estimated_delivery_at timestamptz,
+  lalamove_booked_at timestamptz,
+  lalamove_last_synced_at timestamptz,
+  lalamove_booking_error text,
+  lalamove_metadata jsonb not null default '{}'::jsonb,
   qr_claimed_at timestamptz,
   ready_notified_at timestamptz,
   ready_notification_message text,
@@ -82,6 +116,7 @@ create table if not exists public.orders (
   verification_required boolean not null default true,
   qr_token text,
   qr_generated_at timestamptz,
+  qr_expires_at timestamptz,
   qr_used_at timestamptz,
   verified_at timestamptz,
   verified_by uuid references public.profiles(id) on delete set null,
@@ -129,6 +164,17 @@ create table if not exists public.payment_checkouts (
   address text,
   delivery_method text not null default 'pickup' check (delivery_method in ('delivery', 'pickup')),
   delivery_distance_km numeric(10, 2),
+  delivery_recipient_name text,
+  delivery_contact_number text,
+  delivery_street_address text,
+  delivery_barangay text,
+  delivery_city text,
+  delivery_province text,
+  delivery_postal_code text,
+  delivery_formatted_address text,
+  delivery_place_id text,
+  delivery_latitude numeric(12, 8),
+  delivery_longitude numeric(12, 8),
   line_items jsonb not null default '[]'::jsonb,
   payment_intent_id text,
   payment_id text,
@@ -231,12 +277,33 @@ create table if not exists public.cart_items (
   unique (cart_id, product_id)
 );
 
+create table if not exists public.audit_logs (
+  id uuid primary key default gen_random_uuid(),
+  actor_id uuid references public.profiles(id) on delete set null,
+  actor_role text,
+  action text not null,
+  target_id uuid,
+  target_type text,
+  ip_address text,
+  user_agent text,
+  metadata jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default timezone('utc', now())
+);
+
 alter table if exists public.profiles
   add column if not exists username text,
   add column if not exists email text,
   add column if not exists terms_accepted boolean not null default false,
   add column if not exists terms_accepted_at timestamptz,
-  add column if not exists terms_version text;
+  add column if not exists terms_version text,
+  add column if not exists email_verified boolean not null default false,
+  add column if not exists email_verified_at timestamptz,
+  add column if not exists email_verification_sent_at timestamptz,
+  add column if not exists email_verification_expires_at timestamptz,
+  add column if not exists email_verification_attempts integer not null default 0,
+  add column if not exists failed_login_attempts integer not null default 0,
+  add column if not exists locked_until timestamptz,
+  add column if not exists last_login_at timestamptz;
 
 alter table if exists public.products
   add column if not exists stock_quantity integer not null default 0;
@@ -273,11 +340,37 @@ alter table if exists public.orders
   add column if not exists review_status_updated_at timestamptz,
   add column if not exists cancellation_reason text,
   add column if not exists delivery_distance_km numeric(10, 2),
+  add column if not exists delivery_recipient_name text,
+  add column if not exists delivery_contact_number text,
+  add column if not exists delivery_street_address text,
+  add column if not exists delivery_barangay text,
+  add column if not exists delivery_city text,
+  add column if not exists delivery_province text,
+  add column if not exists delivery_postal_code text,
+  add column if not exists delivery_formatted_address text,
+  add column if not exists delivery_place_id text,
+  add column if not exists delivery_latitude numeric(12, 8),
+  add column if not exists delivery_longitude numeric(12, 8),
+  add column if not exists delivery_instructions text,
   add column if not exists contains_leche_flan boolean not null default false,
   add column if not exists inventory_deducted_at timestamptz,
+  add column if not exists lalamove_order_id text,
+  add column if not exists lalamove_quotation_id text,
+  add column if not exists lalamove_status text,
+  add column if not exists lalamove_share_link text,
+  add column if not exists lalamove_driver_id text,
+  add column if not exists lalamove_driver_info jsonb not null default '{}'::jsonb,
+  add column if not exists lalamove_price_breakdown jsonb,
+  add column if not exists lalamove_distance_meters integer,
+  add column if not exists lalamove_estimated_delivery_at timestamptz,
+  add column if not exists lalamove_booked_at timestamptz,
+  add column if not exists lalamove_last_synced_at timestamptz,
+  add column if not exists lalamove_booking_error text,
+  add column if not exists lalamove_metadata jsonb not null default '{}'::jsonb,
   add column if not exists verification_required boolean not null default true,
   add column if not exists qr_token text,
   add column if not exists qr_generated_at timestamptz,
+  add column if not exists qr_expires_at timestamptz,
   add column if not exists qr_used_at timestamptz,
   add column if not exists verified_at timestamptz,
   add column if not exists verified_by uuid references public.profiles(id) on delete set null,
@@ -314,6 +407,17 @@ alter table if exists public.payment_checkouts
   add column if not exists delivery_method text not null default 'pickup',
   add column if not exists payment_method text not null default 'online',
   add column if not exists delivery_distance_km numeric(10, 2),
+  add column if not exists delivery_recipient_name text,
+  add column if not exists delivery_contact_number text,
+  add column if not exists delivery_street_address text,
+  add column if not exists delivery_barangay text,
+  add column if not exists delivery_city text,
+  add column if not exists delivery_province text,
+  add column if not exists delivery_postal_code text,
+  add column if not exists delivery_formatted_address text,
+  add column if not exists delivery_place_id text,
+  add column if not exists delivery_latitude numeric(12, 8),
+  add column if not exists delivery_longitude numeric(12, 8),
   add column if not exists line_items jsonb not null default '[]'::jsonb,
   add column if not exists payment_intent_id text,
   add column if not exists payment_id text,
@@ -385,6 +489,18 @@ create unique index if not exists profiles_email_unique_idx
 on public.profiles (lower(email))
 where email is not null;
 
+create index if not exists profiles_locked_until_idx
+on public.profiles (locked_until);
+
+create index if not exists audit_logs_actor_id_idx
+on public.audit_logs (actor_id);
+
+create index if not exists audit_logs_action_idx
+on public.audit_logs (action);
+
+create index if not exists audit_logs_created_at_idx
+on public.audit_logs (created_at desc);
+
 create unique index if not exists inventory_batch_id_unique_idx
 on public.inventory (lower(batch_id));
 
@@ -425,6 +541,12 @@ alter table if exists public.profiles drop constraint if exists profiles_role_ch
 alter table if exists public.profiles
   add constraint profiles_role_check
   check (role in ('customer', 'admin', 'staff'));
+
+update public.profiles
+set email_verified = true,
+    email_verified_at = coalesce(email_verified_at, created_at)
+where role in ('admin', 'staff')
+  and email_verified = false;
 
 alter table if exists public.inventory drop constraint if exists inventory_status_check;
 alter table if exists public.inventory
@@ -517,8 +639,16 @@ create unique index if not exists orders_qr_token_unique_idx
 on public.orders (qr_token)
 where qr_token is not null;
 
+create unique index if not exists orders_lalamove_order_id_unique_idx
+on public.orders (lalamove_order_id)
+where lalamove_order_id is not null;
+
 create index if not exists orders_qr_used_at_idx
 on public.orders (qr_used_at);
+
+create index if not exists orders_lalamove_status_idx
+on public.orders (lalamove_status)
+where lalamove_status is not null;
 
 create index if not exists pre_orders_schedule_idx
 on public.pre_orders (scheduled_date, scheduled_time);
@@ -898,6 +1028,7 @@ alter table public.product_recipe_items enable row level security;
 alter table public.order_items enable row level security;
 alter table public.carts enable row level security;
 alter table public.cart_items enable row level security;
+alter table public.audit_logs enable row level security;
 
 drop policy if exists "profiles_select_self_or_staff" on public.profiles;
 create policy "profiles_select_self_or_staff"
@@ -922,6 +1053,13 @@ with check (
   id = auth.uid()
   or public.get_my_role() = 'admin'
 );
+
+drop policy if exists "audit_logs_admin_read" on public.audit_logs;
+create policy "audit_logs_admin_read"
+on public.audit_logs
+for select
+to authenticated
+using (public.get_my_role() = 'admin');
 
 drop policy if exists "products_public_read" on public.products;
 create policy "products_public_read"
@@ -1570,3 +1708,342 @@ with check (
       )
   )
 );
+
+-- Timestamp expiry, configurable shop settings, and synchronized return/refund requests.
+alter table if exists public.products
+  alter column stock_quantity type numeric(12, 4) using stock_quantity::numeric,
+  add column if not exists expiration_at timestamptz;
+
+alter table if exists public.inventory
+  alter column stock_quantity type numeric(12, 4) using stock_quantity::numeric,
+  add column if not exists expiration_at timestamptz;
+
+update public.products
+set expiration_at = (expiration_date::timestamp + time '23:59:00') at time zone 'Asia/Manila'
+where expiration_at is null and expiration_date is not null;
+
+update public.inventory
+set expiration_at = (expiration_date::timestamp + time '23:59:00') at time zone 'Asia/Manila'
+where expiration_at is null and expiration_date is not null;
+
+alter table if exists public.products drop constraint if exists products_availability_check;
+alter table if exists public.products
+  add constraint products_availability_check
+  check (availability in ('available', 'out of stock', 'hidden', 'expired'));
+
+create index if not exists products_expiration_at_idx on public.products (expiration_at);
+create index if not exists inventory_expiration_at_idx on public.inventory (expiration_at);
+
+create table if not exists public.shop_settings (
+  id integer primary key check (id = 1),
+  shop_name text not null default 'V&G Leche Flan',
+  address text not null,
+  phone_number text,
+  opening_time time not null default time '08:00:00',
+  closing_time time not null default time '20:00:00',
+  preorder_time_slots jsonb not null default '[]'::jsonb,
+  latitude numeric(12, 8),
+  longitude numeric(12, 8),
+  created_at timestamptz not null default timezone('utc', now()),
+  updated_at timestamptz not null default timezone('utc', now()),
+  constraint shop_settings_operating_hours_check check (opening_time <> closing_time)
+);
+
+insert into public.shop_settings (id, address)
+values (1, 'Monark Subdivision, Las Pinas, Philippines')
+on conflict (id) do nothing;
+
+create table if not exists public.return_refund_requests (
+  id uuid primary key default gen_random_uuid(),
+  order_id uuid not null unique references public.orders(id) on delete cascade,
+  user_id uuid not null references public.profiles(id) on delete cascade,
+  request_type text not null default 'refund' check (request_type in ('return', 'refund')),
+  reason text not null,
+  customer_message text,
+  evidence_image_url text,
+  status text not null default 'pending' check (status in ('pending', 'approved', 'processing', 'refunded', 'completed', 'rejected')),
+  rejection_reason text,
+  status_history jsonb not null default '[]'::jsonb,
+  approved_at timestamptz,
+  processing_at timestamptz,
+  refunded_at timestamptz,
+  completed_at timestamptz,
+  rejected_at timestamptz,
+  created_at timestamptz not null default timezone('utc', now()),
+  updated_at timestamptz not null default timezone('utc', now())
+);
+
+alter table if exists public.return_refund_requests
+  add column if not exists evidence_image_url text;
+
+alter table if exists public.orders
+  add column if not exists return_refund_status text not null default 'none',
+  add column if not exists return_refund_request_id uuid references public.return_refund_requests(id) on delete set null;
+
+alter table if exists public.orders drop constraint if exists orders_return_refund_status_check;
+alter table if exists public.orders
+  add constraint orders_return_refund_status_check
+  check (return_refund_status in ('none', 'pending', 'approved', 'processing', 'refunded', 'completed', 'rejected'));
+
+create index if not exists return_refund_requests_order_id_idx on public.return_refund_requests (order_id);
+create index if not exists return_refund_requests_status_idx on public.return_refund_requests (status, created_at desc);
+
+drop trigger if exists set_shop_settings_updated_at on public.shop_settings;
+create trigger set_shop_settings_updated_at
+before update on public.shop_settings
+for each row execute function public.set_updated_at();
+
+drop trigger if exists set_return_refund_requests_updated_at on public.return_refund_requests;
+create trigger set_return_refund_requests_updated_at
+before update on public.return_refund_requests
+for each row execute function public.set_updated_at();
+
+alter table public.shop_settings enable row level security;
+alter table public.return_refund_requests enable row level security;
+
+drop policy if exists "shop_settings_public_read" on public.shop_settings;
+create policy "shop_settings_public_read" on public.shop_settings for select to anon, authenticated using (true);
+drop policy if exists "shop_settings_admin_update" on public.shop_settings;
+create policy "shop_settings_admin_update" on public.shop_settings for update to authenticated using (public.get_my_role() = 'admin') with check (public.get_my_role() = 'admin');
+drop policy if exists "shop_settings_admin_insert" on public.shop_settings;
+create policy "shop_settings_admin_insert" on public.shop_settings for insert to authenticated with check (public.get_my_role() = 'admin');
+
+drop policy if exists "return_refund_requests_select_own_or_staff" on public.return_refund_requests;
+create policy "return_refund_requests_select_own_or_staff" on public.return_refund_requests for select to authenticated using (user_id = auth.uid() or public.get_my_role() in ('admin', 'staff'));
+drop policy if exists "return_refund_requests_insert_own" on public.return_refund_requests;
+create policy "return_refund_requests_insert_own" on public.return_refund_requests for insert to authenticated with check (user_id = auth.uid());
+drop policy if exists "return_refund_requests_update_staff" on public.return_refund_requests;
+create policy "return_refund_requests_update_staff" on public.return_refund_requests for update to authenticated using (public.get_my_role() in ('admin', 'staff')) with check (public.get_my_role() in ('admin', 'staff'));
+
+alter table public.shop_settings replica identity full;
+alter table public.return_refund_requests replica identity full;
+
+do $$
+begin
+  if exists (select 1 from pg_publication where pubname = 'supabase_realtime') and not exists (
+    select 1 from pg_publication_tables where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'shop_settings'
+  ) then
+    alter publication supabase_realtime add table public.shop_settings;
+  end if;
+
+  if exists (select 1 from pg_publication where pubname = 'supabase_realtime') and not exists (
+    select 1 from pg_publication_tables where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'return_refund_requests'
+  ) then
+    alter publication supabase_realtime add table public.return_refund_requests;
+  end if;
+end $$;
+
+-- Order-specific QR feedback workflow.
+alter table if exists public.orders
+  add column if not exists feedback_token text,
+  add column if not exists feedback_token_generated_at timestamptz;
+
+create unique index if not exists orders_feedback_token_unique_idx
+on public.orders (feedback_token)
+where feedback_token is not null;
+
+create table if not exists public.order_feedback (
+  id uuid primary key default gen_random_uuid(),
+  order_id uuid not null references public.orders(id) on delete cascade,
+  rating integer not null check (rating between 1 and 5),
+  product_rating integer,
+  service_rating integer,
+  fulfillment_rating integer,
+  comment text,
+  customer_name text,
+  customer_id uuid references public.profiles(id) on delete set null,
+  is_anonymous boolean not null default true,
+  status text not null default 'new' check (status in ('new', 'viewed', 'acknowledged')),
+  invalid_reason text,
+  purchased_items jsonb not null default '[]'::jsonb,
+  transaction_at timestamptz,
+  submitted_at timestamptz not null default timezone('utc', now()),
+  viewed_at timestamptz,
+  viewed_by uuid references public.profiles(id) on delete set null,
+  acknowledged_at timestamptz,
+  acknowledged_by uuid references public.profiles(id) on delete set null,
+  created_at timestamptz not null default timezone('utc', now()),
+  updated_at timestamptz not null default timezone('utc', now()),
+  check (product_rating is null or product_rating between 1 and 5),
+  check (service_rating is null or service_rating between 1 and 5),
+  check (fulfillment_rating is null or fulfillment_rating between 1 and 5)
+);
+
+create index if not exists order_feedback_order_id_idx on public.order_feedback (order_id);
+create index if not exists order_feedback_submitted_at_idx on public.order_feedback (submitted_at desc);
+create index if not exists order_feedback_rating_idx on public.order_feedback (rating);
+create index if not exists order_feedback_status_submitted_at_idx on public.order_feedback (status, submitted_at desc);
+
+create or replace function public.touch_order_feedback_updated_at()
+returns trigger
+language plpgsql
+as $$
+begin
+  new.updated_at = timezone('utc', now());
+  return new;
+end;
+$$;
+
+drop trigger if exists set_order_feedback_updated_at on public.order_feedback;
+create trigger set_order_feedback_updated_at
+before update on public.order_feedback
+for each row execute function public.touch_order_feedback_updated_at();
+
+create or replace function public.prevent_duplicate_order_feedback()
+returns trigger
+language plpgsql
+as $$
+begin
+  perform pg_advisory_xact_lock(hashtext(new.order_id::text));
+
+  if exists (
+    select 1 from public.order_feedback where order_id = new.order_id and id <> new.id
+  ) then
+    raise exception 'Feedback has already been submitted for this order.' using errcode = '23505';
+  end if;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists prevent_duplicate_order_feedback on public.order_feedback;
+create trigger prevent_duplicate_order_feedback
+before insert on public.order_feedback
+for each row execute function public.prevent_duplicate_order_feedback();
+
+alter table public.order_feedback replica identity full;
+
+do $$
+begin
+  if exists (select 1 from pg_publication where pubname = 'supabase_realtime') and not exists (
+    select 1 from pg_publication_tables
+    where pubname = 'supabase_realtime'
+      and schemaname = 'public'
+      and tablename = 'order_feedback'
+  ) then
+    alter publication supabase_realtime add table public.order_feedback;
+  end if;
+end $$;
+
+-- POS cash tendering and customer saved delivery addresses.
+create table if not exists public.customer_addresses (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references public.profiles(id) on delete cascade,
+  label text not null default 'Home' check (label in ('Home', 'Work', 'Other')),
+  recipient_name text not null,
+  phone_number text not null,
+  street_address text,
+  barangay text,
+  city text,
+  province text,
+  region text,
+  postal_code text,
+  formatted_address text not null,
+  place_id text,
+  latitude numeric(12, 8),
+  longitude numeric(12, 8),
+  is_default boolean not null default false,
+  created_at timestamptz not null default timezone('utc', now()),
+  updated_at timestamptz not null default timezone('utc', now())
+);
+
+create index if not exists customer_addresses_user_id_idx
+  on public.customer_addresses (user_id, updated_at desc);
+create unique index if not exists customer_addresses_one_default_per_user_idx
+  on public.customer_addresses (user_id)
+  where is_default;
+
+insert into public.customer_addresses (
+  user_id,
+  label,
+  recipient_name,
+  phone_number,
+  formatted_address,
+  is_default
+)
+select
+  profiles.id,
+  'Home',
+  coalesce(nullif(trim(profiles.full_name), ''), nullif(trim(profiles.username), ''), 'Customer'),
+  coalesce(nullif(trim(profiles.phone_number), ''), ''),
+  trim(profiles.address),
+  true
+from public.profiles
+where nullif(trim(profiles.address), '') is not null
+  and not exists (
+    select 1
+    from public.customer_addresses
+    where customer_addresses.user_id = profiles.id
+  );
+
+alter table if exists public.orders
+  add column if not exists delivery_address_id uuid references public.customer_addresses(id) on delete set null,
+  add column if not exists cash_received numeric(12, 2),
+  add column if not exists change_amount numeric(12, 2);
+
+alter table if exists public.orders drop constraint if exists orders_cash_received_check;
+alter table if exists public.orders
+  add constraint orders_cash_received_check
+  check (cash_received is null or cash_received >= 0);
+alter table if exists public.orders drop constraint if exists orders_change_amount_check;
+alter table if exists public.orders
+  add constraint orders_change_amount_check
+  check (change_amount is null or change_amount >= 0);
+
+create index if not exists orders_delivery_address_id_idx
+  on public.orders (delivery_address_id);
+
+alter table if exists public.payment_checkouts
+  add column if not exists delivery_address_id uuid references public.customer_addresses(id) on delete set null;
+create index if not exists payment_checkouts_delivery_address_id_idx
+  on public.payment_checkouts (delivery_address_id);
+
+drop trigger if exists set_customer_addresses_updated_at on public.customer_addresses;
+create trigger set_customer_addresses_updated_at
+before update on public.customer_addresses
+for each row execute function public.set_updated_at();
+
+alter table public.customer_addresses enable row level security;
+
+drop policy if exists "customer_addresses_select_own_or_staff" on public.customer_addresses;
+create policy "customer_addresses_select_own_or_staff"
+on public.customer_addresses
+for select
+to authenticated
+using (user_id = auth.uid() or public.get_my_role() in ('admin', 'staff'));
+
+drop policy if exists "customer_addresses_insert_own" on public.customer_addresses;
+create policy "customer_addresses_insert_own"
+on public.customer_addresses
+for insert
+to authenticated
+with check (user_id = auth.uid());
+
+drop policy if exists "customer_addresses_update_own" on public.customer_addresses;
+create policy "customer_addresses_update_own"
+on public.customer_addresses
+for update
+to authenticated
+using (user_id = auth.uid())
+with check (user_id = auth.uid());
+
+drop policy if exists "customer_addresses_delete_own" on public.customer_addresses;
+create policy "customer_addresses_delete_own"
+on public.customer_addresses
+for delete
+to authenticated
+using (user_id = auth.uid());
+
+alter table public.customer_addresses replica identity full;
+
+do $$
+begin
+  if exists (select 1 from pg_publication where pubname = 'supabase_realtime') and not exists (
+    select 1 from pg_publication_tables
+    where pubname = 'supabase_realtime'
+      and schemaname = 'public'
+      and tablename = 'customer_addresses'
+  ) then
+    alter publication supabase_realtime add table public.customer_addresses;
+  end if;
+end $$;

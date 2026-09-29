@@ -11,6 +11,7 @@ import React, {
 import adverVideo from '../assets/adver.mp4';
 import promoVideo from '../assets/promo.mp4';
 import { supabase } from '../lib/supabase';
+import { ApiError } from '../lib/api';
 import { resolveAssetUrl } from '../lib/publicUrl';
 
 const ContentContext = createContext();
@@ -213,7 +214,7 @@ export const ContentProvider = ({ children }) => {
       return {
         ok: false,
         persisted: false,
-        message: 'Supabase is not configured in this environment.',
+        message: new ApiError('', 503).message,
       };
     }
 
@@ -245,14 +246,16 @@ export const ContentProvider = ({ children }) => {
         videos: normalized,
       };
     } catch (error) {
+      console.error('Content refresh failed:', error);
+      const message = new ApiError(error?.message, error?.status || 500).message;
       if (isMountedRef.current) {
-        setSyncError(error?.message || 'Unable to sync site content from Supabase.');
+        setSyncError(message);
       }
 
       return {
         ok: false,
         persisted: false,
-        message: error?.message || 'Unable to sync site content from Supabase.',
+        message,
       };
     } finally {
       if (!silent && isMountedRef.current) {
@@ -394,11 +397,13 @@ export const ContentProvider = ({ children }) => {
           };
         }
       } catch (err) {
+        console.error('Content save failed:', err);
+        const message = new ApiError(err?.message, err?.status || 500).message;
         setSiteVideos(previousVideos);
-        setSyncError(err?.message || 'Failed to save the video to Supabase.');
+        setSyncError(message);
         return {
           ok: false,
-          message: err?.message || 'Failed to save the video to Supabase.',
+          message,
         };
       }
     }
@@ -406,7 +411,7 @@ export const ContentProvider = ({ children }) => {
     return {
       ok: true,
       persisted: false,
-      message: 'Saved locally only because Supabase is not configured.',
+      message: 'Saved on this device only. Please try again later to publish your changes.',
     };
   }, [siteVideos]);
 

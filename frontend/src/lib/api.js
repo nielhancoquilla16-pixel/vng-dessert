@@ -1,19 +1,39 @@
 import { supabase, isSupabaseConfigured } from './supabase';
+import { httpErrorStatus, publicErrorDetails, publicErrorMessage } from './publicErrors';
+
+export const normalizeApiErrorMessage = publicErrorMessage;
 
 const rawApiBaseUrl = (import.meta.env.VITE_API_BASE_URL ?? '').trim();
 const sanitizeApiBaseUrl = (value = '') => String(value || '').trim().replace(/^['"]|['"]$/g, '');
-const devFallbackBase = 'http://localhost:3001';
+const localBrowserHost = typeof window === 'undefined' ? 'localhost' : (window.location.hostname || 'localhost');
+const devFallbackBase = `http://${localBrowserHost}:3001`;
+const resolveDevApiBaseUrl = (value = '') => {
+  const baseUrl = sanitizeApiBaseUrl(value);
+  if (!baseUrl) return '';
+
+  try {
+    const parsed = new URL(baseUrl);
+    if (
+      ['localhost', '127.0.0.1'].includes(parsed.hostname)
+      && !['localhost', '127.0.0.1'].includes(localBrowserHost)
+    ) {
+      parsed.hostname = localBrowserHost;
+    }
+    return parsed.toString().replace(/\/$/, '');
+  } catch {
+    return baseUrl;
+  }
+};
 const productionFallbackBase = 'https://dessert-ai-backend-production-5c00.up.railway.app';
 const configuredApiBases = Array.from(new Set(
   (
     import.meta.env.DEV
       ? [
-          sanitizeApiBaseUrl(rawApiBaseUrl),
-          sanitizeApiBaseUrl(devFallbackBase),
+          resolveDevApiBaseUrl(rawApiBaseUrl),
+          resolveDevApiBaseUrl(devFallbackBase),
         ]
       : [
-          sanitizeApiBaseUrl(rawApiBaseUrl),
-          sanitizeApiBaseUrl(productionFallbackBase),
+          sanitizeApiBaseUrl(rawApiBaseUrl) || sanitizeApiBaseUrl(productionFallbackBase),
         ]
   ).filter(Boolean),
 )).map((baseUrl) => baseUrl.replace(/\/$/, ''));
@@ -34,10 +54,13 @@ export let API_BASE_URL = configuredApiBases[0] || sanitizeApiBaseUrl(
 
 export class ApiError extends Error {
   constructor(message, status = 500, details = null) {
-    super(message);
+    const code = httpErrorStatus(status);
+    const safeMessage = publicErrorMessage(message, code, details?.errorCode);
+    super(`Error ${code}: ${safeMessage}`);
     this.name = 'ApiError';
-    this.status = status;
-    this.details = details;
+    this.status = code;
+    this.userMessage = safeMessage;
+    this.details = publicErrorDetails(details, code);
   }
 }
 
@@ -45,6 +68,9 @@ const setApiStatus = (nextStatus) => {
   if (
     apiStatus.level === nextStatus.level
     && apiStatus.message === nextStatus.message
+    && apiStatus.code === nextStatus.code
+    && apiStatus.source === nextStatus.source
+    && apiStatus.path === nextStatus.path
   ) {
     return;
   }
@@ -66,48 +92,6 @@ export const subscribeToApiStatus = (listener) => {
   };
 };
 
-export const normalizeApiErrorMessage = (message = '') => {
-  if (/Cannot POST \/api\/sales-reports|Cannot GET \/api\/sales-reports/i.test(message)) {
-    return import.meta.env.DEV
-      ? 'Your frontend reached a backend that does not include the sales reports routes yet. Start or restart the local backend on port 3001, then refresh.'
-      : 'The live backend does not include the sales reports routes yet. Redeploy the latest backend, then try again.';
-  }
-
-  if (/Cannot POST \/api\/auth\/admin\/verify-reset-code|Cannot POST \/api\/auth\/admin\/reset-password/i.test(message)) {
-    return 'The live backend is missing the admin reset routes. Redeploy the latest backend to Railway, then try again.';
-  }
-
-  if (/SUPABASE_SERVICE_ROLE_KEY|Supabase environment variables are missing/i.test(message)) {
-    return 'Backend configuration is incomplete. Add SUPABASE_SERVICE_ROLE_KEY to dessert-ai-system/server/.env and restart the backend.';
-  }
-
-  if (/Supabase configuration is incomplete|placeholder values|could not reach Supabase|getaddrinfo ENOTFOUND|TypeError: fetch failed/i.test(message)) {
-    return 'Backend Supabase setup is incomplete. Update dessert-ai-system/server/.env with the real SUPABASE_URL, SUPABASE_ANON_KEY, and SUPABASE_SERVICE_ROLE_KEY, then restart the backend.';
-  }
-
-  if (/column orders\.(verification_required|qr_token|qr_generated_at|qr_used_at|verified_at|verified_by|verification_method) does not exist/i.test(message)) {
-    return 'The live database is missing the order verification migration. Run supabase/migrations/20260408_add_order_qr_verification.sql in Supabase SQL Editor, then refresh the app.';
-  }
-
-  if (/column orders\.(feedback_token|feedback_token_generated_at) does not exist|relation "public\.order_feedback" does not exist|relation "order_feedback" does not exist|table .*order_feedback.* does not exist/i.test(message)) {
-    return 'The database is missing the order feedback migration. Run supabase/migrations/20260505_add_order_feedback.sql in Supabase SQL Editor, then refresh the app.';
-  }
-
-  if (/relation "public\.pre_orders" does not exist|relation "pre_orders" does not exist|table .*pre_orders.* does not exist/i.test(message)) {
-    return 'The live database is missing the pre-orders migration. Run supabase/migrations/20260415_add_pre_orders.sql in Supabase SQL Editor, then refresh the app.';
-  }
-
-  if (/relation "public\.(sales_reports|sales_report_items)" does not exist|relation "(sales_reports|sales_report_items)" does not exist|table .*(sales_reports|sales_report_items).* does not exist/i.test(message)) {
-    return 'The database is missing the sales reports migration. Run supabase/migrations/20260423_add_sales_reports.sql in Supabase SQL Editor, then refresh the app.';
-  }
-
-  if (/relation "public\.(product_recipes|product_recipe_items)" does not exist|relation "(product_recipes|product_recipe_items)" does not exist|table .*(product_recipes|product_recipe_items).* does not exist|could not find the table 'public\.(product_recipes|product_recipe_items)' in the schema cache/i.test(message)) {
-    return 'The database is missing the product recipes migration. Run supabase/migrations/20260429_add_product_recipes.sql in Supabase SQL Editor, then refresh the app.';
-  }
-
-  return message;
-};
-
 const extractTextErrorMessage = (value = '') => {
   const message = String(value || '')
     .replace(/<style[\s\S]*?<\/style>/gi, ' ')
@@ -121,12 +105,7 @@ const extractTextErrorMessage = (value = '') => {
 };
 
 export const isBackendIssueError = (error) => (
-  error instanceof ApiError
-  && (
-    error.status === 503
-    || error.status >= 500
-    || /SUPABASE_SERVICE_ROLE_KEY|Supabase environment variables are missing|Supabase configuration is incomplete|could not reach Supabase/i.test(error.message || '')
-  )
+  error instanceof ApiError && error.status >= 500
 );
 
 const buildUrl = (path = '', baseUrl = API_BASE_URL) => (
@@ -154,9 +133,15 @@ const parseResponseData = async (response) => {
   }
 
   const contentType = response.headers.get('content-type') || '';
-  return contentType.includes('application/json')
-    ? response.json()
-    : response.text();
+  if (!contentType.includes('application/json')) return response.text();
+  try {
+    return await response.json();
+  } catch (error) {
+    console.error('Unable to read the response:', error);
+    // A malformed error body must not replace its actual HTTP status with 503.
+    if (!response.ok) return null;
+    throw error;
+  }
 };
 
 const isRailwayAppNotFoundResponse = (response, responseData) => {
@@ -171,10 +156,22 @@ const isRailwayAppNotFoundResponse = (response, responseData) => {
   return /Application not found/i.test(message);
 };
 
+const isMissingApiRouteResponse = (response, responseData) => {
+  if (response.status !== 404) {
+    return false;
+  }
+
+  const message = typeof responseData === 'object'
+    ? `${responseData?.message || ''} ${responseData?.error || ''}`.trim()
+    : extractTextErrorMessage(responseData);
+
+  return /^Cannot\s+(GET|POST|PUT|PATCH|DELETE)\s+\/api\//i.test(message);
+};
+
 const fetchApiResponse = async (path, options = {}) => {
   const candidates = getApiBaseCandidates();
   let lastNetworkError = null;
-  let sawRailwayAppNotFound = false;
+  let unavailableResponse = null;
 
   for (const baseUrl of candidates) {
     try {
@@ -182,7 +179,12 @@ const fetchApiResponse = async (path, options = {}) => {
       const responseData = await parseResponseData(response);
 
       if (isRailwayAppNotFoundResponse(response, responseData)) {
-        sawRailwayAppNotFound = true;
+        unavailableResponse = { response, responseData };
+        continue;
+      }
+
+      if (isMissingApiRouteResponse(response, responseData)) {
+        unavailableResponse = { response, responseData };
         continue;
       }
 
@@ -197,11 +199,8 @@ const fetchApiResponse = async (path, options = {}) => {
     }
   }
 
-  if (sawRailwayAppNotFound) {
-    throw new ApiError('Backend server is unavailable.', 503);
-  }
-
-  throw lastNetworkError || new ApiError('Backend server is unavailable.', 503);
+  if (unavailableResponse) return unavailableResponse;
+  throw lastNetworkError || new ApiError('', 503);
 };
 
 const isClientOffline = () => (
@@ -210,29 +209,13 @@ const isClientOffline = () => (
   && !navigator.onLine
 );
 
-export const isBackendUnavailableMessage = (message = '') => (
-  /Backend server is temporarily unavailable|Backend server is unavailable|offline|couldn.t reach the V&G server/i.test(message)
-);
-
 const getBackendRecoveryMessage = () => (
   isClientOffline()
-    ? 'You appear to be offline. Reconnect to the internet and we will retry automatically.'
-    : (
-      import.meta.env.DEV
-        ? 'Backend is starting up. Retrying automatically, please wait a moment.'
-        : 'Connection to the V&G server is unstable. Retrying automatically, please wait a moment.'
-    )
+    ? 'You appear to be offline. Reconnect to the internet and try again.'
+    : 'Reconnecting. Please wait a moment.'
 );
 
-const getBackendUnavailableMessage = () => (
-  isClientOffline()
-    ? 'You appear to be offline. Reconnect to keep using V&G.'
-    : (
-      import.meta.env.DEV
-        ? 'Backend server is temporarily unavailable. Please start dessert-ai-system on port 3001 and try again.'
-        : 'We couldn\'t reach the V&G server right now. Please wait a moment and try again.'
-    )
-);
+const getBackendUnavailableMessage = () => publicErrorMessage('', 503);
 
 const wait = (ms) => new Promise((resolve) => {
   window.setTimeout(resolve, ms);
@@ -249,11 +232,11 @@ export const probeApiHealth = async () => {
   });
 
   if (!response.ok) {
-    throw new ApiError('Backend health check failed.', response.status, responseData);
+    throw new ApiError('', response.status);
   }
 
   backendUnavailableUntil = 0;
-  setApiStatus({ level: 'idle', message: '' });
+  if (apiStatus.source === 'network') setApiStatus({ level: 'idle', message: '' });
   return responseData;
 };
 
@@ -263,6 +246,8 @@ const recoverBackendConnection = () => {
       setApiStatus({
         level: 'warning',
         message: getBackendRecoveryMessage(),
+        code: 503,
+        source: 'network',
       });
 
       const deadline = Date.now() + BACKEND_STARTUP_GRACE_MS;
@@ -293,7 +278,7 @@ const getSessionAccessToken = async () => {
   const { data, error } = await supabase.auth.getSession();
 
   if (error) {
-    throw error;
+    throw new ApiError(error.message, error.status || 503);
   }
 
   return data.session?.access_token || '';
@@ -305,6 +290,8 @@ export const apiRequest = async (path, options = {}, config = {}) => {
     setApiStatus({
       level: isClientOffline() ? 'warning' : 'error',
       message,
+      code: 503,
+      source: 'network',
     });
     throw new ApiError(message, 503);
   }
@@ -334,7 +321,9 @@ export const apiRequest = async (path, options = {}, config = {}) => {
       headers,
     }));
     backendUnavailableUntil = 0;
-    setApiStatus({ level: 'idle', message: '' });
+    if (response.ok && (apiStatus.source === 'network' || apiStatus.path === path)) {
+      setApiStatus({ level: 'idle', message: '' });
+    }
   } catch (error) {
     if (isAbortError(error)) {
       throw error;
@@ -355,6 +344,8 @@ export const apiRequest = async (path, options = {}, config = {}) => {
     setApiStatus({
       level: isClientOffline() ? 'warning' : 'error',
       message,
+      code: 503,
+      source: 'network',
     });
     throw new ApiError(message, 503, error);
   }
@@ -364,15 +355,19 @@ export const apiRequest = async (path, options = {}, config = {}) => {
   }
 
   if (!response.ok) {
-    const rawMessage = typeof responseData === 'object' && responseData?.error
-      ? responseData.error
-      : typeof responseData === 'string'
-        ? extractTextErrorMessage(responseData)
-      : 'Request failed.';
-    const message = normalizeApiErrorMessage(rawMessage);
+    const responseMessage = typeof responseData === 'object'
+      ? responseData?.error || responseData?.message || ''
+      : '';
+    const rawMessage = responseMessage
+      || (typeof responseData === 'string' ? extractTextErrorMessage(responseData) : '');
+    const message = normalizeApiErrorMessage(rawMessage, response.status, responseData?.errorCode);
+    const isVerificationEmailFailure = response.status === 503
+      && responseData?.errorCode === 'AUTH_EMAIL_DELIVERY_UNAVAILABLE'
+      && ['/api/auth/register', '/api/auth/register/resend-link'].includes(path);
 
-    if (response.status >= 500) {
-      setApiStatus({ level: 'error', message });
+    // The signup form displays this failure; the rest of the shop is still available.
+    if (response.status >= 500 && !isVerificationEmailFailure) {
+      setApiStatus({ level: 'error', code: response.status, message, source: 'response', path });
     }
 
     throw new ApiError(message, response.status, responseData);

@@ -608,7 +608,7 @@ const AdminReports = () => {
                     tickLine={false}
                     axisLine={{ stroke: '#cbd5e1' }}
                     tick={{ fill: '#111827', fontSize: 12 }}
-                    tickFormatter={(value) => `P${Number(value).toLocaleString()}`}
+                    tickFormatter={formatPeso}
                   />
                   <Tooltip
                     formatter={(value) => [formatPeso(value), 'Sales']}

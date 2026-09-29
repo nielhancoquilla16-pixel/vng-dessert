@@ -1,6 +1,8 @@
 import express from 'express';
 import { getSupabaseAdmin } from '../lib/supabaseAdmin.js';
 import { requireAuth } from '../middleware/requireAuth.js';
+import { getExpiryStatus } from '../lib/expiry.js';
+import { assertShopOpen } from '../lib/shopSettings.js';
 
 const router = express.Router();
 
@@ -18,7 +20,10 @@ const selectCartQuery = `
       description,
       price,
       category,
+      stock_quantity,
       availability,
+      expiration_date,
+      expiration_at,
       image_url
     )
   )
@@ -40,7 +45,14 @@ const mapCart = (row) => ({
           description: item.products.description,
           price: Number(item.products.price) || 0,
           category: item.products.category,
+          stockQuantity: Number(item.products.stock_quantity) || 0,
           availability: item.products.availability,
+          expirationDate: item.products.expiration_date || '',
+          expirationAt: item.products.expiration_at || null,
+          expiryStatus: getExpiryStatus({
+            expirationAt: item.products.expiration_at,
+            expirationDate: item.products.expiration_date,
+          }),
           imageUrl: item.products.image_url,
         }
       : null,
@@ -99,6 +111,30 @@ const getOwnedCartItem = async (supabase, itemId, userId) => {
   return data;
 };
 
+const assertProductCanBeOrdered = async (supabase, productId) => {
+  const { data: product, error } = await supabase
+    .from('products')
+    .select('id, product_name, stock_quantity, availability, expiration_date, expiration_at')
+    .eq('id', productId)
+    .maybeSingle();
+
+  if (error) {
+    throw error;
+  }
+
+  const expired = getExpiryStatus({
+    expirationAt: product?.expiration_at,
+    expirationDate: product?.expiration_date,
+  }) === 'expired';
+  if (!product || product.availability === 'hidden' || product.availability === 'expired' || expired || Number(product.stock_quantity) <= 0) {
+    const unavailableError = new Error(expired ? 'This product has expired and cannot be added to an order.' : 'This product is not currently available.');
+    unavailableError.status = 409;
+    throw unavailableError;
+  }
+
+  return product;
+};
+
 router.get('/mine', requireAuth, async (req, res, next) => {
   try {
     const supabase = getSupabaseAdmin();
@@ -128,6 +164,8 @@ router.post('/mine/items', requireAuth, async (req, res, next) => {
     }
 
     const supabase = getSupabaseAdmin();
+    await assertShopOpen(supabase);
+    await assertProductCanBeOrdered(supabase, product_id);
     const cart = await getOrCreateCart(supabase, req.authUser.id);
 
     const { data: existingItem, error: existingItemError } = await supabase
@@ -175,6 +213,14 @@ router.patch('/mine/items/:itemId', requireAuth, async (req, res, next) => {
 
     if (!ownedItem) {
       return res.status(404).json({ error: 'Cart item not found.' });
+    }
+
+    if (Number(quantity) > Number(ownedItem.quantity)) {
+      await assertShopOpen(supabase);
+    }
+
+    if (Number(quantity) > 0) {
+      await assertProductCanBeOrdered(supabase, ownedItem.product_id);
     }
 
     const { data, error } = await supabase

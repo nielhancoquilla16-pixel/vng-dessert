@@ -1,8 +1,10 @@
 import React from 'react';
 import { MapPin, Phone, Mail, Clock, Send } from 'lucide-react';
+import { useShopSettings } from '../context/ShopSettingsContext';
 import './Contact.css';
 
 const Contact = () => {
+  const { shopSettings, operatingHoursLabel } = useShopSettings();
   return (
     <div className="main-content">
       <div style={{ textAlign: 'center', marginBottom: '3rem' }}>
@@ -19,7 +21,7 @@ const Contact = () => {
             </div>
             <div className="contact-card-text">
               <h3>Location</h3>
-              <p>Monark Subdivision, Las Piñas, Philippines, 1740</p>
+              <p>{shopSettings.address}</p>
             </div>
           </div>
 
@@ -29,7 +31,7 @@ const Contact = () => {
             </div>
             <div className="contact-card-text">
               <h3>Phone</h3>
-              <p>0977 385 4909</p>
+              <p>{shopSettings.phoneNumber}</p>
             </div>
           </div>
 
@@ -49,7 +51,7 @@ const Contact = () => {
             </div>
             <div className="contact-card-text">
               <h3>Hours</h3>
-              <p>Mon–Sat 8AM–8PM · Sun 9AM–6PM</p>
+              <p>{operatingHoursLabel}</p>
             </div>
           </div>
         </div>

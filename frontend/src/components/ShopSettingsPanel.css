@@ -1,0 +1,54 @@
+.shop-settings-panel {
+  margin-top: 2rem;
+  border: 1px solid #dbe3ee;
+  border-radius: 8px;
+  background: #fff;
+  padding: 1.25rem;
+}
+
+.shop-settings-heading {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.shop-settings-heading-icon {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  border-radius: 8px;
+  background: #fff7ed;
+  color: #c2410c;
+}
+
+.shop-settings-heading h2,
+.shop-settings-heading p {
+  margin: 0;
+}
+
+.shop-settings-heading h2 { color: #0f172a; font-size: 1.05rem; }
+.shop-settings-heading p { margin-top: 0.15rem; color: #64748b; font-size: 0.84rem; }
+
+.shop-settings-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.85rem;
+}
+
+.shop-settings-form label { display: grid; gap: 0.36rem; min-width: 0; }
+.shop-settings-form label > span { display: inline-flex; align-items: center; gap: 0.32rem; color: #475569; font-size: 0.8rem; font-weight: 700; }
+.shop-settings-form input { min-width: 0; width: 100%; border: 1px solid #cbd5e1; border-radius: 6px; padding: 0.62rem 0.7rem; color: #0f172a; font: inherit; }
+.shop-settings-form input:focus { outline: 2px solid #fdba74; border-color: #f97316; }
+.shop-settings-wide, .shop-settings-actions { grid-column: 1 / -1; }
+.shop-settings-actions { display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin-top: 0.25rem; color: #047857; font-size: 0.85rem; }
+.shop-settings-save { display: inline-flex; align-items: center; gap: 0.45rem; }
+.shop-settings-timezone { margin: 0 0 1rem; font-size: .85rem; color: #475569; }
+.shop-settings-error { color: #b91c1c; }
+
+@media (max-width: 650px) {
+  .shop-settings-form { grid-template-columns: 1fr; }
+  .shop-settings-wide, .shop-settings-actions { grid-column: auto; }
+  .shop-settings-actions { align-items: flex-start; flex-direction: column; }
+}

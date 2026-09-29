@@ -3,6 +3,7 @@ import { Search, Plus, Minus, Trash2, Printer } from 'lucide-react';
 import { useProducts } from '../context/ProductContext';
 import { useOrders } from '../context/OrderContext';
 import ReceiptSlip from '../components/ReceiptSlip';
+import { formatCurrency, formatCurrencyText } from '../utils/currency';
 import './AdminPOS.css';
 
 const POS_AUTO_PRINT_STORAGE_KEY = 'vng-pos-auto-print';
@@ -38,6 +39,10 @@ const AdminPOS = () => {
   const categories = ['All', 'Leche Flan', 'Cakes', 'Special Desserts', 'Pastries', 'Cringkles'];
 
   const total = posCart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+  const cashTendered = Number.parseFloat(cashAmount);
+  const hasCashTender = Number.isFinite(cashTendered);
+  const cashDifference = hasCashTender ? Number((cashTendered - total).toFixed(2)) : null;
+  const isCashShort = hasCashTender && cashDifference < 0;
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -79,6 +84,19 @@ const AdminPOS = () => {
     } else {
       setCashAmount((prev) => prev + val);
     }
+  };
+
+  const handleCashAmountChange = (event) => {
+    const nextValue = event.target.value;
+    if (/^\d*(?:\.\d{0,2})?$/.test(nextValue)) {
+      setCashAmount(nextValue);
+      setSaleError('');
+    }
+  };
+
+  const handleQuickCash = (amount) => {
+    setCashAmount(String(amount));
+    setSaleError('');
   };
 
   const resetPaymentFlow = () => {
@@ -138,7 +156,7 @@ const AdminPOS = () => {
     const cashTendered = isCashSale ? Number.parseFloat(cashAmount) : total;
 
     if (isCashSale && (!Number.isFinite(cashTendered) || cashTendered < total)) {
-      setSaleError(`Cash received must be at least PHP ${total.toFixed(2)}.`);
+      setSaleError(`Cash received must be at least ${formatCurrency(total)}.`);
       return;
     }
 
@@ -151,6 +169,7 @@ const AdminPOS = () => {
         paymentMethod: paymentMode,
         deliveryMethod: 'pickup',
         status: 'preparing',
+        cashReceived: isCashSale ? cashTendered : null,
         subtext: `Walk-in / ${paymentMode === 'gcash' ? 'GCash' : 'Pay at Store'}`,
       };
 
@@ -175,7 +194,7 @@ const AdminPOS = () => {
       }
 
       const changeDue = isCashSale
-        ? Number((cashTendered - total).toFixed(2))
+        ? (Number(savedOrder?.changeAmount) || 0)
         : 0;
       const completedAt = savedOrder?.updatedAt || new Date().toISOString();
       const receiptOrderCode = savedOrder?.orderCode || savedOrder?.displayId || savedOrder?.orderId || savedOrder?.id || nextOrderId || 'POS order';
@@ -201,7 +220,7 @@ const AdminPOS = () => {
         orderCode: receiptOrder.orderCode,
         paymentMode,
         total: receiptOrder.totalAmount,
-        cashReceived: cashTendered,
+        cashReceived: isCashSale ? (Number(savedOrder?.cashReceived) || cashTendered) : total,
         changeDue,
         completedAt,
         autoPrintRequested: autoPrintEnabled,
@@ -306,7 +325,7 @@ const AdminPOS = () => {
                 <img src={product.image} alt={product.name} className="pos-item-img" />
                 <div className="pos-item-info">
                   <div className="pos-item-name">{product.name}</div>
-                  <div className="pos-item-price">PHP {Number(product.price).toFixed(2)}</div>
+                  <div className="pos-item-price">{formatCurrency(product.price)}</div>
                 </div>
               </div>
             ))}
@@ -342,7 +361,7 @@ const AdminPOS = () => {
 
         {saleError && (
           <div className="pos-warning-alert" style={{ background: '#fef2f2', color: '#b91c1c', borderColor: '#fecaca' }}>
-            {saleError}
+            {formatCurrencyText(saleError)}
           </div>
         )}
 
@@ -356,7 +375,7 @@ const AdminPOS = () => {
               <div key={item.id} className="pos-cart-item">
                 <div style={{ flex: 1 }}>
                   <div style={{ fontWeight: 700 }}>{item.name}</div>
-                  <div style={{ fontSize: '0.8rem', color: '#64748b' }}>PHP {Number(item.price).toFixed(2)} x {item.quantity}</div>
+                  <div style={{ fontSize: '0.8rem', color: '#64748b' }}>{formatCurrency(item.price)} x {item.quantity}</div>
                 </div>
 
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
@@ -374,7 +393,7 @@ const AdminPOS = () => {
 
         <div className="pos-total-centered">
           <div style={{ color: '#64748b', fontWeight: 600, marginBottom: '0.5rem' }}>Total:</div>
-          <span className="pos-total-price-large">PHP {total.toFixed(2)}</span>
+          <span className="pos-total-price-large">{formatCurrency(total)}</span>
         </div>
 
         <div className="pos-print-settings-card">
@@ -402,15 +421,15 @@ const AdminPOS = () => {
             <div className="pos-completion-grid">
               <div className="pos-completion-metric">
                 <span>Total</span>
-                <strong>PHP {saleReceipt.total.toFixed(2)}</strong>
+                <strong>{formatCurrency(saleReceipt.total)}</strong>
               </div>
               <div className="pos-completion-metric">
                 <span>Payment received</span>
-                <strong>PHP {saleReceipt.cashReceived.toFixed(2)}</strong>
+                <strong>{formatCurrency(saleReceipt.cashReceived)}</strong>
               </div>
               <div className="pos-completion-metric pos-completion-change">
                 <span>Change</span>
-                <strong>PHP {saleReceipt.changeDue.toFixed(2)}</strong>
+                <strong>{formatCurrency(saleReceipt.changeDue)}</strong>
               </div>
             </div>
 
@@ -469,19 +488,49 @@ const AdminPOS = () => {
 
             {paymentMode === 'cash' ? (
               <div className="pos-cash-view">
-                <label style={{ fontSize: '0.85rem', fontWeight: 600, color: '#64748b' }}>Enter cash amount:</label>
-                <div className="modal-input" style={{ width: '100%', marginTop: '0.5rem', minHeight: '50px', display: 'flex', alignItems: 'center', fontSize: '1.25rem', fontWeight: 700 }}>
-                  {cashAmount}
+                <label htmlFor="pos-cash-received" style={{ fontSize: '0.85rem', fontWeight: 600, color: '#64748b' }}>Cash received</label>
+                <div className="pos-cash-input-wrap">
+                  <span>₱</span>
+                  <input
+                    id="pos-cash-received"
+                    type="text"
+                    inputMode="decimal"
+                    autoComplete="off"
+                    className="pos-cash-input"
+                    value={cashAmount}
+                    onChange={handleCashAmountChange}
+                    placeholder="0.00"
+                    aria-describedby="pos-cash-status"
+                  />
+                </div>
+
+                <div className="pos-quick-cash" aria-label="Quick cash amounts">
+                  {[500, 1000, 1500, 2000].map((amount) => (
+                    <button
+                      key={amount}
+                      type="button"
+                      className="pos-quick-cash-button"
+                      onClick={() => handleQuickCash(amount)}
+                    >
+                      {formatCurrency(amount)}
+                    </button>
+                  ))}
                 </div>
 
                 <div className="cash-bill-summary">
                   <div className="bill-row">
                     <span>Customer bill</span>
-                    <span style={{ fontWeight: 700 }}>PHP {total.toFixed(2)}</span>
+                    <span style={{ fontWeight: 700 }}>{formatCurrency(total)}</span>
                   </div>
                   <div className="bill-row">
                     <span>Paid</span>
-                    <span style={{ fontWeight: 700 }}>PHP {cashAmount || '0'}</span>
+                    <span style={{ fontWeight: 700 }}>{formatCurrency(hasCashTender ? cashTendered : 0)}</span>
+                  </div>
+                  <div id="pos-cash-status" className={`bill-row pos-cash-balance ${isCashShort ? 'is-short' : 'is-ready'}`}>
+                    <span>{isCashShort ? 'Remaining balance' : 'Change due'}</span>
+                    <span style={{ fontWeight: 800 }}>
+                      {formatCurrency(hasCashTender ? Math.abs(cashDifference) : total)}
+                    </span>
                   </div>
                 </div>
 
@@ -491,14 +540,21 @@ const AdminPOS = () => {
                   ))}
                 </div>
 
-                <button className="btn-complete-cash" onClick={handleCompleteSale}>Complete Order</button>
+                <button
+                  type="button"
+                  className="btn-complete-cash"
+                  onClick={handleCompleteSale}
+                  disabled={!hasCashTender || isCashShort}
+                >
+                  Complete Order
+                </button>
                 <button className="btn-pos-cancel" onClick={resetPaymentFlow}>Cancel</button>
               </div>
             ) : (
               <div className="pos-gcash-view">
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
                   <h3 style={{ margin: 0 }}>GCash QR</h3>
-                  <span style={{ fontWeight: 800, color: '#2563eb' }}>PHP {total.toFixed(2)}</span>
+                  <span style={{ fontWeight: 800, color: '#2563eb' }}>{formatCurrency(total)}</span>
                 </div>
                 <p style={{ color: '#64748b', fontSize: '0.85rem' }}>Scan to pay.</p>
 
