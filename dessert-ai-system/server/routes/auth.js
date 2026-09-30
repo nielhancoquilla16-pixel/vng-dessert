@@ -27,21 +27,38 @@ const normalizeOptionalText = (value = '') => {
   const trimmed = String(value || '').trim();
   return trimmed || null;
 };
-const isValidEmail = (value = '') => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || '').trim());
+const isValidEmail = (value = '') => {
+  const email = normalizeIdentifier(value);
+  const [localPart = '', domain = '', ...extraParts] = email.split('@');
+  return email.length <= 254
+    && extraParts.length === 0
+    && localPart.length > 0
+    && localPart.length <= 64
+    && !localPart.startsWith('.')
+    && !localPart.endsWith('.')
+    && !localPart.includes('..')
+    && /^[a-z0-9.!#$%&'*+/=?^_`{|}~-]+$/i.test(localPart)
+    && /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/i.test(domain);
+};
 const validateGmailRegistration = (value = '') => {
   const email = normalizeIdentifier(value);
   if (!isValidEmail(email)) {
     return { valid: false, status: 'Invalid email format', reason: 'The email address is not correctly formatted.' };
   }
-  if (!['gmail.com', 'googlemail.com'].includes(email.split('@').at(-1))) {
-    return { valid: false, status: 'Invalid Gmail address', reason: 'Customer registration requires a Gmail address.' };
+  if (email.split('@').at(-1) !== 'gmail.com') {
+    return {
+      valid: false,
+      status: 'Invalid Gmail address',
+      reason: 'Email is not a valid Gmail address ending in @gmail.com.',
+    };
   }
   return { valid: true };
 };
 const isGmailAddress = (value = '') => (
-  ['gmail.com', 'googlemail.com'].includes(normalizeIdentifier(value).split('@').at(-1))
+  normalizeIdentifier(value).split('@').at(-1) === 'gmail.com'
 );
 const writeGmailRegistrationAudit = async (supabase, req, {
+  username = '',
   customerName = '',
   email = '',
   status,
@@ -52,6 +69,7 @@ const writeGmailRegistrationAudit = async (supabase, req, {
     actorRole: 'anonymous',
     targetType: 'registration_attempt',
     metadata: {
+      username: String(username || '').trim().toLowerCase().slice(0, 30),
       customerName: String(customerName || '').trim().slice(0, 200) || 'Customer',
       email: String(email || '').trim().slice(0, 320),
       status,
@@ -482,6 +500,7 @@ router.get('/admin/invalid-gmail-registrations', requireAuth, requireRole('admin
     if (error) throw error;
     res.json((data || []).map((entry) => ({
       id: entry.id,
+      username: entry.metadata?.username || '',
       customerName: entry.metadata?.customerName || 'Customer',
       email: entry.metadata?.email || '',
       status: entry.metadata?.status || 'Invalid Gmail address',
@@ -503,6 +522,8 @@ router.post('/register', async (req, res, next) => {
       address = '',
       phone_number = '',
       terms_accepted = false,
+      terms_read_to_bottom = false,
+      terms_explicitly_accepted = false,
       terms_accepted_at = null,
       terms_version = '',
     } = req.body || {};
@@ -521,8 +542,8 @@ router.post('/register', async (req, res, next) => {
       return res.status(400).json({ error: passwordValidation.message });
     }
 
-    if (!terms_accepted) {
-      return res.status(400).json({ error: 'You must agree to the Terms and Conditions before creating an account.' });
+    if (terms_accepted !== true || terms_read_to_bottom !== true || terms_explicitly_accepted !== true) {
+      return res.status(400).json({ error: 'Read the Terms and Conditions to the bottom and accept them before creating an account.' });
     }
 
     const normalizedEmail = normalizeIdentifier(email);
@@ -533,6 +554,7 @@ router.post('/register', async (req, res, next) => {
     const gmailValidation = validateGmailRegistration(normalizedEmail);
     if (!gmailValidation.valid) {
       await writeGmailRegistrationAudit(getSupabaseAdmin(), req, {
+        username: normalizedUsername,
         customerName: full_name,
         email: normalizedEmail,
         status: gmailValidation.status,
@@ -581,6 +603,7 @@ router.post('/register', async (req, res, next) => {
       const normalizedSignupError = normalizeAuthEmailError(signupError);
       if (isGmailAddress(normalizedEmail) && ['email_address_invalid', 'email_invalid'].includes(String(signupError.code || ''))) {
         await writeGmailRegistrationAudit(supabase, req, {
+          username: normalizedUsername,
           customerName: full_name,
           email: normalizedEmail,
           status: 'Invalid Gmail address',
@@ -588,6 +611,7 @@ router.post('/register', async (req, res, next) => {
         });
       } else if (normalizedSignupError?.errorCode === 'AUTH_EMAIL_DELIVERY_UNAVAILABLE') {
         await writeGmailRegistrationAudit(supabase, req, {
+          username: normalizedUsername,
           customerName: full_name,
           email: normalizedEmail,
           status: 'Unverified/unconfirmed Gmail address',
@@ -665,7 +689,7 @@ router.post('/register/resend-link', async (req, res, next) => {
     const supabase = getSupabaseAdmin();
     const { data: profile, error: profileError } = await supabase
       .from('profiles')
-      .select('id, email, full_name, role, email_verified, email_verification_sent_at')
+      .select('id, username, email, full_name, role, email_verified, email_verification_sent_at')
       .ilike('email', email)
       .maybeSingle();
 
@@ -705,6 +729,7 @@ router.post('/register/resend-link', async (req, res, next) => {
       const normalizedResendError = normalizeAuthEmailError(resendError);
       if (isGmailAddress(email) && normalizedResendError?.errorCode === 'AUTH_EMAIL_DELIVERY_UNAVAILABLE') {
         await writeGmailRegistrationAudit(supabase, req, {
+          username: profile.username,
           customerName: profile.full_name,
           email,
           status: 'Unverified/unconfirmed Gmail address',
@@ -713,6 +738,7 @@ router.post('/register/resend-link', async (req, res, next) => {
       }
       if (isGmailAddress(email) && ['email_address_invalid', 'email_invalid'].includes(String(resendError.code || ''))) {
         await writeGmailRegistrationAudit(supabase, req, {
+          username: profile.username,
           customerName: profile.full_name,
           email,
           status: 'Invalid Gmail address',

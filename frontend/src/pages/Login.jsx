@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { CheckCircle2, Eye, EyeOff, Link2, Lock, Mail, RefreshCw, UserPlus } from 'lucide-react';
 import { getDashboardPathForRole, useAuth } from '../context/AuthContext';
@@ -46,10 +46,11 @@ const PasswordField = ({
   placeholder = 'Enter password',
   maxLength = 20,
   autoComplete = 'current-password',
+  isMatch = false,
 }) => (
   <div className="auth-field">
     <label htmlFor={id}>{label}</label>
-    <div className="auth-input-shell">
+    <div className={`auth-input-shell${isMatch ? ' is-password-match' : ''}`}>
       <Lock size={18} />
       <input
         id={id}
@@ -73,16 +74,32 @@ const PasswordField = ({
   </div>
 );
 
-const PasswordRequirements = () => (
-  <section className="auth-password-requirements" aria-label="Password Requirements">
-    <h3>Password Requirements</h3>
-    <ul>
-      {PASSWORD_REQUIREMENTS.map((requirement) => (
-        <li key={requirement}>{requirement}</li>
-      ))}
-    </ul>
-  </section>
-);
+const PasswordRequirements = ({ password = '' }) => {
+  const value = String(password ?? '');
+  const requirementChecks = [
+    value.length >= 8 && value.length <= 20,
+    /[A-Z]/.test(value),
+    /[a-z]/.test(value),
+    /[0-9]/.test(value),
+    /[!@#$%^&*]/.test(value),
+  ];
+
+  return (
+    <section className="auth-password-requirements" aria-label="Password Requirements">
+      <h3>Password Requirements</h3>
+      <ul>
+        {PASSWORD_REQUIREMENTS.map((requirement, index) => (
+          <li
+            key={requirement}
+            className={requirementChecks[index] ? 'is-satisfied' : ''}
+          >
+            {requirement}
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+};
 
 const CaptchaField = ({ captcha, onAnswerChange, onRefresh, disabled }) => (
   <div className="auth-captcha">
@@ -148,12 +165,15 @@ const Login = () => {
   const [showSignupConfirmPassword, setShowSignupConfirmPassword] = useState(false);
   const [hasAcceptedTerms, setHasAcceptedTerms] = useState(false);
   const [isTermsModalOpen, setIsTermsModalOpen] = useState(false);
-  const [submitAfterTermsAcceptance, setSubmitAfterTermsAcceptance] = useState(false);
+  const [hasReachedTermsBottom, setHasReachedTermsBottom] = useState(false);
+  const [hasCheckedTermsInModal, setHasCheckedTermsInModal] = useState(false);
+  const termsContentRef = useRef(null);
   const termsDialogRef = useDialogFocus({
     isOpen: isTermsModalOpen,
     onClose: () => {
       setIsTermsModalOpen(false);
-      setSubmitAfterTermsAcceptance(false);
+      setHasReachedTermsBottom(false);
+      setHasCheckedTermsInModal(false);
     },
     closeDisabled: isSubmitting,
   });
@@ -170,9 +190,21 @@ const Login = () => {
   const [showResetConfirmPassword, setShowResetConfirmPassword] = useState(false);
 
   const signupPasswordValidation = useMemo(() => validatePassword(signupPassword), [signupPassword]);
+  const signupPasswordsMatch = signupPassword.length > 0 && signupPassword === signupConfirmPassword;
   const resetPasswordValidation = useMemo(() => validatePassword(resetPassword), [resetPassword]);
   const shouldShowCaptcha = activeView === 'signup';
   const isRecoveryCodeMode = passwordRecoveryMode === 'code';
+
+  useEffect(() => {
+    if (!isTermsModalOpen) return undefined;
+    const frameId = window.requestAnimationFrame(() => {
+      const termsContent = termsContentRef.current;
+      if (termsContent && termsContent.scrollHeight <= termsContent.clientHeight + 1) {
+        setHasReachedTermsBottom(true);
+      }
+    });
+    return () => window.cancelAnimationFrame(frameId);
+  }, [isTermsModalOpen]);
 
   const loadCaptcha = useCallback(async () => {
     setCaptcha((current) => ({ ...current, isLoading: true, error: '' }));
@@ -282,14 +314,16 @@ const Login = () => {
     showAlert(result.message || 'Unable to log in.');
   };
 
-  const submitSignup = async (acceptedTermsOverride = hasAcceptedTerms) => {
+  const submitSignup = async () => {
     const acceptedTermsAt = new Date().toISOString();
     setIsSubmitting(true);
     const result = await registerCustomer({
       username: signupUsername,
       email: signupEmail,
       password: signupPassword,
-      acceptedTerms: acceptedTermsOverride,
+      acceptedTerms: hasAcceptedTerms,
+      termsReadToBottom: hasAcceptedTerms,
+      termsExplicitlyAccepted: hasAcceptedTerms,
       acceptedTermsAt,
       termsVersion: TERMS_VERSION,
       ...getCaptchaPayload(),
@@ -329,6 +363,31 @@ const Login = () => {
     setView('verify');
   };
 
+  const openTermsModal = () => {
+    setHasReachedTermsBottom(false);
+    setHasCheckedTermsInModal(false);
+    setIsTermsModalOpen(true);
+  };
+
+  const closeTermsModal = () => {
+    setHasReachedTermsBottom(false);
+    setHasCheckedTermsInModal(false);
+    setIsTermsModalOpen(false);
+  };
+
+  const handleTermsScroll = (event) => {
+    const { scrollTop, clientHeight, scrollHeight } = event.currentTarget;
+    if (scrollTop + clientHeight >= scrollHeight - 2) {
+      setHasReachedTermsBottom(true);
+    }
+  };
+
+  const handleAcceptTerms = () => {
+    if (!hasReachedTermsBottom || !hasCheckedTermsInModal) return;
+    setHasAcceptedTerms(true);
+    closeTermsModal();
+  };
+
   const handleSignup = async (event) => {
     event.preventDefault();
     clearAlert();
@@ -354,23 +413,11 @@ const Login = () => {
     }
 
     if (!hasAcceptedTerms) {
-      setSubmitAfterTermsAcceptance(true);
-      setIsTermsModalOpen(true);
+      openTermsModal();
       return;
     }
 
     await submitSignup();
-  };
-
-  const handleAcceptTerms = async () => {
-    const shouldSubmit = submitAfterTermsAcceptance;
-    setIsTermsModalOpen(false);
-    setSubmitAfterTermsAcceptance(false);
-    setHasAcceptedTerms(true);
-
-    if (shouldSubmit) {
-      await submitSignup(true);
-    }
   };
 
   const handleResendSignupLink = async () => {
@@ -574,10 +621,11 @@ const Login = () => {
           value={signupPassword}
           onChange={(event) => setSignupPassword(event.target.value)}
           showPassword={showSignupPassword}
+          isMatch={signupPasswordsMatch}
           onToggle={() => setShowSignupPassword((current) => !current)}
           autoComplete="new-password"
         />
-        <PasswordRequirements />
+        <PasswordRequirements password={signupPassword} />
 
         <PasswordField
           id="signupConfirmPassword"
@@ -585,6 +633,7 @@ const Login = () => {
           value={signupConfirmPassword}
           onChange={(event) => setSignupConfirmPassword(event.target.value)}
           showPassword={showSignupConfirmPassword}
+          isMatch={signupPasswordsMatch}
           onToggle={() => setShowSignupConfirmPassword((current) => !current)}
           placeholder="Confirm password"
           autoComplete="new-password"
@@ -593,15 +642,12 @@ const Login = () => {
         {renderCaptcha()}
 
         <div className="auth-terms-row">
-          <label className="auth-checkbox">
-            <input
-              type="checkbox"
-              checked={hasAcceptedTerms}
-              onChange={(event) => setHasAcceptedTerms(event.target.checked)}
-            />
-            <span>I agree to the Terms and Conditions.</span>
-          </label>
-          <button type="button" className="auth-link-button" onClick={() => setIsTermsModalOpen(true)}>
+          {hasAcceptedTerms && (
+            <span className="auth-terms-accepted" role="status">
+              ✓ Terms and Conditions Accepted
+            </span>
+          )}
+          <button type="button" className="auth-link-button" onClick={openTermsModal}>
             View Terms
           </button>
         </div>
@@ -628,7 +674,14 @@ const Login = () => {
               <p>Last updated {TERMS_LAST_UPDATED_LABEL}</p>
             </div>
 
-            <div className="auth-terms-scroll" tabIndex={0} role="region" aria-label="Terms and conditions text">
+            <div
+              ref={termsContentRef}
+              className="auth-terms-scroll"
+              tabIndex={0}
+              role="region"
+              aria-label="Terms and conditions text"
+              onScroll={handleTermsScroll}
+            >
               {TERMS_SECTIONS.map((section) => (
                 <section key={section.title}>
                   <h4>{section.title}</h4>
@@ -639,11 +692,18 @@ const Login = () => {
               ))}
             </div>
 
+            <p className="auth-terms-scroll-hint" role="status">
+              {hasReachedTermsBottom
+                ? 'You reached the end of the Terms and Conditions.'
+                : 'Scroll to the bottom of the Terms and Conditions to enable agreement.'}
+            </p>
+
             <label className="auth-checkbox auth-modal-checkbox">
               <input
                 type="checkbox"
-                checked={hasAcceptedTerms}
-                onChange={(event) => setHasAcceptedTerms(event.target.checked)}
+                checked={hasCheckedTermsInModal}
+                disabled={!hasReachedTermsBottom || isSubmitting}
+                onChange={(event) => setHasCheckedTermsInModal(event.target.checked)}
               />
               <span>{TERMS_ACCEPTANCE_LABEL}</span>
             </label>
@@ -652,10 +712,7 @@ const Login = () => {
               <button
                 type="button"
                 className="auth-secondary-button"
-                onClick={() => {
-                  setIsTermsModalOpen(false);
-                  setSubmitAfterTermsAcceptance(false);
-                }}
+                onClick={closeTermsModal}
               >
                 Cancel
               </button>
@@ -663,7 +720,7 @@ const Login = () => {
                 type="button"
                 className="auth-primary-button compact"
                 onClick={handleAcceptTerms}
-                disabled={!hasAcceptedTerms || isSubmitting}
+                disabled={!hasReachedTermsBottom || !hasCheckedTermsInModal || isSubmitting}
               >
                 Agree and Continue
               </button>
@@ -795,7 +852,7 @@ const Login = () => {
         placeholder="Enter new password"
         autoComplete="new-password"
       />
-      <PasswordRequirements />
+      <PasswordRequirements password={resetPassword} />
 
       <PasswordField
         id="resetConfirmPassword"

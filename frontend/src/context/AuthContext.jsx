@@ -8,7 +8,9 @@ import { appUrl } from '../lib/appUrl';
 
 const getAuthErrorMessage = (error) => {
   if (error instanceof ApiError) {
-    return error.details?.errorCode === 'AUTH_EMAIL_DELIVERY_UNAVAILABLE'
+    return error.status === 404
+      || error.details?.errorCode === 'AUTH_EMAIL_DELIVERY_UNAVAILABLE'
+      || error.details?.errorCode === 'INVALID_GMAIL_REGISTRATION'
       ? error.userMessage
       : error.message;
   }
@@ -439,6 +441,8 @@ export const AuthProvider = ({ children }) => {
     address = '',
     phoneNumber = '',
     acceptedTerms = false,
+    termsReadToBottom = false,
+    termsExplicitlyAccepted = false,
     acceptedTermsAt = '',
     termsVersion = TERMS_VERSION,
     captchaId = '',
@@ -448,8 +452,8 @@ export const AuthProvider = ({ children }) => {
       return { success: false, message: new ApiError('', 503).message };
     }
 
-    if (!acceptedTerms) {
-      return { success: false, message: 'You must agree to the Terms and Conditions before creating an account.' };
+    if (acceptedTerms !== true || termsReadToBottom !== true || termsExplicitlyAccepted !== true) {
+      return { success: false, message: 'Read the Terms and Conditions to the bottom and accept them before creating an account.' };
     }
 
     try {
@@ -471,6 +475,8 @@ export const AuthProvider = ({ children }) => {
           address,
           phone_number: phoneNumber,
           terms_accepted: true,
+          terms_read_to_bottom: true,
+          terms_explicitly_accepted: true,
           terms_accepted_at: normalizedAcceptedTermsAt,
           terms_version: normalizedTermsVersion,
           captcha_id: captchaId,
