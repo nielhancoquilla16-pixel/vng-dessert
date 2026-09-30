@@ -35,6 +35,7 @@ import AdminContent from './pages/AdminContent';
 import StaffDashboard from './pages/StaffDashboard';
 
 import { AuthProvider } from './context/AuthContext';
+import { useAuth } from './context/AuthContext';
 import { ProductProvider } from './context/ProductContext';
 import { InventoryAlertProvider } from './context/InventoryAlertContext';
 import { OrderProvider } from './context/OrderContext';
@@ -47,6 +48,14 @@ import { CustomerAddressesProvider } from './context/CustomerAddressesContext';
 import { normalizeBasePath } from './lib/publicUrl';
 
 const routerBasename = normalizeBasePath(import.meta.env.BASE_URL).replace(/\/$/, '') || '/';
+
+const CustomerCartRoute = () => {
+  const { isAdmin, isAuthLoading } = useAuth();
+
+  if (isAuthLoading) return null;
+  if (isAdmin) return <AccessDenied />;
+  return <Cart />;
+};
 
 function App() {
   return (
@@ -70,7 +79,7 @@ function App() {
                             <Route path="/" element={<Layout />}>
                               <Route index element={<Home />} />
                               <Route path="products" element={<Products />} />
-                              <Route path="cart" element={<Cart />} />
+                              <Route path="cart" element={<CustomerCartRoute />} />
                               <Route path="contact" element={<Contact />} />
                               <Route path="about" element={<About />} />
                               <Route path="login" element={<Login />} />

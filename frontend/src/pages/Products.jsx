@@ -22,7 +22,7 @@ const Products = () => {
   const { products, isProductsLoading } = useProducts();
   const { addToCart, cartItems } = useCart();
   const { queryProductAI } = useAI();
-  const { loggedInCustomer } = useAuth();
+  const { loggedInCustomer, isAdmin } = useAuth();
   const { isShopOpen, isShopSettingsLoading, shopSettingsError, operatingHoursLabel, closingTimeLabel } = useShopSettings();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -55,13 +55,15 @@ const Products = () => {
   const getPreOrderUnavailableReason = (product) => getProductPreOrderUnavailableReason(product, {
     isShopOpen, isShopSettingsLoading, shopSettingsError,
   });
-  const canAddProductToCart = (product) => remainingStock(product) > 0
+  const canAddProductToCart = (product) => !isAdmin
+    && remainingStock(product) > 0
     && product?.availability !== 'expired'
     && product?.availability !== 'hidden'
     && !product?.isExpired;
   const getAvailability = (product) => product.availability === 'expired' || product.availability === 'hidden'
     ? 'Unavailable' : Number(product.stock) > 0 ? `${product.stock} available` : 'Out of stock';
-  const purchaseLabel = (product) => getAvailability(product) === 'Unavailable' ? 'Unavailable'
+  const purchaseLabel = (product) => isAdmin ? 'Customer cart only'
+    : getAvailability(product) === 'Unavailable' ? 'Unavailable'
       : Number(product.stock) <= 0 ? 'Out of stock'
         : remainingStock(product) <= 0 ? 'Cart limit reached' : 'Add to Cart';
 

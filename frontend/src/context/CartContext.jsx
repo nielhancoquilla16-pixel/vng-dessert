@@ -56,7 +56,7 @@ const readGuestCartMerge = (userId) => {
 export const useCart = () => useContext(CartContext);
 
 export const CartProvider = ({ children }) => {
-  const { session, loggedInCustomer, isAuthLoading } = useAuth();
+  const { session, loggedInCustomer, isAdmin, isAuthLoading } = useAuth();
   const { products } = useProducts();
   const [cartItems, setCartItems] = useState(() => readGuestCart());
   const cartItemsRef = useRef(cartItems);
@@ -440,6 +440,10 @@ export const CartProvider = ({ children }) => {
   }, [queueRemoteCartSync, refreshRemoteCart, session, updateCartItems]);
 
   const addToCart = useCallback(async (product, quantity = 1) => {
+    if (isAdmin) {
+      throw new Error('Only customer accounts can use the shopping cart.');
+    }
+
     const requestedQuantity = Math.max(1, Number(quantity) || 1);
     const currentProduct = products.find((item) => String(item.id) === String(product.id)) || product;
     const normalizedProduct = normalizeCartItem({ ...currentProduct, quantity: requestedQuantity });
@@ -493,7 +497,7 @@ export const CartProvider = ({ children }) => {
 
       return [...prev, { ...normalizedProduct, quantity: Math.min(requestedQuantity, maxStock) }];
     });
-  }, [isRemoteCart, products, syncRemoteQuantity, updateCartItems]);
+  }, [isAdmin, isRemoteCart, products, syncRemoteQuantity, updateCartItems]);
 
   const removeFromCart = useCallback(async (id) => {
     if (isRemoteCart) {

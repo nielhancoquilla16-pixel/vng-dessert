@@ -13,7 +13,7 @@ import './ShopProductCard.css';
 
 const ShopProductCard = ({ product, badge, onDetails, onPreOrder, preOrderUnavailableReason }) => {
   const { addToCart, cartItems } = useCart();
-  const { loggedInCustomer } = useAuth();
+  const { loggedInCustomer, isAdmin } = useAuth();
   const navigate = useNavigate();
   const { isShopOpen, isShopSettingsLoading, shopSettingsError } = useShopSettings();
   const [isAdding, setIsAdding] = useState(false);
@@ -28,10 +28,10 @@ const ShopProductCard = ({ product, badge, onDetails, onPreOrder, preOrderUnavai
   const cartQuantity = cartItems.find((item) => String(item.id) === String(product.id))?.quantity || 0;
   const isExpired = product.availability === 'expired' || product.isExpired;
   const unavailable = isExpired || product.availability === 'hidden';
-  const canAdd = !unavailable && stock > cartQuantity;
+  const canAdd = !isAdmin && !unavailable && stock > cartQuantity;
   const imageSrc = resolveAssetUrl(product.image || product.imageUrl, '');
   const availability = unavailable ? 'Unavailable' : stock > 0 ? `${stock} available` : 'Out of stock';
-  const buttonLabel = isExpired ? 'Expired' : unavailable ? 'Unavailable' : stock <= 0 ? 'Out of stock'
+  const buttonLabel = isAdmin ? 'Customer cart only' : isExpired ? 'Expired' : unavailable ? 'Unavailable' : stock <= 0 ? 'Out of stock'
     : cartQuantity >= stock ? 'Cart limit reached' : 'Add to Cart';
   const detailsProps = onDetails
     ? { as: 'button', type: 'button', onClick: () => onDetails(product) }
