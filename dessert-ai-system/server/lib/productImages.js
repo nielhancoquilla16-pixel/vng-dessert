@@ -5,6 +5,8 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const uploadsDir = resolve(__dirname, '../uploads/products');
+const PRODUCT_IMAGES_BUCKET = 'product-images';
+const PUBLIC_BUCKET_PATH = `/storage/v1/object/public/${PRODUCT_IMAGES_BUCKET}/`;
 const MAX_PRODUCT_IMAGE_BYTES = 5 * 1024 * 1024;
 const DATA_URL_PATTERN = /^data:(image\/(?:png|jpeg));base64,([a-z0-9+/=\s]+)$/i;
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
@@ -30,7 +32,7 @@ const parseHttpImageUrl = (value) => {
   return url.toString();
 };
 
-export const resolveProductImageValue = async ({ imageInput, requestBaseUrl }) => {
+export const resolveProductImageValue = async ({ imageInput, requestBaseUrl, supabase }) => {
   const normalizedInput = String(imageInput || '').trim();
   if (!normalizedInput) {
     throw createImageError('Choose an image by uploading a PNG/JPG or entering an image URL.');
@@ -69,20 +71,68 @@ export const resolveProductImageValue = async ({ imageInput, requestBaseUrl }) =
     throw createImageError('The selected file does not match its PNG/JPG image type.');
   }
 
-  await mkdir(uploadsDir, { recursive: true });
   const extension = mimeType === 'image/png' ? '.png' : '.jpg';
   const filename = `${randomUUID()}${extension}`;
+
+  if (supabase?.storage) {
+    const { error } = await supabase.storage
+      .from(PRODUCT_IMAGES_BUCKET)
+      .upload(filename, imageBuffer, {
+        cacheControl: '31536000',
+        contentType: mimeType,
+        upsert: false,
+      });
+
+    if (error) {
+      const storageError = new Error(`Unable to save product image to Supabase Storage: ${error.message || 'storage upload failed'}`);
+      storageError.status = 502;
+      throw storageError;
+    }
+
+    const { data } = supabase.storage.from(PRODUCT_IMAGES_BUCKET).getPublicUrl(filename);
+    if (!data?.publicUrl) {
+      const storageError = new Error('Product image was uploaded, but its public URL could not be created.');
+      storageError.status = 502;
+      throw storageError;
+    }
+
+    return data.publicUrl;
+  }
+
+  // Keep local development usable when Supabase is not configured.
+  await mkdir(uploadsDir, { recursive: true });
   await writeFile(join(uploadsDir, filename), imageBuffer, { flag: 'wx' });
 
   const baseUrl = String(requestBaseUrl || '').replace(/\/$/, '');
   return `${baseUrl}/uploads/products/${filename}`;
 };
 
-export const removeManagedProductImage = async (value = '') => {
+export const removeManagedProductImage = async (value = '', supabase) => {
   let pathname = '';
   try {
     pathname = new URL(String(value)).pathname;
   } catch {
+    return;
+  }
+
+  if (pathname.startsWith(PUBLIC_BUCKET_PATH)) {
+    if (!supabase?.storage) return;
+    let objectPath = '';
+    try {
+      objectPath = decodeURIComponent(pathname.slice(PUBLIC_BUCKET_PATH.length));
+    } catch {
+      return;
+    }
+    if (!/^[0-9a-f-]{36}\.(?:png|jpg)$/i.test(objectPath)) return;
+
+    try {
+      const { error } = await supabase.storage.from(PRODUCT_IMAGES_BUCKET).remove([objectPath]);
+      if (error) {
+        console.warn('Unable to remove old product image from Supabase Storage:', error);
+      }
+    } catch (error) {
+      console.warn('Unable to remove old product image from Supabase Storage:', error);
+    }
     return;
   }
 

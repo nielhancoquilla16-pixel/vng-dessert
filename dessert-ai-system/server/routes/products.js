@@ -683,34 +683,38 @@ router.post('/', requireAuth, requireRole('admin', 'staff'), async (req, res, ne
       return res.status(400).json({ error: 'Expiration date must be on or after the product creation date.' });
     }
 
+    const resolvedPrice = parsePrice(price);
+    const supabase = getSupabaseAdmin();
     const resolvedImageUrl = await resolveProductImageValue({
       imageInput,
       requestBaseUrl: getRequestBaseUrl(req),
+      supabase,
     });
 
-    const supabase = getSupabaseAdmin();
-    const { data, error } = await supabase
-      .from('products')
-      .insert({
-        product_name: resolvedProductName,
-        description: description || null,
-        price: parsePrice(price),
-        category,
-        stock_quantity: Math.max(0, Number(resolvedStockQuantity) || 0),
-        availability: getAvailabilityForStock(Math.max(0, Number(resolvedStockQuantity) || 0), availability, resolvedExpirationAt),
-        image_url: resolvedImageUrl || null,
-        date_created: resolvedDateCreated,
-        expiration_date: resolvedExpirationDate,
-        expiration_at: resolvedExpirationAt || null,
-      })
-      .select('*')
-      .single();
-
-    if (error) {
-      throw error;
-    }
-
+    let createdProductId = '';
     try {
+      const { data, error } = await supabase
+        .from('products')
+        .insert({
+          product_name: resolvedProductName,
+          description: description || null,
+          price: resolvedPrice,
+          category,
+          stock_quantity: Math.max(0, Number(resolvedStockQuantity) || 0),
+          availability: getAvailabilityForStock(Math.max(0, Number(resolvedStockQuantity) || 0), availability, resolvedExpirationAt),
+          image_url: resolvedImageUrl || null,
+          date_created: resolvedDateCreated,
+          expiration_date: resolvedExpirationDate,
+          expiration_at: resolvedExpirationAt || null,
+        })
+        .select('*')
+        .single();
+
+      if (error) {
+        throw error;
+      }
+
+      createdProductId = data.id;
       await syncProductInventoryBatch(supabase, {
         productId: data.id,
         productName: resolvedProductName,
@@ -721,21 +725,29 @@ router.post('/', requireAuth, requireRole('admin', 'staff'), async (req, res, ne
         imageUrl: resolvedImageUrl,
         category: category,
       });
+
+      return res.status(201).json(mapProduct(data));
     } catch (inventoryError) {
-      await supabase
-        .from('products')
-        .delete()
-        .eq('id', data.id);
+      if (createdProductId) {
+        await supabase
+          .from('products')
+          .delete()
+          .eq('id', createdProductId);
+      }
+      // The upload happens before the database insert; remove it if the product
+      // could not be saved and leave no orphaned object in the bucket.
+      await removeManagedProductImage(resolvedImageUrl, supabase);
       throw inventoryError;
     }
-
-    res.status(201).json(mapProduct(data));
   } catch (error) {
     next(error);
   }
 });
 
 router.patch('/:id', requireAuth, requireRole('admin', 'staff'), async (req, res, next) => {
+  let uploadedImageUrl = '';
+  let imagePersisted = false;
+  let supabaseForImageCleanup;
   try {
     if (!isUuid(req.params.id)) {
       return res.status(400).json({ error: 'Invalid product id.' });
@@ -773,6 +785,7 @@ router.patch('/:id', requireAuth, requireRole('admin', 'staff'), async (req, res
     }
 
     const supabase = getSupabaseAdmin();
+    supabaseForImageCleanup = supabase;
     const { data: existingProduct, error: existingProductError } = await supabase
       .from('products')
       .select('*')
@@ -824,10 +837,12 @@ router.patch('/:id', requireAuth, requireRole('admin', 'staff'), async (req, res
     }
 
     if (hasImageInput) {
-      updates.image_url = await resolveProductImageValue({
+      uploadedImageUrl = await resolveProductImageValue({
         imageInput: req.body?.image_url ?? req.body?.imageUrl,
         requestBaseUrl: getRequestBaseUrl(req),
+        supabase,
       });
+      updates.image_url = uploadedImageUrl;
     }
 
     if ('availability' in updates || 'stock_quantity' in updates || hasExpirationAtInput || hasExpirationDateInput) {
@@ -850,8 +865,13 @@ router.patch('/:id', requireAuth, requireRole('admin', 'staff'), async (req, res
     }
 
     if (!data) {
+      if (uploadedImageUrl) {
+        await removeManagedProductImage(uploadedImageUrl, supabase);
+      }
       return res.status(404).json({ error: 'Product not found.' });
     }
+
+    imagePersisted = hasImageInput && existingProduct.image_url !== data.image_url;
 
     await syncProductInventoryBatch(supabase, {
       productId: data.id,
@@ -865,11 +885,14 @@ router.patch('/:id', requireAuth, requireRole('admin', 'staff'), async (req, res
     });
 
     if (hasImageInput && existingProduct.image_url !== data.image_url) {
-      await removeManagedProductImage(existingProduct.image_url);
+      await removeManagedProductImage(existingProduct.image_url, supabase);
     }
 
     res.json(mapProduct(data));
   } catch (error) {
+    if (uploadedImageUrl && !imagePersisted) {
+      await removeManagedProductImage(uploadedImageUrl, supabaseForImageCleanup);
+    }
     next(error);
   }
 });
@@ -883,7 +906,7 @@ router.delete('/:id', requireAuth, requireRole('admin', 'staff'), async (req, re
     const supabase = getSupabaseAdmin();
     const { data: existingProduct, error: existingProductError } = await supabase
       .from('products')
-      .select('id')
+      .select('id, image_url')
       .eq('id', req.params.id)
       .maybeSingle();
 
@@ -906,6 +929,7 @@ router.delete('/:id', requireAuth, requireRole('admin', 'staff'), async (req, re
       throw error;
     }
 
+    await removeManagedProductImage(existingProduct.image_url, supabase);
     res.status(204).send();
   } catch (error) {
     next(error);
