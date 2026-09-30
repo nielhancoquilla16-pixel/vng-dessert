@@ -135,7 +135,7 @@ const Cart = () => {
                       className="qty-btn"
                       aria-label={`Increase quantity of ${item.name}`}
                       onClick={() => changeCart(() => updateQuantity(item.id, item.quantity + 1))}
-                      disabled={!canOrder || isUpdating || item.quantity >= (Number(item.stock) || item.quantity)}
+                      disabled={isUpdating || item.quantity >= (Number(item.stock) || item.quantity)}
                     >
                       +
                     </button>
@@ -185,6 +185,7 @@ const Cart = () => {
             ) : (
               <Link
                 to={selectedCount > 0 ? '/login' : '#'}
+                state={selectedCount > 0 ? { from: '/cart' } : undefined}
                 className={`btn-primary btn-block ${selectedCount === 0 ? 'disabled' : ''}`}
                 style={{ textAlign: 'center', opacity: selectedCount === 0 ? 0.5 : 1, pointerEvents: selectedCount === 0 ? 'none' : 'auto' }}
               >

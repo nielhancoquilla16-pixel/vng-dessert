@@ -28,13 +28,11 @@ const ShopProductCard = ({ product, badge, onDetails, onPreOrder, preOrderUnavai
   const cartQuantity = cartItems.find((item) => String(item.id) === String(product.id))?.quantity || 0;
   const isExpired = product.availability === 'expired' || product.isExpired;
   const unavailable = isExpired || product.availability === 'hidden';
-  const areShopHoursKnown = !isShopSettingsLoading && !shopSettingsError;
-  const canAdd = !unavailable && stock > cartQuantity && areShopHoursKnown && isShopOpen;
+  const canAdd = !unavailable && stock > cartQuantity;
   const imageSrc = resolveAssetUrl(product.image || product.imageUrl, '');
   const availability = unavailable ? 'Unavailable' : stock > 0 ? `${stock} available` : 'Out of stock';
   const buttonLabel = isExpired ? 'Expired' : unavailable ? 'Unavailable' : stock <= 0 ? 'Out of stock'
-    : isShopSettingsLoading ? 'Checking hours' : shopSettingsError ? 'Hours unavailable'
-      : !isShopOpen ? 'Shop closed' : cartQuantity >= stock ? 'Cart limit reached' : 'Add to Cart';
+    : cartQuantity >= stock ? 'Cart limit reached' : 'Add to Cart';
   const detailsProps = onDetails
     ? { as: 'button', type: 'button', onClick: () => onDetails(product) }
     : { as: Link, to: `/products?product=${encodeURIComponent(product.id)}` };

@@ -2,7 +2,6 @@ import express from 'express';
 import { getSupabaseAdmin } from '../lib/supabaseAdmin.js';
 import { requireAuth } from '../middleware/requireAuth.js';
 import { getExpiryStatus } from '../lib/expiry.js';
-import { assertShopOpen } from '../lib/shopSettings.js';
 
 const router = express.Router();
 
@@ -164,7 +163,6 @@ router.post('/mine/items', requireAuth, async (req, res, next) => {
     }
 
     const supabase = getSupabaseAdmin();
-    await assertShopOpen(supabase);
     await assertProductCanBeOrdered(supabase, product_id);
     const cart = await getOrCreateCart(supabase, req.authUser.id);
 
@@ -213,10 +211,6 @@ router.patch('/mine/items/:itemId', requireAuth, async (req, res, next) => {
 
     if (!ownedItem) {
       return res.status(404).json({ error: 'Cart item not found.' });
-    }
-
-    if (Number(quantity) > Number(ownedItem.quantity)) {
-      await assertShopOpen(supabase);
     }
 
     if (Number(quantity) > 0) {

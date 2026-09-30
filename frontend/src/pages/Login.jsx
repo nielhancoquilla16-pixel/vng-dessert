@@ -28,6 +28,15 @@ const getInitialView = (search = '') => {
   return mode === 'signup' || mode === 'register' ? 'signup' : 'login';
 };
 
+const getCustomerReturnPath = (location) => {
+  const requestedPath = typeof location.state?.from === 'string'
+    ? location.state.from
+    : location.state?.from?.pathname;
+  return requestedPath === '/cart' || requestedPath === '/checkout' || requestedPath?.startsWith('/checkout/')
+    ? requestedPath
+    : '';
+};
+
 const getMessageClass = (type) => (
   type === 'success' ? 'auth-alert auth-alert-success' : 'auth-alert auth-alert-error'
 );
@@ -257,9 +266,14 @@ const Login = () => {
       && session
       && profile?.emailVerified
     ) {
-      navigate(getDashboardPathForRole(profile.role), { replace: true });
+      navigate(
+        profile.role === 'customer'
+          ? getCustomerReturnPath(location) || getDashboardPathForRole(profile.role)
+          : getDashboardPathForRole(profile.role),
+        { replace: true },
+      );
     }
-  }, [isAuthLoading, isPasswordRecovery, navigate, profile, session]);
+  }, [isAuthLoading, isPasswordRecovery, location, navigate, profile, session]);
 
   const showAlert = (message, type = 'error') => {
     setAlert({ message, type });
@@ -297,7 +311,7 @@ const Login = () => {
     setIsSubmitting(false);
 
     if (result.success) {
-      navigate(result.redirectTo || '/', {
+      navigate(getCustomerReturnPath(location) || result.redirectTo || '/', {
         state: { welcomeMessage: `Welcome back, ${loginIdentifier.trim()}` },
       });
       return;

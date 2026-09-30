@@ -52,20 +52,16 @@ const Products = () => {
     (Number(product?.stock) || 0)
     - (cartItems.find((item) => String(item.id) === String(product?.id))?.quantity || 0),
   );
-  const areShopHoursKnown = !isShopSettingsLoading && !shopSettingsError;
   const getPreOrderUnavailableReason = (product) => getProductPreOrderUnavailableReason(product, {
     isShopOpen, isShopSettingsLoading, shopSettingsError,
   });
   const canAddProductToCart = (product) => remainingStock(product) > 0
     && product?.availability !== 'expired'
     && product?.availability !== 'hidden'
-    && !product?.isExpired
-    && areShopHoursKnown && isShopOpen;
+    && !product?.isExpired;
   const getAvailability = (product) => product.availability === 'expired' || product.availability === 'hidden'
     ? 'Unavailable' : Number(product.stock) > 0 ? `${product.stock} available` : 'Out of stock';
-  const purchaseLabel = (product) => isShopSettingsLoading ? 'Checking hours'
-    : shopSettingsError ? 'Hours unavailable' : !isShopOpen ? 'Shop closed'
-    : getAvailability(product) === 'Unavailable' ? 'Unavailable'
+  const purchaseLabel = (product) => getAvailability(product) === 'Unavailable' ? 'Unavailable'
       : Number(product.stock) <= 0 ? 'Out of stock'
         : remainingStock(product) <= 0 ? 'Cart limit reached' : 'Add to Cart';
 
