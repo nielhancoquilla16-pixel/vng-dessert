@@ -1,9 +1,13 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+﻿import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ArrowRight,
   BarChart3,
   Calculator,
+  ChevronDown,
+  ChevronRight,
   Clock3,
   Download,
+  Flame,
   History,
   Info,
   Package,
@@ -127,6 +131,7 @@ const getInitials = (value = '') => value
   .join('')
   .toUpperCase();
 
+
 const IngredientCalculatorPanel = ({
   ingredientBatches = [],
   products = [],
@@ -143,6 +148,7 @@ const IngredientCalculatorPanel = ({
   const [activeMode, setActiveMode] = useState('all');
   const [historyEntries, setHistoryEntries] = useState(() => loadHistoryEntries());
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
+  const [showAllProducts, setShowAllProducts] = useState(true);
   const [calculatingMode, setCalculatingMode] = useState('');
   const calculationTimeoutRef = useRef(null);
   const canLoadRecipes = Boolean(session?.access_token) && ['admin', 'staff'].includes(userRole);
@@ -284,9 +290,53 @@ const IngredientCalculatorPanel = ({
     })
   ), [findProductForRecipe, ingredientRows, recipes]);
 
+  const allProductEntries = useMemo(() => {
+    const recipesByProductId = new Map(
+      recipes
+        .filter((recipe) => recipe.productId)
+        .map((recipe) => [String(recipe.productId), recipe]),
+    );
+    const recipesByName = new Map(
+      recipes.map((recipe) => [normalizeMatchKey(recipe.productName || recipe.name), recipe]),
+    );
+    const resultsByRecipeId = new Map(productResults.map((result) => [result.recipeId, result]));
+    const storeProducts = products.filter((product) => product.type === 'product' || !product.type);
+    const entries = storeProducts
+      .map((product, index) => {
+        const productName = product.name || product.productName || '';
+        const recipe = (product.id && recipesByProductId.get(String(product.id)))
+          || recipesByName.get(normalizeMatchKey(productName))
+          || null;
+
+        return {
+          key: String(product.id || `product-${index}-${normalizeMatchKey(productName)}`),
+          name: productName,
+          imageUrl: product.imageUrl || product.image || recipe?.imageUrl || '',
+          recipe,
+          result: recipe ? resultsByRecipeId.get(recipe.id) || null : null,
+        };
+      })
+      .filter((entry) => entry.name);
+
+    const includedRecipeIds = new Set(entries.map((entry) => entry.recipe?.id).filter(Boolean));
+    productResults.forEach((result) => {
+      if (includedRecipeIds.has(result.recipeId)) return;
+      entries.push({
+        key: `recipe-${result.recipeId}`,
+        name: result.displayName || result.productName,
+        imageUrl: result.imageUrl || '',
+        recipe: getRecipeById(result.recipeId, recipes),
+        result,
+      });
+    });
+
+    return entries.sort((left, right) => left.name.localeCompare(right.name));
+  }, [productResults, products, recipes]);
+
   const selectedResult = useMemo(() => (
     productResults.find((result) => result.recipeId === selectedRecipe?.id) || null
   ), [productResults, selectedRecipe]);
+  const visibleProductEntries = showAllProducts ? allProductEntries : allProductEntries.slice(0, 5);
 
   const summary = useMemo(() => (
     buildCalculatorSummary(productResults, ingredientRows, recipes)
@@ -394,6 +444,7 @@ const IngredientCalculatorPanel = ({
 
   const handleViewAllProducts = () => {
     setActiveMode('all');
+    setShowAllProducts((current) => !current);
   };
 
   const handleResetToInventory = () => {
@@ -421,81 +472,62 @@ const IngredientCalculatorPanel = ({
   return (
     <section className="ingredient-calculator-panel">
       <div className="ingredient-calculator-panel__header">
-        <div>
-          <h2>Ingredient Calculator</h2>
+        <div className="ingredient-calculator-title-wrap">
+          <div>
+            <h2>AI Ingredients Calculator</h2>
+            <p>Know how many products you can make with your current ingredients.</p>
+          </div>
         </div>
 
-          <div className="ingredient-calculator-panel__actions">
+        <div className="ingredient-calculator-panel__actions">
           <button type="button" className="ingredient-calculator-panel__history-button" onClick={() => setIsHistoryOpen(true)}>
             <History size={16} /> Calculation History
           </button>
-        
         </div>
       </div>
 
       <div className="ingredient-calculator-layout">
+        <div className="ingredient-calculator-sidebar">
         <aside className="ingredient-calculator-stock-card">
           <div className="ingredient-calculator-card-head">
-            <div>
+            <span className="ingredient-calculator-step-icon"><Package size={19} /></span>
+            <div className="ingredient-calculator-card-head-copy">
               <h3>1. Enter Available Ingredients</h3>
               <p>Enter the total available quantity of each ingredient in your stock.</p>
             </div>
-          </div>
-
-          <div className="ingredient-calculator-stock-table">
-            <table>
-              <colgroup>
-                <col style={{ width: '46%' }} />
-                <col style={{ width: '34%' }} />
-                <col style={{ width: '20%' }} />
-              </colgroup>
-              <thead>
-                <tr>
-                  <th>Ingredient</th>
-                  <th>Available Quantity</th>
-                  <th>Unit</th>
-                </tr>
-              </thead>
-              <tbody>
-                {ingredientRows.map((ingredient) => (
-                  <tr key={ingredient.key}>
-                    <td>
-                      <div className="ingredient-calculator-stock-name">
-                        <strong>{ingredient.ingredientName}</strong>
-                        <small>Live stock: {formatCalculatorQuantity(ingredient.stockQuantity, 3)} {ingredient.unit}</small>
-                      </div>
-                    </td>
-                    <td>
-                      <input
-                        type="number"
-                        min="0"
-                        step="0.25"
-                        className="ingredient-calculator-input"
-                        value={ingredient.quantity}
-                        onChange={(event) => handleQuantityChange(ingredient.key, event.target.value)}
-                      />
-                    </td>
-                    <td>
-                      <select
-                        className="ingredient-calculator-select"
-                        value={ingredient.unit}
-                        onChange={(event) => handleUnitChange(ingredient.key, event.target.value)}
-                      >
-                        {CALCULATOR_UNIT_OPTIONS.map((unit) => (
-                          <option key={unit} value={unit}>{unit}</option>
-                        ))}
-                      </select>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-
-          <div className="ingredient-calculator-stock-actions">
-            <button type="button" className="ingredient-calculator-mini-button" onClick={handleResetToInventory}>
-              <RotateCcw size={14} /> Use Live Inventory
+            <button type="button" className="ingredient-calculator-reset-button" onClick={handleResetToInventory} aria-label="Use live inventory quantities" title="Use Live Inventory">
+              <RotateCcw size={15} />
             </button>
+          </div>
+
+          <div className="ingredient-calculator-stock-list">
+            {ingredientRows.map((ingredient) => (
+              <div className="ingredient-calculator-stock-row" key={ingredient.key}>
+                <div className="ingredient-calculator-stock-name">
+                  <strong>{ingredient.ingredientName}</strong>
+                  <small>Stock: {formatCalculatorQuantity(ingredient.stockQuantity, 3)} {ingredient.unit}</small>
+                </div>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.25"
+                  className="ingredient-calculator-input"
+                  aria-label={`Available ${ingredient.ingredientName}`}
+                  value={ingredient.quantity}
+                  onChange={(event) => handleQuantityChange(ingredient.key, event.target.value)}
+                />
+                <select
+                  className="ingredient-calculator-select"
+                  aria-label={`${ingredient.ingredientName} unit`}
+                  value={ingredient.unit}
+                  onChange={(event) => handleUnitChange(ingredient.key, event.target.value)}
+                >
+                  {CALCULATOR_UNIT_OPTIONS.map((unit) => (
+                    <option key={unit} value={unit}>{unit}</option>
+                  ))}
+                </select>
+              </div>
+            ))}
           </div>
 
           <LoadingButton
@@ -508,8 +540,12 @@ const IngredientCalculatorPanel = ({
             <Calculator size={18} /> Calculate All Products
           </LoadingButton>
 
-          <div className="ingredient-calculator-selection-card">
-            <p className="ingredient-calculator-selection-label">Or calculate for a specific product</p>
+          </aside>
+          <section className="ingredient-calculator-selection-card">
+            <div className="ingredient-calculator-selection-heading">
+              <span className="ingredient-calculator-selection-icon"><Flame size={18} /></span>
+              <strong>Or calculate for a specific product</strong>
+            </div>
             <label htmlFor="ingredient-calculator-product-select">Select a product</label>
             <select
               id="ingredient-calculator-product-select"
@@ -518,9 +554,13 @@ const IngredientCalculatorPanel = ({
               onChange={(event) => setSelectedRecipeId(event.target.value)}
               disabled={recipes.length === 0}
             >
-              {recipes.map((recipe) => (
-                <option key={recipe.id} value={recipe.id}>
-                  {recipe.productName || recipe.name}
+              {allProductEntries.map((entry) => (
+                <option
+                  key={entry.key}
+                  value={entry.recipe?.id || `unavailable-${entry.key}`}
+                  disabled={!entry.recipe}
+                >
+                  {entry.name}{entry.recipe ? '' : ' - recipe needed'}
                 </option>
               ))}
             </select>
@@ -534,8 +574,8 @@ const IngredientCalculatorPanel = ({
             >
               <Sparkles size={18} /> Calculate Selected Product
             </LoadingButton>
-          </div>
-        </aside>
+          </section>
+        </div>
 
         <div className="ingredient-calculator-results">
           {isCalculating && (
@@ -557,31 +597,35 @@ const IngredientCalculatorPanel = ({
           <section className="ingredient-calculator-summary-card">
             <div className="ingredient-calculator-card-head">
               <div>
-                <h3>2. Calculation Summary (All Products)</h3>
+                <h3>2. Calculation Summary (Configured Recipes)</h3>
                 <p>Here is what you can make based on your current ingredient inputs.</p>
               </div>
             </div>
 
             <div className="ingredient-calculator-summary-grid">
               <article className="ingredient-calculator-summary-item ingredient-calculator-summary-item--purple">
-                <Package size={20} />
+                <span className="ingredient-calculator-summary-icon"><Package size={20} /></span>
+                <span className="ingredient-calculator-summary-label">Total Products Can Be Made</span>
                 <strong>{summary.totalProducts}</strong>
-                <span>Total Products Can Be Made</span>
+                <small>across all products</small>
               </article>
               <article className="ingredient-calculator-summary-item ingredient-calculator-summary-item--green">
-                <Calculator size={20} />
+                <span className="ingredient-calculator-summary-icon"><Package size={20} /></span>
+                <span className="ingredient-calculator-summary-label">Total Quantity (All Products)</span>
                 <strong>{formatCalculatorQuantity(summary.totalQuantity)}</strong>
-                <span>Total Quantity (All Products)</span>
+                <small>units</small>
               </article>
               <article className="ingredient-calculator-summary-item ingredient-calculator-summary-item--amber">
-                <BarChart3 size={20} />
+                <span className="ingredient-calculator-summary-icon"><BarChart3 size={20} /></span>
+                <span className="ingredient-calculator-summary-label">Ingredient Usage (Average)</span>
                 <strong>{formatCalculatorPercent(summary.averageUsagePercent)}</strong>
-                <span>Ingredient Usage (Average)</span>
+                <small>(Average)</small>
               </article>
               <article className="ingredient-calculator-summary-item ingredient-calculator-summary-item--blue">
-                <Sparkles size={20} />
+                <span className="ingredient-calculator-summary-icon"><Sparkles size={20} /></span>
+                <span className="ingredient-calculator-summary-label">Ingredients Used (of {summary.trackedIngredients})</span>
                 <strong>{summary.ingredientsUsed}</strong>
-                <span>Ingredients Used (of {summary.trackedIngredients})</span>
+                <small>ingredients</small>
               </article>
             </div>
           </section>
@@ -591,83 +635,74 @@ const IngredientCalculatorPanel = ({
               <div className="ingredient-calculator-card-head">
                 <div>
                   <h3>3. All Products You Can Make</h3>
+                  <p>Saved recipes show estimated output. Products without a recipe are marked below.</p>
                 </div>
-                <button type="button" className="ingredient-calculator-panel__table-action" onClick={handleViewAllProducts}>
-                  View All Products
-                </button>
+                {allProductEntries.length > 5 && (
+                  <button
+                    type="button"
+                    className="ingredient-calculator-panel__table-action"
+                    onClick={handleViewAllProducts}
+                    aria-expanded={showAllProducts}
+                  >
+                    {showAllProducts ? 'Show Fewer' : 'View All Products'}
+                  </button>
+                )}
               </div>
 
-              <div className="ingredient-calculator-product-table">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Product</th>
-                      <th>Quantity You Can Make</th>
-                      <th>Unit</th>
-                      <th>Limiting Ingredient</th>
-                      <th>Usage %</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {productResults.length === 0 ? (
-                      <tr>
-                        <td colSpan={5}>
-                          {recipeLoadError || 'No live product recipes are configured yet.'}
-                        </td>
-                      </tr>
-                    ) : productResults.map((result) => {
-                      const recipe = getRecipeById(result.recipeId, recipes);
-                      const initials = getInitials(result.displayName || result.productName);
+              <div className="ingredient-calculator-product-list">
+                {allProductEntries.length === 0 ? (
+                  <div className="ingredient-calculator-product-empty">
+                    {recipeLoadError || 'No products are available for the calculator yet.'}
+                  </div>
+                ) : visibleProductEntries.map((entry) => {
+                  const result = entry.result;
+                  const recipe = entry.recipe;
+                  const initials = getInitials(entry.name);
 
-                      return (
-                        <tr key={result.recipeId} className={result.recipeId === selectedRecipeId ? 'selected' : ''}>
-                          <td>
-                            <button
-                              type="button"
-                              className="ingredient-calculator-product-link"
-                              onClick={() => setSelectedRecipeId(result.recipeId)}
-                            >
-                              <span className="ingredient-calculator-product-avatar" style={{ background: recipe?.accent || '#f97316' }}>
-                                {result.imageUrl ? (
-                                  <img src={result.imageUrl} alt={result.displayName || result.productName} />
-                                ) : (
-                                  <span>{initials}</span>
-                                )}
-                              </span>
-                              <span>
-                                <strong>{result.displayName || result.productName}</strong>
-                              </span>
-                            </button>
-                          </td>
-                          <td>{formatCalculatorQuantity(result.quantity)}</td>
-                          <td>{result.outputLabel}</td>
-                          <td>{result.limitingIngredientName}</td>
-                          <td>
-                            <div className="ingredient-calculator-usage-cell">
-                              <span>{formatCalculatorPercent(result.usagePercent)}</span>
-                              <div className="ingredient-calculator-progress">
-                                <div
-                                  className="ingredient-calculator-progress__fill"
-                                  style={{ width: `${Math.min(100, result.usagePercent)}%` }}
-                                />
-                              </div>
-                            </div>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
+                  const rowContent = (
+                    <>
+                      <span className="ingredient-calculator-product-avatar" style={{ background: recipe?.accent || '#f97316' }}>
+                        {entry.imageUrl ? <img src={entry.imageUrl} alt="" /> : <span>{initials}</span>}
+                      </span>
+                      <span className="ingredient-calculator-product-copy">
+                        <strong>{entry.name}</strong>
+                        {!recipe && <small>Recipe not configured yet</small>}
+                      </span>
+                      <span className={`ingredient-calculator-product-quantity${result ? '' : ' ingredient-calculator-product-quantity--missing'}`}>
+                        <strong>{result ? formatCalculatorQuantity(result.quantity) : 'Recipe needed'}</strong>
+                        <small>{result ? result.outputLabel.split(/\s+/)[0] : 'setup required'}</small>
+                      </span>
+                      {recipe && <ChevronRight size={17} className="ingredient-calculator-product-chevron" />}
+                      {!recipe && <span aria-hidden="true" />}
+                    </>
+                  );
+
+                  return recipe ? (
+                    <button
+                      type="button"
+                      key={entry.key}
+                      className={`ingredient-calculator-product-row${recipe.id === selectedRecipeId ? ' selected' : ''}`}
+                      onClick={() => setSelectedRecipeId(recipe.id)}
+                      aria-pressed={recipe.id === selectedRecipeId}
+                    >
+                      {rowContent}
+                    </button>
+                  ) : (
+                    <div className="ingredient-calculator-product-row ingredient-calculator-product-row--unconfigured" key={entry.key}>
+                      {rowContent}
+                    </div>
+                  );
+                })}
               </div>
             </section>
 
-            <aside className="ingredient-calculator-selected-card">
-              <div className="ingredient-calculator-card-head">
-                <div>
-                  <h3>3. Selected Product Calculation</h3>
-                </div>
-              </div>
+            <details className="ingredient-calculator-selected-card">
+              <summary>
+                <h3>3. Selected Product Calculation</h3>
+                <ChevronDown size={20} aria-hidden="true" />
+              </summary>
 
+              <div className="ingredient-calculator-selected-body">
               {selectedResult && (
                 <>
                   <div className="ingredient-calculator-selected-product">
@@ -720,7 +755,8 @@ const IngredientCalculatorPanel = ({
                   </div>
                 </>
               )}
-            </aside>
+              </div>
+            </details>
           </div>
 
           <div className="ingredient-calculator-footer-grid">

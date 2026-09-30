@@ -170,6 +170,30 @@ export const INGREDIENT_DEFINITIONS = [
     defaultUnit: 'cups',
     aliases: ['cream cheese'],
   },
+  {
+    key: 'mango',
+    name: 'Mango',
+    defaultUnit: 'pcs',
+    aliases: ['mango', 'mangos', 'mangoes'],
+  },
+  {
+    key: 'red-food-coloring',
+    name: 'Red Food Coloring',
+    defaultUnit: 'tsp',
+    aliases: ['red food coloring', 'red food colour', 'food coloring red'],
+  },
+  {
+    key: 'purple-yam',
+    name: 'Purple Yam',
+    defaultUnit: 'cups',
+    aliases: ['purple yam', 'ube', 'grated purple yam'],
+  },
+  {
+    key: 'coconut-milk',
+    name: 'Coconut Milk',
+    defaultUnit: 'cups',
+    aliases: ['coconut milk'],
+  },
 ];
 
 const ingredientByKey = new Map(INGREDIENT_DEFINITIONS.map((ingredient) => [ingredient.key, ingredient]));
@@ -190,6 +214,7 @@ const createRecipe = ({
   accent = '#f97316',
   productId = '',
   imageUrl = '',
+  isEstimate = false,
   ingredients,
 }) => ({
   id,
@@ -200,6 +225,7 @@ const createRecipe = ({
   accent,
   productId,
   imageUrl,
+  isEstimate,
   ingredients: ingredients.map((ingredient) => {
     const resolvedKey = ingredientAliasLookup.get(normalizeTextKey(ingredient.name)) || ingredient.key || normalizeTextKey(ingredient.name);
     const definition = ingredientByKey.get(resolvedKey);
@@ -292,12 +318,14 @@ export const RECIPE_CATALOG = [
     name: 'Mango Graham Float',
     outputLabel: 'pcs (small tub)',
     accent: '#fb923c',
+    isEstimate: true,
     ingredients: [
       { name: 'Crushed Graham', amount: 0.18, unit: 'cups' },
       { name: 'All-Purpose Cream (250ml)', amount: 0.18, unit: 'packs' },
       { name: 'Condensed Milk (390g)', amount: 0.08, unit: 'cans' },
       { name: 'Milk', amount: 0.04, unit: 'cups' },
       { name: 'Sugar', amount: 0.01, unit: 'cups' },
+      { name: 'Mango', amount: 0.5, unit: 'pcs' },
     ],
   }),
   createRecipe({
@@ -339,6 +367,7 @@ const normalizeRecipeCatalog = (recipeCatalog = RECIPE_CATALOG) => (
       accent: recipe.accent || '#f97316',
       productId: recipe.productId || recipe.product_id || '',
       imageUrl: recipe.imageUrl || recipe.image_url || '',
+      isEstimate: Boolean(recipe.isEstimate ?? recipe.is_estimate),
       ingredients: (Array.isArray(recipe.ingredients) ? recipe.ingredients : [])
         .map((ingredient) => ({
           key: ingredient.key,
@@ -613,6 +642,7 @@ export const calculateRecipeOutput = (recipe, ingredientRows = []) => {
     unit: recipe.unit,
     outputLabel: recipe.outputLabel,
     accent: recipe.accent,
+    isEstimate: recipe.isEstimate,
     limitingIngredientKey: limitingRatio.ingredientKey,
     limitingIngredientName: limitingRatio.ingredientName,
     usagePercent: roundTo(usagePercent, 2),
