@@ -580,12 +580,12 @@ const AdminOrders = () => {
   const refundRequestOrders = useMemo(() => (
     orders
       .map((order) => ({ order, request: getRefundQueueRequest(order) }))
-      .filter(({ request }) => Boolean(request))
+      .filter(({ request }) => request?.status === 'pending')
       .sort((left, right) => new Date(right.request.submittedAt || right.request.updatedAt || 0).getTime()
         - new Date(left.request.submittedAt || left.request.updatedAt || 0).getTime())
   ), [orders]);
 
-  const pendingReturnRefundCount = refundRequestOrders.filter(({ request }) => request.status === 'pending').length;
+  const pendingReturnRefundCount = refundRequestOrders.length;
 
   useEffect(() => {
     const requestedOrderId = searchParams.get('request');
@@ -1065,7 +1065,7 @@ const AdminOrders = () => {
 
         <section className="admin-orders-content-grid gap-6">
           <div className="admin-orders-list" role="region" aria-label="Order list" tabIndex={0}>
-        {refundRequestOrders.length > 0 && (
+        {!isOrdersLoading && (
           <section className="admin-orders-refund-queue" aria-labelledby="refund-request-queue-title">
             <div className="admin-orders-refund-queue-head">
               <div>
@@ -1076,7 +1076,7 @@ const AdminOrders = () => {
             </div>
 
             <div className="admin-orders-refund-list">
-              {refundRequestOrders.map(({ order, request }) => (
+              {refundRequestOrders.length > 0 ? refundRequestOrders.map(({ order, request }) => (
                 <button
                   key={request.id}
                   type="button"
@@ -1092,7 +1092,9 @@ const AdminOrders = () => {
                   </span>
                   <span className="admin-orders-refund-status">{getReturnRefundStatusLabel(request.status)}</span>
                 </button>
-              ))}
+              )) : (
+                <p className="admin-orders-refund-empty">No pending customer requests.</p>
+              )}
             </div>
           </section>
         )}
