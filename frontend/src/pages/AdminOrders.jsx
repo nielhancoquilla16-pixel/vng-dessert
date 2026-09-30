@@ -1,8 +1,10 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { ChevronRight, ExternalLink, Loader2, MapPin, RefreshCw, Search, Truck } from 'lucide-react';
+import { CalendarDays, CheckCircle2, ChevronRight, CircleDollarSign, ClipboardList, Clock3, CreditCard, ExternalLink, FileText, Globe, Loader2, MapPin, Phone, Printer, RefreshCw, Search, Send, StickyNote, Truck, UserRound, XCircle, Zap } from 'lucide-react';
 import { useOrders } from '../context/OrderContext';
 import LocationPinPicker from '../components/LocationPinPicker';
+import { OrderedItemsCard, OrderItemThumbnail, OrderQrCard, PaymentSummaryCard } from '../components/AdminOrderCards';
+import { getItemSubtotal, getOrderPaymentSummary } from '../utils/adminOrderDetails';
 import { formatCurrency } from '../utils/currency';
 import {
   closeLalamoveWindow,
@@ -31,11 +33,11 @@ const STATUS_FILTERS = [
   'confirmed',
   'preparing',
   'ready',
-  'out-for-delivery',
-  'delivered',
   'completed',
   'cancelled',
   'refunded',
+  'out-for-delivery',
+  'delivered',
   'under_review',
 ];
 
@@ -68,12 +70,14 @@ const formatDateTime = (value) => {
   return parsed.toLocaleString(undefined, {
     month: 'short',
     day: 'numeric',
+    year: 'numeric',
     hour: 'numeric',
     minute: '2-digit',
   });
 };
 
 const getFilterLabel = (value) => {
+  if (value === 'pending') return 'Pending';
   if (value === 'all') {
     return 'All';
   }
@@ -83,6 +87,15 @@ const getFilterLabel = (value) => {
   }
 
   return getOrderStatusLabel(value, 'admin');
+};
+
+const getFilterCount = (orders, filter) => {
+  if (filter === 'all') return orders.length;
+  if (filter === 'under_review') {
+    return orders.filter((order) => normalizeReviewStatus(order?.reviewStatus) === 'under_review').length;
+  }
+
+  return orders.filter((order) => normalizeOrderStatus(order?.status) === filter).length;
 };
 
 const getReturnRefundRequest = (order) => order?.latestReturnRefundRequest
@@ -160,19 +173,11 @@ const getItemCount = (order) => {
 };
 
 const getOrderTotal = (order) => {
-  if (typeof order?.total === 'string' && order.total.trim()) {
-    return formatCurrency(order.total);
-  }
-
-  const totalFromLineItems = getLineItems(order).reduce(
-    (sum, item) => sum + (Number(item?.lineTotal) || (Number(item?.price) || 0) * (Number(item?.quantity) || 0)),
-    0,
-  );
-
-  return formatCurrency(totalFromLineItems || order?.totalAmount || 0);
+  return formatCurrency(getOrderPaymentSummary(order).total);
 };
 
 const getOrderCustomerLabel = (order) => {
+  if (order?.customer) return order.customer;
   if (isWalkInOrder(order)) {
     return 'Walk-in POS';
   }
@@ -196,6 +201,9 @@ const getPaymentLabel = (order) => {
   if (paymentMethod === 'gcash') {
     return 'GCash';
   }
+
+  if (paymentMethod === 'maya') return 'Maya';
+  if (paymentMethod === 'cod') return 'Cash on Delivery';
 
   return 'Cash';
 };
@@ -332,14 +340,18 @@ const canBookLalamove = (order) => (
 
 const getCardSummary = (order) => {
   if (isWalkInOrder(order)) {
-    return 'Walk-in order';
+    return 'Walk-in';
+  }
+
+  if (String(order?.paymentMethod || '').toLowerCase() === 'online') {
+    return 'Online';
   }
 
   if (String(order?.deliveryMethod || '').toLowerCase() === 'delivery') {
-    return 'Delivery order';
+    return 'Delivery';
   }
 
-  return 'Standard order';
+  return 'Pickup';
 };
 
 const getDisplayStatusLabel = (order) => (
@@ -347,6 +359,24 @@ const getDisplayStatusLabel = (order) => (
     ? 'Under Review'
     : getOrderStatusLabel(order?.status, 'admin')
 );
+
+const getStatusClass = (order) => normalizeReviewStatus(order?.reviewStatus) === 'under_review'
+  ? 'status-under_review' : `status-${normalizeOrderStatus(order?.status)}`;
+
+const getStatusDescription = (order) => {
+  if (normalizeReviewStatus(order?.reviewStatus) === 'under_review') return 'This order has a customer report awaiting review.';
+  return ({
+    pending: 'This order is waiting for confirmation.',
+    confirmed: 'Your order is confirmed and ready for preparation.',
+    preparing: 'The team is preparing this order.',
+    ready: getDeliveryLabel(order) === 'Delivery' ? 'This order is ready for delivery.' : 'This order is ready for collection.',
+    'out-for-delivery': 'This order is on its way to the customer.',
+    delivered: 'The order has been handed over. Awaiting customer confirmation.',
+    completed: 'This order has been completed.',
+    cancelled: 'This order has been cancelled.',
+    refunded: 'This order has been returned or refunded.',
+  })[normalizeOrderStatus(order?.status)] || 'View the order workflow for updates.';
+};
 
 const getVisibleWorkflowSteps = (order) => {
   const steps = buildOrderWorkflowProgress(order?.status);
@@ -484,6 +514,7 @@ const AdminOrders = () => {
   const [rejectionReason, setRejectionReason] = useState('');
   const [rejectionError, setRejectionError] = useState('');
   const lalamoveActionInFlightRef = useRef(false);
+  const detailsScrollRef = useRef(null);
   const lalamoveDraftStateRef = useRef({ orderId: '', dirty: false });
 
   useEffect(() => {
@@ -528,7 +559,7 @@ const AdminOrders = () => {
           || String(order?.items || '').toLowerCase().includes(search)
           || lineItemNames.includes(search);
         const statusMatches = filterValue === 'all'
-          || String(order?.status || '').toLowerCase() === filterValue
+          || normalizeOrderStatus(order?.status) === filterValue
           || (filterValue === 'under_review' && reviewStatus === 'under_review');
 
         return searchMatches && statusMatches;
@@ -590,6 +621,9 @@ const AdminOrders = () => {
   const nextActionStatus = selectedOrder ? getNextActionStatus(selectedOrder) : '';
   const selectedLalamoveTracking = selectedOrder ? getLalamoveTracking(selectedOrder) : {};
   const selectedOrderIdForDraft = selectedOrder?.id || '';
+  useEffect(() => {
+    detailsScrollRef.current?.scrollTo({ top: 0 });
+  }, [selectedOrderIdForDraft]);
   const selectedLalamoveFeedback = lalamoveFeedback?.orderId === selectedOrderIdForDraft
     ? lalamoveFeedback
     : null;
@@ -944,9 +978,40 @@ const AdminOrders = () => {
     }
   };
 
+  const showDeliveryBooking = () => {
+    const bookingPanel = document.getElementById('order-delivery-booking');
+    bookingPanel?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    bookingPanel?.querySelector('input, button, a')?.focus({ preventScroll: true });
+  };
+
+  const handleSendReceipt = async () => {
+    if (!selectedOrder) return;
+    const payment = getOrderPaymentSummary(selectedOrder);
+    const title = 'V&G Dessert receipt — ' + getDisplayId(selectedOrder);
+    const text = [title, 'Customer: ' + (selectedOrder.customer || 'Customer'),
+      'Date: ' + formatDateTime(selectedOrder.createdAt || selectedOrder.date),
+      'Payment: ' + getPaymentLabel(selectedOrder),
+      ...getLineItems(selectedOrder).map((item) => item.name + ' ×' + item.quantity + ' — ' + formatCurrency(getItemSubtotal(item))),
+      'Subtotal: ' + formatCurrency(payment.subtotal), 'Discount: ' + formatCurrency(payment.discount),
+      'Tax: ' + formatCurrency(payment.tax), 'Delivery Fee: ' + formatCurrency(payment.deliveryFee),
+      'Total: ' + formatCurrency(payment.total),
+    ].join('\n');
+    try {
+      if (navigator.share) {
+        await navigator.share({ title, text });
+      } else {
+        const recipient = selectedOrder.customerEmail || selectedOrder.email || '';
+        window.location.href = 'mailto:' + encodeURIComponent(recipient) + '?subject=' + encodeURIComponent(title) + '&body=' + encodeURIComponent(text);
+      }
+    } catch (error) {
+      if (error.name !== 'AbortError') setPageError('Unable to share this receipt. Please use Print Receipt to save a copy.');
+    }
+  };
+
   return (
-    <div className="admin-orders-page max-w-[1400px] mx-auto px-6 py-6">
-      <div className="space-y-6 text-slate-900">
+    <div className="admin-orders-page">
+      <div className="admin-orders-workspace">
+        <h1 className="admin-orders-page-title">Orders</h1>
         {(pageNotice || pageError) && (
           <div className="admin-orders-alert-stack" aria-live="polite">
             {pageNotice && (
@@ -962,18 +1027,54 @@ const AdminOrders = () => {
           </div>
         )}
 
-        <section className="admin-orders-refund-queue" aria-labelledby="refund-request-queue-title">
-          <div className="admin-orders-refund-queue-head">
-            <div>
-              <p className="admin-orders-kicker">Refund/Return Requests</p>
-              <h2 id="refund-request-queue-title">Customer requests</h2>
-            </div>
-            <span className="admin-orders-refund-count">{pendingReturnRefundCount} pending</span>
+        <section className="admin-orders-search-panel">
+          <div className="relative">
+            <Search
+              size={20}
+              className="pointer-events-none absolute left-[18px] top-1/2 -translate-y-1/2 text-slate-400"
+            />
+            <input
+              type="text"
+              value={searchTerm}
+              onChange={(event) => setSearchTerm(event.target.value)}
+              placeholder="Search by order number, customer..."
+              aria-label="Search by order number, customer, or items"
+              className="admin-orders-search-input"
+            />
           </div>
 
-          {refundRequestOrders.length === 0 ? (
-            <p className="admin-orders-refund-empty">No return or refund requests have been submitted.</p>
-          ) : (
+          <div className="admin-orders-filter-row">
+            {STATUS_FILTERS.map((filter) => (
+              <button
+                key={filter}
+                type="button"
+                className={cx(
+                  'admin-orders-filter-pill',
+                  `filter-${filter}`,
+                  normalizeFilterValue(selectedFilter) === filter && 'is-active',
+                )}
+                onClick={() => setSelectedFilter(filter)}
+                aria-pressed={normalizeFilterValue(selectedFilter) === filter}
+              >
+                {getFilterLabel(filter)}
+                <span className="admin-orders-filter-count">{getFilterCount(orders, filter)}</span>
+              </button>
+            ))}
+          </div>
+        </section>
+
+        <section className="admin-orders-content-grid gap-6">
+          <div className="admin-orders-list" role="region" aria-label="Order list" tabIndex={0}>
+        {refundRequestOrders.length > 0 && (
+          <section className="admin-orders-refund-queue" aria-labelledby="refund-request-queue-title">
+            <div className="admin-orders-refund-queue-head">
+              <div>
+                <p className="admin-orders-kicker">Refund/Return Requests</p>
+                <h2 id="refund-request-queue-title">Customer requests</h2>
+              </div>
+              <span className="admin-orders-refund-count">{pendingReturnRefundCount} pending</span>
+            </div>
+
             <div className="admin-orders-refund-list">
               {refundRequestOrders.map(({ order, request }) => (
                 <button
@@ -993,43 +1094,9 @@ const AdminOrders = () => {
                 </button>
               ))}
             </div>
-          )}
-        </section>
+          </section>
+        )}
 
-        <section className="admin-orders-search-panel">
-          <div className="relative">
-            <Search
-              size={20}
-              className="pointer-events-none absolute left-[18px] top-1/2 -translate-y-1/2 text-slate-400"
-            />
-            <input
-              type="text"
-              value={searchTerm}
-              onChange={(event) => setSearchTerm(event.target.value)}
-              placeholder="Search order ID, source, or items"
-              className="admin-orders-search-input"
-            />
-          </div>
-
-          <div className="admin-orders-filter-row">
-            {STATUS_FILTERS.map((filter) => (
-              <button
-                key={filter}
-                type="button"
-                className={cx(
-                  'admin-orders-filter-pill',
-                  normalizeFilterValue(selectedFilter) === filter && 'is-active',
-                )}
-                onClick={() => setSelectedFilter(filter)}
-              >
-                {getFilterLabel(filter)}
-              </button>
-            ))}
-          </div>
-        </section>
-
-        <section className="admin-orders-content-grid gap-6">
-          <div className="space-y-4 admin-orders-list">
             {isOrdersLoading ? (
               Array.from({ length: 3 }).map((_, index) => (
                 <div key={`loading-order-${index}`} className="admin-orders-card">
@@ -1070,7 +1137,7 @@ const AdminOrders = () => {
                         <p className="admin-orders-meta">{getOrderMeta(order)}</p>
                       </div>
 
-                      <span className="admin-orders-status-badge">
+                      <span className={cx('admin-orders-status-badge', getStatusClass(order))}>
                         {getDisplayStatusLabel(order)}
                       </span>
                       {returnRefundRequest && (
@@ -1082,12 +1149,23 @@ const AdminOrders = () => {
 
                     <div className="admin-orders-info-grid">
                       <DetailBox label="Total" value={getOrderTotal(order)} />
-                      <DetailBox label="Method" value={getDeliveryLabel(order)} />
+                      <DetailBox label="Method" value={getPaymentLabel(order)} />
                       <DetailBox label="Items" value={String(getItemCount(order))} />
                     </div>
 
+                    {getLineItems(order).length > 0 && (
+                      <div className="admin-orders-card-preview">
+                        <OrderItemThumbnail item={getLineItems(order)[0]} />
+                        <div className="admin-orders-preview-copy">
+                          <strong>{getLineItems(order)[0]?.name || 'Order item'}</strong>
+                          <small>{getLineItems(order)[0]?.variant || getLineItems(order)[0]?.variantName || getLineItems(order)[0]?.size || 'Regular'}</small>
+                        </div>
+                        <small>×{Math.max(1, Number(getLineItems(order)[0]?.quantity) || 0)}</small>
+                      </div>
+                    )}
+
                     <div className="mt-4 flex items-center justify-between gap-4 text-sm admin-orders-card-footer">
-                      <span className="admin-orders-card-summary">{getCardSummary(order)}</span>
+                      <span className="admin-orders-card-summary"><Globe size={15} aria-hidden="true" />Order type <strong>{getCardSummary(order)}</strong></span>
                       <ChevronRight size={18} className="shrink-0 text-slate-400" />
                     </div>
                   </button>
@@ -1096,42 +1174,124 @@ const AdminOrders = () => {
             )}
           </div>
 
-          <aside className="admin-orders-sidebar">
-            <div className="space-y-4 admin-orders-detail-panel">
+          <aside ref={detailsScrollRef} className="admin-orders-sidebar" aria-label="View Order Details" tabIndex={0}>
+            <div className="admin-orders-detail-panel">
               {!selectedOrder ? (
                 <div className="py-10 text-center text-sm text-slate-500">
                   Select an order to view its details.
                 </div>
               ) : (
                 <>
-                  <div className="flex items-start justify-between gap-4 admin-orders-detail-header">
-                    <div className="min-w-0">
-                      <p className="admin-orders-detail-kicker">Selected order</p>
-                      <h1 className="admin-orders-detail-id">{getDisplayId(selectedOrder)}</h1>
-                      <p className="admin-orders-detail-meta">{getOrderMeta(selectedOrder)}</p>
+                  <header className="admin-orders-detail-header">
+                    <span className="admin-orders-document-icon"><FileText size={28} aria-hidden="true" /></span>
+                    <div className="admin-orders-detail-heading">
+                      <h2>View Order Details</h2>
+                      <p className="admin-orders-detail-id">Order ID: <strong>#{getDisplayId(selectedOrder).replace(/^#/, '')}</strong></p>
+                    </div>
+                    <div className="admin-orders-detail-meta">
+                      <span className={cx('admin-orders-status-badge', getStatusClass(selectedOrder))}>{getDisplayStatusLabel(selectedOrder)}</span>
+                      <span className="admin-orders-detail-date"><CalendarDays size={15} aria-hidden="true" />{formatDateTime(selectedOrder.createdAt || selectedOrder.date)}</span>
+                    </div>
+                  </header>
+
+                  <div className="admin-orders-detail-columns">
+                    <div className="admin-orders-detail-main">
+                      <section className="admin-orders-section admin-orders-customer" aria-labelledby="customer-information-title">
+                        <h2 id="customer-information-title" className="admin-orders-section-title"><UserRound size={23} aria-hidden="true" />Customer Information</h2>
+                        <dl className="admin-orders-customer-fields">
+                          <div><dt><UserRound size={15} aria-hidden="true" />Name</dt><dd>{selectedOrder.customer || 'Customer'}</dd></div>
+                          <div><dt><Phone size={15} aria-hidden="true" />Contact</dt><dd>{selectedOrder.phoneNumber || selectedOrder.deliveryContactNumber || 'Not provided'}</dd></div>
+                          <div><dt><Truck size={15} aria-hidden="true" />Delivery Type</dt><dd>{getDeliveryLabel(selectedOrder)}</dd></div>
+                          <div><dt><CreditCard size={15} aria-hidden="true" />Payment Method</dt><dd>{getPaymentLabel(selectedOrder)}</dd></div>
+                        </dl>
+                      </section>
+                      <OrderedItemsCard order={selectedOrder} />
+                      <PaymentSummaryCard order={selectedOrder} />
+                      <OrderQrCard key={selectedOrder.id} order={selectedOrder} />
                     </div>
 
-                    <span className="admin-orders-status-badge">
-                      {getDisplayStatusLabel(selectedOrder)}
-                    </span>
+                    <div className="admin-orders-detail-secondary">
+                      <section className="admin-orders-section admin-orders-status-card" aria-labelledby="order-status-title">
+                        <h2 id="order-status-title" className="admin-orders-section-title">
+                          <span className={cx('admin-orders-status-icon', getStatusClass(selectedOrder))}>
+                            {normalizeReviewStatus(selectedOrder.reviewStatus) === 'under_review' || normalizeOrderStatus(selectedOrder.status) === 'pending'
+                              ? <Clock3 size={23} aria-hidden="true" />
+                              : ['cancelled', 'refunded'].includes(normalizeOrderStatus(selectedOrder.status)) ? <XCircle size={23} aria-hidden="true" /> : <CheckCircle2 size={23} aria-hidden="true" />}
+                          </span>Order Status
+                        </h2>
+                        <span className={cx('admin-orders-status-badge', getStatusClass(selectedOrder))}>{getDisplayStatusLabel(selectedOrder)}</span>
+                        <p className="admin-orders-muted">{getStatusDescription(selectedOrder)}</p>
+                        <details className="admin-orders-workflow-disclosure"><summary>Order progress</summary>
+                  <div className="admin-orders-progress">
+                    {topRowSteps.length > 0 && (
+                      <WorkflowRow
+                        steps={topRowSteps}
+                        nextActionStatus={nextActionStatus}
+                        updatingStatus={updatingStatus}
+                        onStatusClick={handleStatusClick}
+                      />
+                    )}
+                    {bottomRowSteps.length > 0 && (
+                      <div className="admin-orders-progress-row-wrap">
+                        <WorkflowRow
+                          steps={bottomRowSteps}
+                          nextActionStatus={nextActionStatus}
+                          updatingStatus={updatingStatus}
+                          onStatusClick={handleStatusClick}
+                        />
+                      </div>
+                    )}
+                    {nextActionStatus && (
+                      <div className="admin-orders-next-action">
+                        Click {getOrderStatusLabel(nextActionStatus, 'admin')} to move this order forward.
+                      </div>
+                    )}
                   </div>
 
-                  <div className="admin-orders-detail-grid">
-                    <DetailBox label="Delivery" value={getDeliveryLabel(selectedOrder)} />
-                    <DetailBox label="Payment" value={getPaymentLabel(selectedOrder)} />
-                    <DetailBox label="Source" value={getSourceLabel(selectedOrder)} />
-                    <DetailBox label="Distance" value={getDistanceLabel(selectedOrder)} />
-                    <DetailBox label="Customer" value={selectedOrder.customer || 'Customer'} />
-                    <DetailBox label="Contact" value={selectedOrder.phoneNumber || 'N/A'} />
-                    <DetailBox
-                      label="Address"
-                      value={selectedOrder.address || 'N/A'}
-                      className="col-span-2"
-                    />
-                    <DetailBox label="Revenue" value={getOrderTotal(selectedOrder)} />
-                    <DetailBox label="Delivery App" value={selectedLalamoveTracking.booked ? 'Lalamove' : 'Not booked'} />
-                  </div>
 
+                        </details>
+                      </section>
+
+                      <section className="admin-orders-section admin-orders-quick-actions" aria-labelledby="quick-actions-title">
+                        <h2 id="quick-actions-title" className="admin-orders-section-title"><Zap size={22} aria-hidden="true" />Quick Actions</h2>
+                        {nextActionStatus && (
+                          <button type="button" className="admin-orders-action-button admin-orders-action-button--primary" onClick={() => handleStatusClick(nextActionStatus)} disabled={Boolean(updatingStatus)}>
+                            {updatingStatus ? <Loader2 size={18} className="spin" /> : <CheckCircle2 size={18} aria-hidden="true" />}
+                            {updatingStatus ? 'Updating...' : nextActionStatus === 'confirmed' ? 'Confirm Order' : nextActionStatus === 'preparing' ? 'Start Preparing' : 'Mark as ' + getOrderStatusLabel(nextActionStatus, 'admin')}
+                          </button>
+                        )}
+                        <button type="button" className="admin-orders-action-button admin-orders-action-button--ghost" onClick={() => window.print()}><Printer size={18} aria-hidden="true" />Print Receipt</button>
+                        <button type="button" className="admin-orders-action-button admin-orders-action-button--ghost" onClick={handleSendReceipt}><Send size={18} aria-hidden="true" />Send Receipt</button>
+                      </section>
+
+                      {isLalamoveDeliveryOrder(selectedOrder) && (
+                        <section className="admin-orders-section admin-orders-cod" aria-labelledby="cod-order-title">
+                          <h2 id="cod-order-title" className="admin-orders-section-title"><CircleDollarSign size={24} aria-hidden="true" />{selectedOrder.paymentMethod === 'cash' ? 'COD Order' : 'Delivery'}</h2>
+                          <p className="admin-orders-muted">{selectedOrder.paymentMethod === 'cash' ? 'This order is set to Cash on Delivery.' : 'This order uses Lalamove delivery.'}</p>
+                          {canBookLalamove(selectedOrder) ? (
+                            <button type="button" className="admin-orders-action-button admin-orders-action-button--primary" onClick={showDeliveryBooking}><CalendarDays size={17} aria-hidden="true" />Book Now</button>
+                          ) : selectedLalamoveTracking.booked ? (
+                            <button type="button" className="admin-orders-action-button admin-orders-action-button--ghost" onClick={showDeliveryBooking}><Truck size={17} aria-hidden="true" />View Delivery</button>
+                          ) : <p className="admin-orders-muted">{normalizeOrderStatus(selectedOrder.status) === 'pending' ? 'Confirm this order before booking.' : 'Booking is unavailable for the current order state.'}</p>}
+                        </section>
+                      )}
+
+                      <section className="admin-orders-section admin-orders-notes" aria-labelledby="order-notes-title">
+                        <h2 id="order-notes-title" className="admin-orders-section-title"><StickyNote size={20} aria-hidden="true" />Notes</h2>
+                        <p className="admin-orders-muted">{selectedOrder.notes || selectedOrder.specialInstructions || selectedOrder.deliveryInstructions || 'No special notes for this order.'}</p>
+                      </section>
+                      <details className="admin-orders-section admin-orders-fulfillment">
+                        <summary><ClipboardList size={18} aria-hidden="true" />Fulfillment Details</summary>
+                        <dl className="admin-orders-customer-fields">
+                          <div><dt>Source</dt><dd>{getSourceLabel(selectedOrder)}</dd></div>
+                          <div><dt>Distance</dt><dd>{getDistanceLabel(selectedOrder)}</dd></div>
+                          <div><dt>Address</dt><dd>{selectedOrder.address || 'Not provided'}</dd></div>
+                          <div><dt>Delivery App</dt><dd>{selectedLalamoveTracking.booked ? 'Lalamove' : 'Not booked'}</dd></div>
+                        </dl>
+                      </details>
+                    </div>
+                  </div>
+                  <div className="admin-orders-detail-extras">
                   {selectedIssueReport && (
                     <section className="admin-orders-refund-detail" aria-labelledby="selected-issue-report-title">
                       <div className="admin-orders-refund-detail-head">
@@ -1259,34 +1419,9 @@ const AdminOrders = () => {
                     </section>
                   )}
 
-                  <div className="admin-orders-progress">
-                    {topRowSteps.length > 0 && (
-                      <WorkflowRow
-                        steps={topRowSteps}
-                        nextActionStatus={nextActionStatus}
-                        updatingStatus={updatingStatus}
-                        onStatusClick={handleStatusClick}
-                      />
-                    )}
-                    {bottomRowSteps.length > 0 && (
-                      <div className="admin-orders-progress-row-wrap">
-                        <WorkflowRow
-                          steps={bottomRowSteps}
-                          nextActionStatus={nextActionStatus}
-                          updatingStatus={updatingStatus}
-                          onStatusClick={handleStatusClick}
-                        />
-                      </div>
-                    )}
-                    {nextActionStatus && (
-                      <div className="admin-orders-next-action">
-                        Click {getOrderStatusLabel(nextActionStatus, 'admin')} to move this order forward.
-                      </div>
-                    )}
-                  </div>
 
                   {isLalamoveDeliveryOrder(selectedOrder) && (
-                    <div className="admin-orders-lalamove-panel">
+                    <div className="admin-orders-lalamove-panel" id="order-delivery-booking">
                       <div className="admin-orders-lalamove-header">
                         <div>
                           <p className="admin-orders-kicker">Lalamove</p>
@@ -1632,36 +1767,7 @@ const AdminOrders = () => {
                     </div>
                   )}
 
-                  <div className="space-y-3 admin-orders-items-section">
-                    <h2 className="admin-orders-items-title">Items</h2>
 
-                    {getLineItems(selectedOrder).length === 0 ? (
-                      <div className="flex items-center justify-between admin-orders-item-row">
-                        <span className="text-sm text-slate-500">No items found.</span>
-                      </div>
-                    ) : (
-                      getLineItems(selectedOrder).map((item) => {
-                        const lineTotal = Number(item?.lineTotal) || (Number(item?.price) || 0) * (Number(item?.quantity) || 0);
-
-                        return (
-                          <div
-                            key={`${selectedOrder.id}-${item?.id || item?.productId || item?.name}`}
-                            className="flex items-center justify-between gap-4 admin-orders-item-row"
-                          >
-                            <div className="min-w-0">
-                              <strong className="admin-orders-item-name">{item?.name || 'Unknown item'}</strong>
-                              <span className="admin-orders-item-subtext">
-                                {Math.max(1, Number(item?.quantity) || 0)} x {formatCurrency(item?.price)}
-                              </span>
-                            </div>
-
-                            <strong className="admin-orders-item-price">
-                              {formatCurrency(lineTotal)}
-                            </strong>
-                          </div>
-                        );
-                      })
-                    )}
                   </div>
                 </>
               )}
