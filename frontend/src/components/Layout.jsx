@@ -10,21 +10,18 @@ import './Layout.css';
 const Layout = () => {
   const { pathname } = useLocation();
   const { isAdmin } = useAuth();
+  const isDeniedAdminCart = isAdmin && /\/cart\/?$/.test(pathname);
   useEffect(() => { window.scrollTo({ top: 0, left: 0, behavior: 'instant' }); }, [pathname]);
 
-  if (isAdmin && /\/cart\/?$/.test(pathname)) {
-    return <Outlet />;
-  }
-
   return (
-    <div className="app-container">
+    <div className={`app-container${isDeniedAdminCart ? ' app-container--cart-denied' : ''}`}>
       <Header />
-      <CustomerOrderReminderBanner />
+      {!isDeniedAdminCart && <CustomerOrderReminderBanner />}
       <main className="main-content" id="main-content" tabIndex={-1}>
         <Outlet />
       </main>
-      <Footer />
-      <MobileNavigation />
+      {!isDeniedAdminCart && <Footer />}
+      {!isDeniedAdminCart && <MobileNavigation />}
     </div>
   );
 };
