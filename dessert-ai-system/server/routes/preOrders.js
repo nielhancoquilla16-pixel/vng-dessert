@@ -282,6 +282,10 @@ router.patch('/:id/status', requireAuth, requireRole('admin', 'staff'), async (r
 
     const supabase = getSupabaseAdmin();
     const currentPreOrder = await fetchPreOrderById(supabase, req.params.id);
+    if (normalizePreOrderStatus(currentPreOrder.status) === 'rejected') {
+      return res.status(409).json({ error: 'Rejected pre-orders cannot be reopened or changed.' });
+    }
+
     const messages = buildStatusMessages(currentPreOrder, nextStatus, reason);
     const mergedNotifications = [
       ...normalizePreOrderNotifications(currentPreOrder.notifications || []),

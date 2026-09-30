@@ -120,6 +120,11 @@ const AdminPreOrders = () => {
     const normalizedNextStatus = normalizePreOrderStatus(nextStatus);
     const reason = String(rejectionReasons[preOrder.id] || '').trim();
 
+    if (normalizePreOrderStatus(preOrder.status) === 'rejected') {
+      setPageError('Rejected pre-orders cannot be reopened or changed.');
+      return;
+    }
+
     if (normalizedNextStatus === 'rejected' && !reason) {
       setPageError('Please add a rejection reason before rejecting this pre-order.');
       return;
@@ -143,6 +148,7 @@ const AdminPreOrders = () => {
 
   const selectedReason = selectedPreOrder ? (rejectionReasons[selectedPreOrder.id] || selectedPreOrder.rejectionReason || '') : '';
   const selectedStatus = normalizePreOrderStatus(selectedPreOrder?.status || 'pending');
+  const isSelectedPreOrderRejected = selectedStatus === 'rejected';
 
   return (
     <div className="admin-preorders-page">
@@ -336,6 +342,11 @@ const AdminPreOrders = () => {
 
               {selectedStatus !== 'completed' && (
                 <div className="admin-preorders-action-panel">
+                  {isSelectedPreOrderRejected && (
+                    <p className="admin-preorders-rejection-copy" role="status">
+                      This pre-order was rejected and can no longer be reopened or changed.
+                    </p>
+                  )}
                   <label className="admin-preorders-reason-field">
                     <span>Rejection Reason</span>
                     <textarea
@@ -343,6 +354,7 @@ const AdminPreOrders = () => {
                       onChange={(event) => setRejectionReason(selectedPreOrder.id, event.target.value)}
                       placeholder="Explain why this pre-order is being rejected."
                       rows="3"
+                      disabled={isSelectedPreOrderRejected}
                     />
                   </label>
 
@@ -352,7 +364,7 @@ const AdminPreOrders = () => {
                         type="button"
                         className="admin-preorders-action admin-preorders-action--primary"
                         onClick={() => void handleStatusUpdate(selectedPreOrder, 'confirmed')}
-                        disabled={loadingAction?.preOrderId === selectedPreOrder.id}
+                        disabled={isSelectedPreOrderRejected || loadingAction?.preOrderId === selectedPreOrder.id}
                       >
                         {loadingAction?.preOrderId === selectedPreOrder.id && loadingAction?.status === 'confirmed'
                           ? <Loader2 size={16} className="spin" />
@@ -366,7 +378,7 @@ const AdminPreOrders = () => {
                         type="button"
                         className="admin-preorders-action admin-preorders-action--ghost"
                         onClick={() => void handleStatusUpdate(selectedPreOrder, 'pending')}
-                        disabled={loadingAction?.preOrderId === selectedPreOrder.id}
+                        disabled={isSelectedPreOrderRejected || loadingAction?.preOrderId === selectedPreOrder.id}
                       >
                         {loadingAction?.preOrderId === selectedPreOrder.id && loadingAction?.status === 'pending'
                           ? <Loader2 size={16} className="spin" />
@@ -380,7 +392,7 @@ const AdminPreOrders = () => {
                         type="button"
                         className="admin-preorders-action admin-preorders-action--success"
                         onClick={() => void handleStatusUpdate(selectedPreOrder, 'completed')}
-                        disabled={loadingAction?.preOrderId === selectedPreOrder.id}
+                        disabled={isSelectedPreOrderRejected || loadingAction?.preOrderId === selectedPreOrder.id}
                       >
                         {loadingAction?.preOrderId === selectedPreOrder.id && loadingAction?.status === 'completed'
                           ? <Loader2 size={16} className="spin" />
