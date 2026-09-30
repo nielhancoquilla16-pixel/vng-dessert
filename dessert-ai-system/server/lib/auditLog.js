@@ -21,7 +21,7 @@ export const writeAuditLog = async (supabase, req, {
   }
 
   try {
-    await supabase
+    const { error } = await supabase
       .from("audit_logs")
       .insert({
         actor_id: actorId,
@@ -33,8 +33,14 @@ export const writeAuditLog = async (supabase, req, {
         user_agent: trimToLength(req.headers["user-agent"], 500),
         metadata,
       });
+    if (error) {
+      console.warn("Audit log write failed:", error.message || error);
+      return false;
+    }
+    return true;
   } catch (error) {
     // Audit logging should never break the user-facing request.
     console.warn("Audit log write failed:", error.message || error);
+    return false;
   }
 };

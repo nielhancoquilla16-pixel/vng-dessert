@@ -72,6 +72,12 @@ export const formatShopTime = (value) => {
   return `${hour % 12 || 12}:${String(minute).padStart(2, '0')} ${hour < 12 ? 'AM' : 'PM'}`;
 };
 
+const normalizeCustomerSupport = (value) => Object.fromEntries(
+  ['owner', 'supplier', 'email', 'services', 'physicalStore', 'discounts', 'promotions']
+    .filter((key) => typeof value?.[key] === 'string' && value[key].length <= 2000 && value[key].trim())
+    .map((key) => [key, value[key].trim()]),
+);
+
 export const normalizeShopSettings = (settings = {}) => ({
   id: settings.id ?? 1,
   shopName: settings.shopName || settings.shop_name || 'V&G Leche Flan',
@@ -83,6 +89,7 @@ export const normalizeShopSettings = (settings = {}) => ({
     ? (settings.preorderTimeSlots ?? settings.preorder_time_slots).map(normalizeShopTime).filter(Boolean) : [],
   latitude: settings.latitude ?? '',
   longitude: settings.longitude ?? '',
+  customerSupport: normalizeCustomerSupport(settings.customerSupport ?? settings.customer_support),
   updatedAt: settings.updatedAt || settings.updated_at || null,
   serverTime: settings.serverTime || null,
 });

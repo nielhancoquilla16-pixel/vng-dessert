@@ -5,6 +5,7 @@ import './Contact.css';
 
 const Contact = () => {
   const { shopSettings, operatingHoursLabel } = useShopSettings();
+  const supportEmail = shopSettings.customerSupport?.email || 'vnglecheflan0824@gmail.com';
   return (
     <div className="main-content">
       <div style={{ textAlign: 'center', marginBottom: '3rem' }}>
@@ -41,7 +42,7 @@ const Contact = () => {
             </div>
             <div className="contact-card-text">
               <h3>Email</h3>
-              <p>vnglecheflan0824@gmail.com</p>
+              <p>{supportEmail}</p>
             </div>
           </div>
 

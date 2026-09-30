@@ -2,12 +2,13 @@
 import { createPortal } from 'react-dom';
 import { Send, MessageCircle, X } from 'lucide-react';
 import { useAI } from '../context/AIContext';
-import { formatCurrencyText } from '../utils/currency';
+import AssistantMessage from './AssistantMessage';
+import { CUSTOMER_SUPPORT_GREETING } from '../utils/customerSupportChat';
 import './FloatingAI.css';
 
 export default function FloatingAI({ inline = false }) {
   const [isOpen, setIsOpen] = useState(false);
-  const [messages, setMessages] = useState([{ role: 'ai', text: 'Hi! How can I help? Ask about our desserts, shop hours, or delivery.' }]);
+  const [messages, setMessages] = useState([{ role: 'ai', text: CUSTOMER_SUPPORT_GREETING }]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const { queryGeneralAI } = useAI();
@@ -51,7 +52,7 @@ export default function FloatingAI({ inline = false }) {
     setMessages((prev) => [...prev, { role: 'user', text }]);
     setIsLoading(true);
     try {
-      const reply = await queryGeneralAI(text);
+      const reply = await queryGeneralAI(text, messages);
       setMessages((prev) => [...prev, { role: 'ai', text: reply }]);
     } catch {
       setMessages((prev) => [...prev, { role: 'ai', text: 'Sorry, I had trouble connecting. Please try again.' }]);
@@ -64,7 +65,7 @@ export default function FloatingAI({ inline = false }) {
       <div className="shop-chat-panel">
         <div className="shop-chat-heading"><div><h2 id="shop-chat-title">A little help?</h2><p>V & G dessert assistant · AI</p></div><button type="button" aria-label="Close assistant" onClick={close} autoFocus><X size={22} /></button></div>
         <div className="shop-chat-messages" ref={messageRef} role="log" aria-live="polite" aria-relevant="additions text">
-          {messages.map((message, index) => <p key={index} className={`shop-chat-message ${message.role}`}>{message.role === 'user' ? message.text : formatCurrencyText(message.text)}</p>)}
+          {messages.map((message, index) => <div key={index} className={`shop-chat-message ${message.role}`}>{message.role === 'user' ? message.text : <AssistantMessage text={message.text} />}</div>)}
           {isLoading && <p className="shop-chat-message ai" role="status">Thinking…</p>}
         </div>
         <form className="shop-chat-form" onSubmit={handleSend}><input aria-label="Message the dessert assistant" value={input} onChange={(event) => setInput(event.target.value)} placeholder="Type your question…" autoComplete="off" /><button type="submit" aria-label="Send message" disabled={isLoading || !input.trim()}><Send size={20} /></button></form>

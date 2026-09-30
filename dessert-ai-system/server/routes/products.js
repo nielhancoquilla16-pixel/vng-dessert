@@ -336,12 +336,14 @@ const FALLBACK_PRODUCT_RECIPES = [
     outputUnit: 'pcs',
     outputLabel: 'pcs (small tub)',
     accent: '#fb923c',
+    isEstimate: true,
     ingredients: [
       ['Crushed Graham', 0.18, 'cups'],
       ['All-Purpose Cream (250ml)', 0.18, 'packs'],
       ['Condensed Milk (390g)', 0.08, 'cans'],
       ['Milk', 0.04, 'cups'],
       ['Sugar', 0.01, 'cups'],
+      ['Mango', 0.5, 'pcs'],
     ],
   },
   {
@@ -356,6 +358,54 @@ const FALLBACK_PRODUCT_RECIPES = [
       ['Chocolate Chips', 0.08, 'cups'],
       ['Milk', 0.05, 'cups'],
     ],
+  },
+  {
+    productKey: 'ubecringkles', productAliases: ['ube crinkles'], outputUnit: 'pcs', outputLabel: 'pcs', accent: '#8b5cf6', isEstimate: true,
+    ingredients: [['All-Purpose Flour', 0.18, 'cups'], ['Sugar', 0.08, 'cups'], ['Butter', 0.04, 'cups'], ['Egg', 0.12, 'pcs'], ['Ube Halaya', 0.06, 'cups'], ['Vanilla Extract', 0.03, 'tsp']],
+  },
+  {
+    productKey: 'redvelvetcringkles', productAliases: ['red velvet crinkles'], outputUnit: 'pcs', outputLabel: 'pcs', accent: '#ef4444', isEstimate: true,
+    ingredients: [['All-Purpose Flour', 0.18, 'cups'], ['Cocoa Powder', 0.02, 'cups'], ['Sugar', 0.1, 'cups'], ['Butter', 0.04, 'cups'], ['Egg', 0.12, 'pcs'], ['Cream Cheese', 0.04, 'cups'], ['Red Food Coloring', 0.01, 'tsp'], ['Vanilla Extract', 0.03, 'tsp']],
+  },
+  {
+    productKey: 'chocolatecringkles', productAliases: ['chocolate crinkles'], outputUnit: 'pcs', outputLabel: 'pcs', accent: '#78350f', isEstimate: true,
+    ingredients: [['All-Purpose Flour', 0.18, 'cups'], ['Cocoa Powder', 0.08, 'cups'], ['Chocolate Chips', 0.04, 'cups'], ['Sugar', 0.08, 'cups'], ['Butter', 0.04, 'cups'], ['Egg', 0.12, 'pcs'], ['Vanilla Extract', 0.03, 'tsp']],
+  },
+  {
+    productKey: 'grahamdelechechocomousse', outputUnit: 'pcs', outputLabel: 'pcs (small tub)', accent: '#7c2d12', isEstimate: true,
+    ingredients: [['Crushed Graham', 0.12, 'cups'], ['All-Purpose Cream (250ml)', 0.16, 'packs'], ['Condensed Milk (390g)', 0.06, 'cans'], ['Chocolate Chips', 0.05, 'cups'], ['Cocoa Powder', 0.02, 'cups'], ['Milk', 0.03, 'cups']],
+  },
+  {
+    productKey: 'grahamdelecheubehalaya', outputUnit: 'pcs', outputLabel: 'pcs (small tub)', accent: '#8b5cf6', isEstimate: true,
+    ingredients: [['Crushed Graham', 0.12, 'cups'], ['All-Purpose Cream (250ml)', 0.16, 'packs'], ['Condensed Milk (390g)', 0.06, 'cans'], ['Ube Halaya', 0.08, 'cups'], ['Milk', 0.03, 'cups']],
+  },
+  {
+    productKey: 'realubehalaya', outputUnit: 'pcs', outputLabel: 'pcs (tub)', accent: '#8b5cf6', isEstimate: true,
+    ingredients: [['Purple Yam', 1, 'cups'], ['Coconut Milk', 0.15, 'cups'], ['Condensed Milk (390g)', 0.06, 'cans'], ['Sugar', 0.08, 'cups'], ['Butter', 0.03, 'cups']],
+  },
+  {
+    productKey: 'lecheflancakeube', outputUnit: 'pcs', outputLabel: 'pcs (cake mold)', accent: '#8b5cf6', isEstimate: true,
+    ingredients: [['Egg', 6, 'pcs'], ['Condensed Milk (390g)', 0.3333, 'cans'], ['Evaporated Milk (370ml)', 0.3333, 'cans'], ['All-Purpose Cream (250ml)', 0.25, 'packs'], ['Ube Halaya', 0.5, 'cups'], ['Sugar', 2, 'tbsp'], ['Vanilla Extract', 0.125, 'tsp']],
+  },
+  {
+    productKey: 'lecheflancakechoco', outputUnit: 'pcs', outputLabel: 'pcs (cake mold)', accent: '#7c2d12', isEstimate: true,
+    ingredients: [['Egg', 6, 'pcs'], ['Condensed Milk (390g)', 0.3333, 'cans'], ['Evaporated Milk (370ml)', 0.3333, 'cans'], ['All-Purpose Cream (250ml)', 0.25, 'packs'], ['Cocoa Powder', 0.04, 'cups'], ['Chocolate Chips', 0.06, 'cups'], ['Sugar', 2, 'tbsp'], ['Vanilla Extract', 0.125, 'tsp']],
+  },
+  {
+    productKey: 'grahamdeleche', outputUnit: 'pcs', outputLabel: 'pcs (small tub)', accent: '#d97706', isEstimate: true,
+    ingredients: [['Crushed Graham', 0.15, 'cups'], ['All-Purpose Cream (250ml)', 0.18, 'packs'], ['Condensed Milk (390g)', 0.08, 'cans'], ['Evaporated Milk (370ml)', 0.04, 'cans'], ['Vanilla Extract', 0.02, 'tsp']],
+  },
+  {
+    productKey: 'ubeflan', outputUnit: 'pcs', outputLabel: 'pcs (round mold)', accent: '#8b5cf6', isEstimate: true,
+    ingredients: [['Egg', 6, 'pcs'], ['Condensed Milk (390g)', 0.3333, 'cans'], ['Evaporated Milk (370ml)', 0.3333, 'cans'], ['All-Purpose Cream (250ml)', 0.25, 'packs'], ['Ube Halaya', 0.5, 'cups'], ['Sugar', 2, 'tbsp'], ['Vanilla Extract', 0.125, 'tsp']],
+  },
+  {
+    productKey: 'chococaramelbars', outputUnit: 'pcs', outputLabel: 'pcs', accent: '#b45309', isEstimate: true,
+    ingredients: [['All-Purpose Flour', 0.15, 'cups'], ['Cocoa Powder', 0.04, 'cups'], ['Chocolate Chips', 0.06, 'cups'], ['Condensed Milk (390g)', 0.04, 'cans'], ['Butter', 0.05, 'cups'], ['Sugar', 0.06, 'cups'], ['Egg', 0.08, 'pcs']],
+  },
+  {
+    productKey: 'chocorevelbars', outputUnit: 'pcs', outputLabel: 'pcs', accent: '#78350f', isEstimate: true,
+    ingredients: [['All-Purpose Flour', 0.16, 'cups'], ['Cocoa Powder', 0.04, 'cups'], ['Chocolate Chips', 0.06, 'cups'], ['Condensed Milk (390g)', 0.03, 'cans'], ['Butter', 0.05, 'cups'], ['Sugar', 0.07, 'cups'], ['Egg', 0.1, 'pcs'], ['Vanilla Extract', 0.02, 'tsp']],
   },
 ];
 
@@ -386,8 +436,6 @@ const buildFallbackProductRecipes = async (supabase) => {
       const product = normalizedProducts.find((candidate) => (
         recipeKeys.some((recipeKey) => (
           candidate.matchKey === recipeKey
-          || candidate.matchKey.includes(recipeKey)
-          || recipeKey.includes(candidate.matchKey)
         ))
       ));
 
@@ -403,6 +451,7 @@ const buildFallbackProductRecipes = async (supabase) => {
         unit: recipe.outputUnit,
         outputLabel: recipe.outputLabel,
         accent: recipe.accent,
+        isEstimate: Boolean(recipe.isEstimate),
         createdAt: '',
         updatedAt: '',
         ingredients: recipe.ingredients.map(([ingredientName, quantity, unit], sortOrder) => ({
@@ -422,12 +471,45 @@ const buildFallbackProductRecipes = async (supabase) => {
 
 const mergeRecipesWithFallback = async (supabase, recipes = []) => {
   const fallbackRecipes = await buildFallbackProductRecipes(supabase);
+  const fallbackByProductId = new Map(
+    fallbackRecipes.map((recipe) => [String(recipe.productId), recipe]),
+  );
   const completeRecipes = recipes.filter((recipe) => (
     recipe.productId
     && recipe.productName
     && Array.isArray(recipe.ingredients)
     && recipe.ingredients.length > 0
-  ));
+  )).map((recipe) => {
+    const matchingFallback = fallbackByProductId.get(String(recipe.productId));
+    if (!matchingFallback || normalizeRecipeProductKey(recipe.productName) !== 'mangograhamfloat') {
+      return recipe;
+    }
+
+    const expectedLegacyItems = [
+      ['crushedgraham', 0.18, 'cups'],
+      ['allpurposecream250ml', 0.18, 'packs'],
+      ['condensedmilk390g', 0.08, 'cans'],
+      ['milk', 0.04, 'cups'],
+      ['sugar', 0.01, 'cups'],
+    ];
+    const hasLegacySeedFormula = recipe.ingredients.length === expectedLegacyItems.length
+      && expectedLegacyItems.every(([nameKey, quantity, unit]) => recipe.ingredients.some((ingredient) => (
+        normalizeRecipeProductKey(ingredient.ingredientName) === nameKey
+        && Math.abs(Number(ingredient.quantity) - quantity) < 0.0001
+        && normalizeNameKey(ingredient.unit) === unit
+      )));
+
+    if (!hasLegacySeedFormula) {
+      return recipe;
+    }
+
+    const mangoRequirement = matchingFallback.ingredients.find((ingredient) => (
+      normalizeRecipeProductKey(ingredient.ingredientName) === 'mango'
+    ));
+    return mangoRequirement
+      ? { ...recipe, isEstimate: true, ingredients: [...recipe.ingredients, mangoRequirement] }
+      : recipe;
+  });
   const completeRecipeProductIds = new Set(completeRecipes.map((recipe) => String(recipe.productId)));
   const missingFallbackRecipes = fallbackRecipes.filter((recipe) => (
     !completeRecipeProductIds.has(String(recipe.productId))
@@ -470,13 +552,7 @@ router.get('/recipes', requireAuth, requireRole('admin', 'staff'), async (req, r
     const { data: recipes, error: recipesError } = await supabase
       .from('product_recipes')
       .select(`
-        id,
-        product_id,
-        output_unit,
-        output_label,
-        accent,
-        created_at,
-        updated_at,
+        *,
         products (
           id,
           product_name,
@@ -525,6 +601,7 @@ router.get('/recipes', requireAuth, requireRole('admin', 'staff'), async (req, r
         unit: recipe.output_unit || 'pcs',
         outputLabel: recipe.output_label || recipe.output_unit || 'pcs',
         accent: recipe.accent || '#f97316',
+        isEstimate: Boolean(recipe.is_estimate),
         createdAt: recipe.created_at,
         updatedAt: recipe.updated_at,
         ingredients: itemsByRecipeId.get(String(recipe.id)) || [],
@@ -598,7 +675,6 @@ router.post('/', requireAuth, requireRole('admin', 'staff'), async (req, res, ne
       expirationDate: resolvedExpirationDate,
       expirationTime: expiration_time || expirationTime,
     });
-
     if (!resolvedProductName || !category) {
       return res.status(400).json({ error: 'product_name and category are required.' });
     }

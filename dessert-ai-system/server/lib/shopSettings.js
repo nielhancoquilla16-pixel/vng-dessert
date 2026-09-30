@@ -7,6 +7,31 @@ export const MANILA_TIME_ZONE = 'Asia/Manila';
 
 const normalizeText = (value = '') => String(value ?? '').trim();
 const TIME_PATTERN = /^([01]\d|2[0-3]):([0-5]\d)(?::[0-5]\d(?:\.\d+)?)?$/;
+const CUSTOMER_SUPPORT_KEYS = ['owner', 'supplier', 'email', 'services', 'physicalStore', 'discounts', 'promotions'];
+
+// Only intentionally published shop information belongs in this public object.
+export const normalizeCustomerSupport = (value, { strict = false } = {}) => {
+  const invalid = (message) => {
+    const error = new Error(message);
+    error.status = 400;
+    throw error;
+  };
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    if (strict) invalid('Customer support information must be an object.');
+    return {};
+  }
+  const result = {};
+  for (const key of CUSTOMER_SUPPORT_KEYS) {
+    if (!Object.hasOwn(value, key)) continue;
+    const text = value[key];
+    if (typeof text !== 'string' || text.length > 2000) {
+      if (strict) invalid(`Customer support ${key} must be text with at most 2,000 characters.`);
+      continue;
+    }
+    if (text.trim()) result[key] = text.trim();
+  }
+  return result;
+};
 
 const getEnvDefault = () => ({
   id: SHOP_SETTINGS_ID,
@@ -46,6 +71,7 @@ export const mapShopSettings = (row = {}) => {
     preorderTimeSlots: normalizeSlots(row.preorder_time_slots),
     latitude: row.latitude == null || row.latitude === '' ? defaults.latitude : String(row.latitude),
     longitude: row.longitude == null || row.longitude === '' ? defaults.longitude : String(row.longitude),
+    ...(Object.hasOwn(row, 'customer_support') ? { customerSupport: normalizeCustomerSupport(row.customer_support) } : {}),
     updatedAt: row.updated_at || null,
   };
 };
@@ -129,6 +155,12 @@ export const buildShopSettingsUpdate = (payload = {}, current = {}) => {
   // Keep the separately configured preorder slots. The scheduling validator
   // applies current hours without permanently erasing slots when hours shorten.
   const slots = normalizeSlots(merged.preorderTimeSlots ?? merged.preorder_time_slots);
+  const supportKey = Object.hasOwn(payload, 'customerSupport') ? 'customerSupport' : 'customer_support';
+  const supportSupplied = Object.hasOwn(payload, supportKey);
+  const supportExists = Object.hasOwn(current, 'customerSupport') || Object.hasOwn(current, 'customer_support');
+  const customerSupport = supportSupplied
+    ? normalizeCustomerSupport(payload[supportKey], { strict: true })
+    : normalizeCustomerSupport(current.customerSupport ?? current.customer_support);
 
   return {
     id: SHOP_SETTINGS_ID,
@@ -140,6 +172,8 @@ export const buildShopSettingsUpdate = (payload = {}, current = {}) => {
     preorder_time_slots: slots,
     latitude,
     longitude,
+    // Keep ordinary settings saves compatible until the optional migration runs.
+    ...(supportSupplied || supportExists ? { customer_support: customerSupport } : {}),
   };
 };
 

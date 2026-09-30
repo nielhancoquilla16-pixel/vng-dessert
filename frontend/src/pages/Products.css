@@ -48,7 +48,9 @@
 .dessert-quantity { display: flex; align-items: center; border: 1px solid #e4dace; border-radius: 11px; background: #fffcf8; overflow: hidden; }
 .dessert-quantity button { display: grid; place-items: center; min-width: 44px; min-height: 44px; padding: 0; border: 0; background: transparent; color: #67472b; cursor: pointer; }
 .dessert-quantity button:disabled { color: #b7a996; cursor: default; }
-.dessert-quantity output { min-width: 28px; text-align: center; font-size: 1rem; font-weight: 700; color: #332315; }
+.dessert-quantity input { min-width: 28px; min-height: 44px; padding: 0; margin: 0; border: 0; border-radius: 0; background: transparent; font: inherit; text-align: center; font-size: 1rem; font-weight: 700; color: #332315; appearance: textfield; -moz-appearance: textfield; }
+.dessert-quantity input::-webkit-inner-spin-button,
+.dessert-quantity input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
 .dessert-purchase-row > .shop-add-button { flex: 1 1 150px; width: auto; flex-wrap: wrap; gap: 4px 12px; }
 .dessert-purchase-message { font-size: .8125rem; line-height: 1.4; color: #386844; overflow-wrap: anywhere; margin: 0; }
 .dessert-purchase-message:not(:empty) { margin-top: 8px; }
@@ -61,7 +63,7 @@
 .dessert-chat-header p { color: #87613b; font-size: .8125rem; line-height: 1.4; overflow-wrap: anywhere; margin: 4px 0 0; }
 .dessert-chat-messages { display: flex; flex: 1; flex-direction: column; min-height: 0; gap: 14px; padding: 16px; overflow-y: auto; overscroll-behavior: contain; background: #fffaf1; }
 .dessert-chat-message { max-width: 90%; font-size: .9375rem; line-height: 1.6; padding: 12px 14px; border-radius: 14px; overflow-wrap: anywhere; white-space: pre-wrap; }
-.dessert-chat-message.from-assistant { align-self: flex-start; background: white; color: #574537; border: 1px solid #ebdfd0; border-bottom-left-radius: 3px; }
+.dessert-chat-message.from-assistant { align-self: flex-start; max-width: 96%; background: white; color: #574537; border: 1px solid #ebdfd0; border-bottom-left-radius: 3px; }
 .dessert-chat-message.from-user { align-self: flex-end; background: #ffdf9c; color: #4e351d; border-bottom-right-radius: 3px; }
 .dessert-chat-thinking { color: #87613b; font-size: .8125rem; }
 .dessert-chat-form { display: flex; align-items: center; flex-shrink: 0; gap: 8px; padding: 12px 16px; border-top: 1px solid #ece3d8; background: white; }

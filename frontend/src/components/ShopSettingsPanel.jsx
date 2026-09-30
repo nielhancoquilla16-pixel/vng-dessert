@@ -6,12 +6,24 @@ import { isValidLocation } from '../lib/deliveryLocation';
 import { useShopSettings } from '../context/ShopSettingsContext';
 import './ShopSettingsPanel.css';
 
+const SUPPORT_FIELDS = [
+  ['owner', 'Owner'],
+  ['email', 'Support Email'],
+  ['physicalStore', 'Physical Store / Pickup Information'],
+  ['discounts', 'Discount Information'],
+  ['promotions', 'Current Promotions'],
+];
+
 const ShopSettingsPanel = () => {
   const { shopSettings, updateShopSettings, canEditShopSettings, isShopSettingsLoading, shopSettingsError } = useShopSettings();
   // Store only the edited fields. Live refreshes may update the saved values,
   // but must never discard a closing time the admin is still typing.
   const [changes, setChanges] = useState({});
-  const draft = { ...shopSettings, ...changes };
+  const draft = {
+    ...shopSettings,
+    ...changes,
+    customerSupport: { ...shopSettings.customerSupport, ...changes.customerSupport },
+  };
   const [isSaving, setIsSaving] = useState(false);
   const [message, setMessage] = useState('');
   const [saveFailed, setSaveFailed] = useState(false);
@@ -30,7 +42,10 @@ const ShopSettingsPanel = () => {
       if ((hasPickupCoordinates || Object.hasOwn(changes, 'address')) && !isValidLocation(draft)) {
         throw new Error('Select the store’s pickup location on the map before saving.');
       }
-      await updateShopSettings(changes);
+      await updateShopSettings({
+        ...changes,
+        ...(Object.hasOwn(changes, 'customerSupport') ? { customerSupport: draft.customerSupport } : {}),
+      });
       setChanges({});
       setMessage('Shop settings updated.');
     } catch (error) {
@@ -47,6 +62,14 @@ const ShopSettingsPanel = () => {
       ...current,
       [field]: value,
       ...(field === 'address' ? { latitude: '', longitude: '' } : {}),
+    }));
+  };
+
+  const setSupportField = (field, value) => {
+    setMessage('');
+    setChanges((current) => ({
+      ...current,
+      customerSupport: { ...current.customerSupport, [field]: value },
     }));
   };
 
@@ -96,6 +119,26 @@ const ShopSettingsPanel = () => {
           <span><Clock3 size={14} /> Closing Time</span>
           <input type="time" value={draft.closingTime || ''} onChange={(event) => setField('closingTime', event.target.value)} disabled={inputsDisabled} required />
         </label>
+        <fieldset className="shop-settings-support shop-settings-wide" aria-describedby="shop-support-help">
+          <legend>Public Customer Support Information</legend>
+          <p id="shop-support-help">Llama AI can share these details with customers. Publish only information intended for the public. Leave unknown details blank.</p>
+          <p id="shop-support-offers-help">Discounts and promotions describe published offers; saving this text does not change checkout totals. Include offer conditions and dates.</p>
+          <div className="shop-settings-support-fields">
+            {SUPPORT_FIELDS.map(([key, label]) => (
+              <label key={key}>
+                <span>{label}</span>
+                <textarea
+                  value={draft.customerSupport[key] || ''}
+                  onChange={(event) => setSupportField(key, event.target.value)}
+                  disabled={inputsDisabled}
+                  maxLength={2000}
+                  rows={key === 'email' ? 2 : 3}
+                  aria-describedby={key === 'discounts' || key === 'promotions' ? 'shop-support-offers-help' : 'shop-support-help'}
+                />
+              </label>
+            ))}
+          </div>
+        </fieldset>
         <div className="shop-settings-actions">
           {message && <span className={saveFailed ? 'shop-settings-error' : ''} role={saveFailed ? 'alert' : 'status'}>{message}</span>}
           <LoadingButton type="submit" className="shop-settings-save" isLoading={isSaving} disabled={isShopSettingsLoading || Object.keys(changes).length === 0}>

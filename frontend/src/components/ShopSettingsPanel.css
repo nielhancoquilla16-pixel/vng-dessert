@@ -39,8 +39,13 @@
 
 .shop-settings-form label { display: grid; gap: 0.36rem; min-width: 0; }
 .shop-settings-form label > span { display: inline-flex; align-items: center; gap: 0.32rem; color: #475569; font-size: 0.8rem; font-weight: 700; }
-.shop-settings-form input { min-width: 0; width: 100%; border: 1px solid #cbd5e1; border-radius: 6px; padding: 0.62rem 0.7rem; color: #0f172a; font: inherit; }
-.shop-settings-form input:focus { outline: 2px solid #fdba74; border-color: #f97316; }
+.shop-settings-form input, .shop-settings-form textarea { min-width: 0; width: 100%; border: 1px solid #cbd5e1; border-radius: 6px; padding: 0.62rem 0.7rem; color: #0f172a; font: inherit; }
+.shop-settings-form input:focus, .shop-settings-form textarea:focus { outline: 2px solid #fdba74; border-color: #f97316; }
+.shop-settings-form textarea { resize: vertical; }
+.shop-settings-support { min-width: 0; margin: 0.5rem 0 0; padding: 1rem; border: 1px solid #dbe3ee; border-radius: 8px; }
+.shop-settings-support legend { padding: 0 0.35rem; color: #0f172a; font-size: 0.9rem; font-weight: 700; }
+.shop-settings-support p { margin: 0 0 0.85rem; color: #475569; font-size: 0.82rem; }
+.shop-settings-support-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.85rem; }
 .shop-settings-wide, .shop-settings-actions { grid-column: 1 / -1; }
 .shop-settings-actions { display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin-top: 0.25rem; color: #047857; font-size: 0.85rem; }
 .shop-settings-save { display: inline-flex; align-items: center; gap: 0.45rem; }
@@ -49,6 +54,7 @@
 
 @media (max-width: 650px) {
   .shop-settings-form { grid-template-columns: 1fr; }
+  .shop-settings-support-fields { grid-template-columns: 1fr; }
   .shop-settings-wide, .shop-settings-actions { grid-column: auto; }
   .shop-settings-actions { align-items: flex-start; flex-direction: column; }
 }

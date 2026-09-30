@@ -9,7 +9,7 @@
 .shop-chat-heading button, .shop-chat-form button { display: grid; place-items: center; min-width: 44px; min-height: 44px; border-radius: 12px; }
 .shop-chat-messages { display: flex; flex-direction: column; gap: .75rem; flex: 1; overflow-y: auto; min-height: 0; padding: 1rem; overscroll-behavior: contain; }
 .shop-chat-message { max-width: 90%; padding: .8rem; border-radius: 14px; font-size: .9rem; line-height: 1.65; overflow-wrap: anywhere; white-space: pre-wrap; }
-.shop-chat-message.ai { align-self: flex-start; background: #fff; border: 1px solid #eee1d0; }
+.shop-chat-message.ai { align-self: flex-start; max-width: 96%; background: #fff; border: 1px solid #eee1d0; }
 .shop-chat-message.user { align-self: flex-end; background: #9e400c; color: #fff; }
 .shop-chat-form { display: flex; gap: .5rem; padding: .8rem; background: white; border-top: 1px solid #eee1d0; flex-shrink: 0; }
 .shop-chat-form input { min-width: 0; flex: 1; padding: .65rem .75rem; font: inherit; font-size: 1rem; border: 1px solid #ddc9b2; border-radius: 12px; }

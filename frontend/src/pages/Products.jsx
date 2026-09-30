@@ -8,7 +8,8 @@ import { useAI } from '../context/AIContext';
 import { useAuth } from '../context/AuthContext';
 import { useShopSettings } from '../context/ShopSettingsContext';
 import { formatCurrency } from '../utils/orderAnalytics';
-import { formatCurrencyText } from '../utils/currency';
+import { CUSTOMER_SUPPORT_GREETING } from '../utils/customerSupportChat';
+import AssistantMessage from '../components/AssistantMessage';
 import { getPreOrderUnavailableReason as getProductPreOrderUnavailableReason } from '../utils/preOrders';
 import useDialogFocus from '../hooks/useDialogFocus';
 import PreOrderModal from '../components/PreOrderModal';
@@ -105,7 +106,7 @@ const Products = () => {
     closeDetails();
     chatRequestRef.current += 1;
     setChatProduct(product);
-    setMessages([{ role: 'ai', text: `Hi! Ask me about ${product.name}, ingredients, delivery, or our shop.` }]);
+    setMessages([{ role: 'ai', text: CUSTOMER_SUPPORT_GREETING }]);
     setInputValue('');
     setPurchaseMessage('');
   }
@@ -145,7 +146,7 @@ const Products = () => {
     setMessages((previous) => [...previous, { role: 'user', text }]);
     setIsSending(true);
     try {
-      const reply = await queryProductAI(chatProduct, text);
+      const reply = await queryProductAI(chatProduct, text, messages);
       if (requestId === chatRequestRef.current) setMessages((previous) => [...previous, { role: 'ai', text: reply }]);
     } catch {
       if (requestId === chatRequestRef.current) setMessages((previous) => [...previous, { role: 'ai', text: 'Sorry, something went wrong. Please try again.' }]);
@@ -155,6 +156,17 @@ const Products = () => {
   }
 
   const selectedQuantity = Math.max(1, Math.min(detailQuantity, remainingStock(detailProduct)));
+
+  function changeDetailQuantity(event) {
+    const value = event.target.value;
+    // Allow clearing the field while replacing a quantity; blur restores the minimum.
+    if (value === '') {
+      setDetailQuantity('');
+      return;
+    }
+    if (!/^\d+$/.test(value)) return;
+    setDetailQuantity(Math.max(1, Math.min(Number(value), remainingStock(detailProduct))));
+  }
 
   return (
     <div className="products-page">
@@ -255,7 +267,27 @@ const Products = () => {
               <div className="dessert-purchase-row">
                 <div className="dessert-quantity" role="group" aria-label="Quantity">
                   <button type="button" aria-label="Decrease quantity" disabled={selectedQuantity <= 1 || isAdding} onClick={() => setDetailQuantity(selectedQuantity - 1)}><Minus size={18} /></button>
-                  <output aria-live="polite">{selectedQuantity}</output>
+                  <input
+                    type="number"
+                    inputMode="numeric"
+                    aria-label="Quantity"
+                    min="1"
+                    max={Math.max(1, remainingStock(detailProduct))}
+                    step="1"
+                    value={detailQuantity === '' ? '' : selectedQuantity}
+                    style={{ width: `${String(selectedQuantity).length}ch` }}
+                    disabled={isAdding || !canAddProductToCart(detailProduct)}
+                    onChange={changeDetailQuantity}
+                    onBlur={() => setDetailQuantity(selectedQuantity)}
+                    onFocus={(event) => event.target.select()}
+                    onKeyDown={(event) => {
+                      if (!event.ctrlKey && !event.metaKey && !event.altKey
+                        && event.key.length === 1 && !/^[0-9]$/.test(event.key)) event.preventDefault();
+                    }}
+                    onPaste={(event) => {
+                      if (!/^\d+$/.test(event.clipboardData.getData('text'))) event.preventDefault();
+                    }}
+                  />
                   <button type="button" aria-label="Increase quantity" disabled={selectedQuantity >= remainingStock(detailProduct) || isAdding || !canAddProductToCart(detailProduct)} onClick={() => setDetailQuantity(selectedQuantity + 1)}><Plus size={18} /></button>
                 </div>
                 <button className="shop-add-button" type="button" disabled={!canAddProductToCart(detailProduct) || isAdding} onClick={() => void purchaseProduct(detailProduct, selectedQuantity)}>
@@ -276,12 +308,12 @@ const Products = () => {
               <button type="button" className="dessert-icon-button" onClick={closeChat} aria-label="Close dessert assistant"><X size={22} /></button>
             </header>
             <div className="dessert-chat-messages" role="log" aria-live="polite" aria-relevant="additions text">
-              {messages.map((message, index) => <div key={index} className={`dessert-chat-message ${message.role === 'user' ? 'from-user' : 'from-assistant'}`}>{message.role === 'user' ? message.text : formatCurrencyText(message.text)}</div>)}
+              {messages.map((message, index) => <div key={index} className={`dessert-chat-message ${message.role === 'user' ? 'from-user' : 'from-assistant'}`}>{message.role === 'user' ? message.text : <AssistantMessage text={message.text} />}</div>)}
               {isSending && <p className="dessert-chat-thinking">Finding an answer…</p>}
               <div ref={messagesEndRef} />
             </div>
             <form className="dessert-chat-form" onSubmit={sendMessage}>
-              <input type="text" aria-label="Ask about this dessert" value={inputValue} onChange={(event) => setInputValue(event.target.value)} placeholder="Ask about this dessert…" disabled={isSending} />
+              <input type="text" aria-label="Ask the dessert assistant" value={inputValue} onChange={(event) => setInputValue(event.target.value)} placeholder="Ask about products, orders, or our shop…" disabled={isSending} />
               <button type="submit" className="dessert-icon-button" aria-label="Send message" disabled={isSending || !inputValue.trim()}><Send size={20} /></button>
             </form>
             <footer className="dessert-chat-footer">

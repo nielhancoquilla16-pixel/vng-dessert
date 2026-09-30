@@ -1,0 +1,91 @@
+.assistant-rich-text {
+  display: grid;
+  gap: 0.8rem;
+  min-width: 0;
+  color: inherit;
+  line-height: 1.65;
+  white-space: normal;
+}
+
+.assistant-rich-text > * { min-width: 0; margin: 0; }
+
+.assistant-markdown-heading {
+  display: inline-flex;
+  width: fit-content;
+  max-width: 100%;
+  align-items: center;
+  padding: 0.38rem 0.8rem;
+  border-radius: 999px;
+  background: #fff3e3;
+  color: #49311f;
+  font-size: 0.97rem;
+  font-weight: 750;
+  line-height: 1.45;
+}
+
+.assistant-markdown-paragraph { line-height: 1.65; }
+
+.assistant-markdown-callout {
+  padding: 0.72rem 0.9rem;
+  border: 1px solid #f0dcc7;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #fff7eb, #fffdf9);
+  color: #754014;
+  font-size: 1.02em;
+}
+
+.assistant-rich-text strong,
+.assistant-markdown-list-label { color: #312c28; font-weight: 750; }
+
+.assistant-markdown-price { color: #a84912; font-weight: 800; white-space: nowrap; }
+
+.assistant-markdown-list {
+  display: grid;
+  gap: 0.7rem;
+  padding-left: 1.25rem;
+}
+
+.assistant-markdown-list > li { padding-left: 0.12rem; }
+.assistant-markdown-list > li::marker { color: #a84912; font-weight: 800; }
+.assistant-markdown-list-label { display: inline; }
+
+.assistant-markdown-detail {
+  display: block;
+  margin-top: 0.12rem;
+  color: #675f58;
+  line-height: 1.55;
+}
+
+.assistant-rich-text code {
+  padding: 0.08rem 0.32rem;
+  border: 1px solid #efe3d5;
+  border-radius: 5px;
+  background: #fff7ed;
+  color: #814314;
+  font-size: 0.92em;
+}
+
+.assistant-markdown-code {
+  overflow-x: auto;
+  padding: 0.8rem;
+  border-radius: 10px;
+  background: #30261e;
+  color: #fff4e5;
+  font-size: 0.88em;
+  line-height: 1.55;
+  white-space: pre;
+}
+
+.assistant-markdown-code code { padding: 0; border: 0; background: transparent; color: inherit; }
+
+.assistant-markdown-quote {
+  padding: 0.15rem 0 0.15rem 0.75rem;
+  border-left: 3px solid #d5a16c;
+  color: #675f58;
+}
+
+.assistant-markdown-rule { width: 100%; border: 0; border-top: 1px solid #eee2d4; }
+
+@media (prefers-reduced-motion: no-preference) {
+  .assistant-markdown-heading { transition: background-color 160ms ease; }
+}

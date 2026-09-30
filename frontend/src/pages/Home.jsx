@@ -76,18 +76,17 @@ const Home = () => {
   const mapLocation = hasSavedShopLocation
     ? { latitude: storeLatitude, longitude: storeLongitude }
     : FALLBACK_SHOP_LOCATION;
-  const openStreetMapUrl = 'https://www.openstreetmap.org/#map=16/'
-    + mapLocation.latitude + '/' + mapLocation.longitude;
+  const openStreetMapUrl = 'https://www.openstreetmap.org/?mlat='
+    + encodeURIComponent(mapLocation.latitude)
+    + '&mlon=' + encodeURIComponent(mapLocation.longitude)
+    + '#map=18/' + encodeURIComponent(mapLocation.latitude)
+    + '/' + encodeURIComponent(mapLocation.longitude);
   const mapBox = [
     mapLocation.longitude - 0.008,
     mapLocation.latitude - 0.005,
     mapLocation.longitude + 0.008,
     mapLocation.latitude + 0.005,
   ].join(',');
-  const streetViewUrl = hasSavedShopLocation
-    ? 'https://www.google.com/maps/@?api=1&map_action=pano&viewpoint='
-      + storeLatitude + ',' + storeLongitude
-    : '';
   const safeSiteVideos = useMemo(() => {
     const normalized = (Array.isArray(siteVideos) ? siteVideos : [])
       .filter((video) => video && String(video.src || '').trim());
@@ -308,20 +307,6 @@ const Home = () => {
             >
               Open in OpenStreetMap
             </a>
-            {hasSavedShopLocation ? (
-              <a
-                href={streetViewUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="btn-rose"
-              >
-                Open Street View
-              </a>
-            ) : (
-              <button type="button" className="btn-rose" disabled title="The saved shop location is not configured yet.">
-                Open Street View
-              </button>
-            )}
           </div>
 
           <div className="map-container">
@@ -331,9 +316,6 @@ const Home = () => {
               src={'https://www.openstreetmap.org/export/embed.html?bbox=' + mapBox
                 + '&layer=mapnik&marker=' + mapLocation.latitude + ',' + mapLocation.longitude}
             ></iframe>
-            <div style={{ padding: '0.5rem 1rem', fontSize: '0.8rem', color: '#64748b' }}>
-              View on <a href="https://www.openstreetmap.org/" style={{ color: '#0ea5e9' }}>OpenStreetMap</a>
-            </div>
           </div>
         </div>
       </section>

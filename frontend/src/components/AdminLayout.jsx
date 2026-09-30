@@ -523,9 +523,12 @@ const AdminLayout = () => {
                             <strong>
                               {entry.status.toLowerCase().includes('unverified')
                                 ? 'Unverified Gmail Registration'
-                                : 'Invalid Gmail Registration'}
+                                : 'Invalid Gmail Signup Attempt'}
                             </strong>
-                            <span>{entry.customerName} · {entry.email || 'Email not provided'}</span>
+                            <span>
+                              Username: {entry.username || entry.customerName || 'Customer'}
+                              {' | '}Email: {entry.email || 'Email not provided'}
+                            </span>
                             <small>
                               <Clock3 size={12} /> {entry.status} · {new Date(entry.createdAt).toLocaleString()}
                               {entry.reason ? ' · ' + entry.reason : ''}
