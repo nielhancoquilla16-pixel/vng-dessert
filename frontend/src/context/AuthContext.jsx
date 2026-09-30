@@ -99,6 +99,7 @@ export const AuthProvider = ({ children }) => {
   const [profile, setProfile] = useState(null);
   const [staffAccounts, setStaffAccounts] = useState([]);
   const [isAuthLoading, setIsAuthLoading] = useState(true);
+  const [hasCompletedInitialAuthCheck, setHasCompletedInitialAuthCheck] = useState(false);
   const [isPasswordRecovery, setIsPasswordRecovery] = useState(
     () => readPasswordRecoveryFlag() || hasRecoveryMarkerInLocation()
   );
@@ -151,6 +152,7 @@ export const AuthProvider = ({ children }) => {
   useEffect(() => {
     if (!isSupabaseConfigured || !supabase) {
       setIsAuthLoading(false);
+      setHasCompletedInitialAuthCheck(true);
       return undefined;
     }
 
@@ -187,6 +189,8 @@ export const AuthProvider = ({ children }) => {
           setSession(null);
           setProfile(null);
           setStaffAccounts([]);
+          setIsAuthLoading(false);
+          setHasCompletedInitialAuthCheck(true);
         }
         return;
       }
@@ -218,6 +222,7 @@ export const AuthProvider = ({ children }) => {
       } finally {
         if (isActive) {
           setIsAuthLoading(false);
+          setHasCompletedInitialAuthCheck(true);
         }
       }
     };
@@ -244,6 +249,20 @@ export const AuthProvider = ({ children }) => {
         setProfile(null);
         setStaffAccounts([]);
         setIsAuthLoading(false);
+        return;
+      }
+
+      // The initial session is loaded and verified by loadSession above. The
+      // corresponding Supabase notification must not start a second check.
+      if (event === 'INITIAL_SESSION') {
+        return;
+      }
+
+      // Refreshing an access token does not change the signed-in user or their
+      // role. Keep the active page mounted while Supabase renews the session;
+      // app startup and real sign-in/account changes still run profile checks.
+      if (event === 'TOKEN_REFRESHED' && nextSession) {
+        setSession(nextSession);
         return;
       }
 
@@ -808,6 +827,7 @@ export const AuthProvider = ({ children }) => {
         session,
         profile,
         isAuthLoading,
+        hasCompletedInitialAuthCheck,
         isAdmin,
         userRole,
         staffAccounts,

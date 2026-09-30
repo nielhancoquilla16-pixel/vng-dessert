@@ -5,9 +5,22 @@ import AccessDenied from '../pages/AccessDenied';
 
 const RequireRole = ({ allowedRoles = [], children }) => {
   const location = useLocation();
-  const { isAuthLoading, profile } = useAuth();
+  const {
+    isAuthLoading,
+    hasCompletedInitialAuthCheck,
+    profile,
+    session,
+  } = useAuth();
+  const hasMatchingSession = Boolean(
+    profile
+    && session?.user?.id
+    && profile.id === session.user.id,
+  );
 
-  if (isAuthLoading) {
+  const isCheckingAccess = !hasCompletedInitialAuthCheck
+    || (isAuthLoading && (!session?.user?.id || !hasMatchingSession));
+
+  if (isCheckingAccess) {
     return (
       <div className="access-denied-page">
         <div className="access-denied-card">
@@ -18,7 +31,7 @@ const RequireRole = ({ allowedRoles = [], children }) => {
     );
   }
 
-  if (!profile) {
+  if (!hasMatchingSession) {
     return <Navigate to="/login" replace state={{ from: location.pathname }} />;
   }
 
