@@ -7,7 +7,7 @@
 
   "scripts": {
     "dev": "node scripts/dev.mjs",
-    "build": "npm --prefix frontend run build",
+    "build": "echo 'Skipping frontend build for Railway backend service'",
     "build:app": "npm --prefix frontend run build",
     "dev:app": "npm --prefix frontend run dev",
     "dev:frontend": "npm --prefix frontend run dev",
