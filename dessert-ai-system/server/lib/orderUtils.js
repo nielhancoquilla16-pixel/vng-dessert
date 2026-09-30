@@ -1,5 +1,5 @@
 import { publicErrorMessage } from './publicErrors.js';
-import { randomUUID } from 'node:crypto';
+import { randomInt, randomUUID } from 'node:crypto';
 import { getExpiryStatus } from './expiry.js';
 import { mapReturnRefundRequest, normalizeReturnRefundStatus } from './returnRefund.js';
 import { createOrderQrExpiry, getOrderQrExpiry, isOrderQrExpired } from './orderQr.js';
@@ -85,7 +85,8 @@ export const normalizeNotifications = (value = []) => (
         id: String(entry?.id || entry?.notificationId || '').trim(),
         audience: String(entry?.audience || 'customer').toLowerCase(),
         type: String(entry?.type || 'info').toLowerCase(),
-        message: String(entry?.message || entry?.title || '').trim(),
+        message: String(entry?.message || entry?.title || '').trim()
+          .replace(/\bVNG-([A-Z0-9]{6})[A-Z0-9]+\b/gi, (_, code) => `VNG-${code.toUpperCase()}`),
         createdAt: entry?.createdAt || entry?.created_at || new Date().toISOString(),
       }))
     : []
@@ -455,7 +456,34 @@ const buildInitialNotifications = ({
   ];
 };
 
-export const generateOrderCode = () => `VNG-${randomUUID().replace(/-/g, '').slice(0, 10).toUpperCase()}`;
+export const formatPublicOrderCode = (value = '') => {
+  const code = String(value || '').trim().toUpperCase();
+  const match = code.match(/^VNG-([A-Z0-9]{6})[A-Z0-9]*$/);
+  return match ? `VNG-${match[1]}` : code;
+};
+
+const ORDER_CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+export const generateOrderCode = () => `VNG-${Array.from(
+  { length: 6 },
+  () => ORDER_CODE_ALPHABET[randomInt(ORDER_CODE_ALPHABET.length)],
+).join('')}`;
+
+const generateAvailableOrderCode = async (supabase) => {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const candidate = generateOrderCode();
+    const { data, error } = await supabase
+      .from('orders')
+      .select('id')
+      .ilike('order_code', `${candidate}%`)
+      .limit(1)
+      .maybeSingle();
+
+    if (error) throw error;
+    if (!data) return candidate;
+  }
+
+  throw new Error('Could not generate a unique order ID. Please try again.');
+};
 
 export const orderSelect = `
   id,
@@ -760,7 +788,8 @@ export const mapOrder = (row) => {
   const latestPaymentCheckout = paymentCheckouts[0] || null;
   const normalizedStatus = normalizeOrderStatus(row.order_status || 'pending');
   const normalizedReviewStatus = normalizeReviewStatus(row.review_status || 'none');
-  const orderCode = row.order_code || toDisplayId(row.id);
+  const fallbackOrderCode = `VNG-${String(row.id || '').replace(/-/g, '').slice(0, 6).toUpperCase()}`;
+  const orderCode = formatPublicOrderCode(row.order_code || fallbackOrderCode);
   const createdAt = row.created_at || new Date().toISOString();
   const totalPrice = Number(row.total_price) || 0;
   const statusTimestamps = normalizeStatusTimestamps(row.status_timestamps || {});
@@ -1095,7 +1124,7 @@ export const createFulfilledOrder = async (
   {
     userId,
     profile,
-    orderCode = generateOrderCode(),
+    orderCode = '',
     customerName = '',
     phoneNumber = '',
     address = '',
@@ -1123,6 +1152,9 @@ export const createFulfilledOrder = async (
     items = [],
   },
 ) => {
+  const publicOrderCode = orderCode
+    ? formatPublicOrderCode(orderCode)
+    : await generateAvailableOrderCode(supabase);
   const normalizedStatus = normalizeOrderStatus(orderStatus);
   const normalizedDeliveryMethod = String(deliveryMethod || 'pickup').toLowerCase();
   const normalizedPaymentMethod = String(paymentMethod || 'cash').toLowerCase();
@@ -1174,7 +1206,7 @@ export const createFulfilledOrder = async (
   };
   const notifications = buildInitialNotifications({
     orderStatus: normalizedStatus,
-    orderCode,
+    orderCode: publicOrderCode,
     cancellationReason: cancellationReason || '',
     customerName: customerName || profile?.full_name || profile?.username || 'Customer',
   });
@@ -1183,7 +1215,7 @@ export const createFulfilledOrder = async (
     .from('orders')
     .insert({
       user_id: userId,
-      order_code: orderCode,
+      order_code: publicOrderCode,
       customer_name: customerName || profile?.full_name || profile?.username || 'Customer',
       phone_number: phoneNumber || profile?.phone_number || null,
       address: persistedAddress,

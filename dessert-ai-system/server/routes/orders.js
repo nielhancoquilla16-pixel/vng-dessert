@@ -175,6 +175,26 @@ const fetchOrderByIdentifier = async (supabase, identifier = '') => {
     }
   }
 
+  if (/^VNG-[A-Z0-9]{6}$/.test(normalizedCode)) {
+    const { data, error } = await supabase
+      .from('orders')
+      .select(orderSelect)
+      .ilike('order_code', `${normalizedCode}%`)
+      .limit(2);
+
+    if (error) {
+      throw error;
+    }
+
+    if (data?.length === 1) {
+      return hydrateOrderWithProfile(supabase, data[0]);
+    }
+
+    if (data?.length > 1) {
+      return null;
+    }
+  }
+
   if (normalizedPhone.length >= 7 || normalized.length >= 3) {
     const safeSearchText = normalized.replace(/[%_]/g, '');
     let broadQuery = supabase
