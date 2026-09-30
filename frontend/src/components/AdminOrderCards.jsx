@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Clock3, Package, QrCode, CircleDollarSign, ShoppingCart } from 'lucide-react';
 import { useProducts } from '../context/ProductContext';
 import { resolveAssetUrl } from '../lib/publicUrl';
+import { appUrl } from '../lib/appUrl';
 import { formatCurrency } from '../utils/currency';
 import { generateQrDataUrl } from '../utils/qrCode';
 import { getItemSubtotal, getOrderPaymentSummary } from '../utils/adminOrderDetails';
@@ -54,6 +55,31 @@ export const PaymentSummaryCard = ({ order }) => {
         ))}
         <div className="admin-orders-payment-total"><dt>Total</dt><dd>{formatCurrency(payment.total)}</dd></div>
       </dl>
+    </section>
+  );
+};
+
+export const OrderFeedbackReceiptCard = ({ order }) => {
+  const feedbackToken = String(order.feedbackToken || '').trim();
+  const feedbackUrl = feedbackToken && !['pending', 'cancelled', 'refunded'].includes(normalizeOrderStatus(order.status))
+    ? appUrl(`/feedback/${encodeURIComponent(feedbackToken)}`)
+    : '';
+  const image = useMemo(() => feedbackUrl ? generateQrDataUrl(feedbackUrl, 220) : '', [feedbackUrl]);
+
+  if (!image) return null;
+
+  return (
+    <section className="admin-orders-section admin-orders-feedback-receipt" aria-labelledby="receipt-feedback-title">
+      <h2 id="receipt-feedback-title" className="admin-orders-section-title"><QrCode size={20} aria-hidden="true" />Feedback QR</h2>
+      <div className="admin-orders-feedback-body">
+        <a href={feedbackUrl} aria-label="Open this order's feedback form">
+          <img src={image} alt={`Feedback QR for order ${order.displayId || order.orderCode || order.id}`} width="132" height="132" />
+        </a>
+        <div>
+          <strong>We value your feedback</strong>
+          <p className="admin-orders-muted">Scan this QR code to rate your experience after receiving your order.</p>
+        </div>
+      </div>
     </section>
   );
 };

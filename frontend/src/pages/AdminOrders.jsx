@@ -3,7 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import { CalendarDays, CheckCircle2, ChevronRight, CircleDollarSign, ClipboardList, Clock3, CreditCard, ExternalLink, FileText, Globe, Loader2, MapPin, Phone, Printer, RefreshCw, Search, Send, StickyNote, Truck, UserRound, XCircle, Zap } from 'lucide-react';
 import { useOrders } from '../context/OrderContext';
 import LocationPinPicker from '../components/LocationPinPicker';
-import { OrderedItemsCard, OrderItemThumbnail, OrderQrCard, PaymentSummaryCard } from '../components/AdminOrderCards';
+import { OrderedItemsCard, OrderFeedbackReceiptCard, OrderItemThumbnail, OrderQrCard, PaymentSummaryCard } from '../components/AdminOrderCards';
 import { getItemSubtotal, getOrderPaymentSummary } from '../utils/adminOrderDetails';
 import { formatCurrency } from '../utils/currency';
 import {
@@ -1208,6 +1208,7 @@ const AdminOrders = () => {
                       <OrderedItemsCard order={selectedOrder} />
                       <PaymentSummaryCard order={selectedOrder} />
                       <OrderQrCard key={selectedOrder.id} order={selectedOrder} />
+                      <OrderFeedbackReceiptCard order={selectedOrder} />
                     </div>
 
                     <div className="admin-orders-detail-secondary">

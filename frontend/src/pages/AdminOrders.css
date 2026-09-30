@@ -1119,6 +1119,8 @@
   .admin-orders-page .admin-orders-content-grid { flex: none; grid-template-rows: 220px 480px; }
 }
 
+.admin-orders-feedback-receipt { display: none; }
+
 @media print {
   body:has(.admin-orders-page) { background: #fff; }
   body:has(.admin-orders-page) .admin-layout { display: block; height: auto; }
@@ -1137,4 +1139,11 @@
   .admin-orders-detail-heading::before { content: 'V&G Dessert · Order Receipt'; font-size: 18px; font-weight: 700; }
   .admin-orders-detail-heading h2, .admin-orders-document-icon { display: none; }
   .admin-orders-section { break-inside: avoid; box-shadow: none; }
+  .admin-orders-feedback-receipt { display: block; }
+  .admin-orders-feedback-receipt .admin-orders-section-title { text-transform: uppercase; }
+  .admin-orders-feedback-body { display: flex; align-items: center; gap: 18px; }
+  .admin-orders-feedback-body > a { flex: 0 0 auto; }
+  .admin-orders-feedback-body img { display: block; width: 35mm; height: 35mm; padding: 2mm; background: #fff; }
+  .admin-orders-feedback-body strong { font-size: 14px; }
+  .admin-orders-feedback-body p { margin-top: 6px; }
 }
