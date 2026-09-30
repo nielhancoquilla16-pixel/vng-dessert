@@ -1,13 +1,24 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
+import { useLocation } from 'react-router-dom';
 import { AlertTriangle } from 'lucide-react';
 import {
+  clearApiResponseStatus,
   getApiStatus,
   probeApiHealth,
   subscribeToApiStatus,
 } from '../lib/api';
 
 const ApiStatusBanner = () => {
+  const location = useLocation();
   const [status, setStatus] = useState(getApiStatus());
+  const previousPathRef = useRef(location.pathname);
+
+  useEffect(() => {
+    if (previousPathRef.current !== location.pathname) {
+      previousPathRef.current = location.pathname;
+      clearApiResponseStatus();
+    }
+  }, [location.pathname]);
 
   useEffect(() => (
     subscribeToApiStatus(setStatus)

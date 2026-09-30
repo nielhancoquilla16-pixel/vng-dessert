@@ -85,6 +85,12 @@ export const clearApiStatus = () => {
   setApiStatus({ level: 'idle', message: '' });
 };
 
+export const clearApiResponseStatus = () => {
+  if (apiStatus.source === 'response') {
+    setApiStatus({ level: 'idle', message: '' });
+  }
+};
+
 export const subscribeToApiStatus = (listener) => {
   apiStatusListeners.add(listener);
   return () => {

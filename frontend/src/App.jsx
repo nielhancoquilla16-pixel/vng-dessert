@@ -63,8 +63,8 @@ function App() {
                     <CartProvider>
                     <AppErrorBoundary>
                       <>
-                        <ApiStatusBanner />
                         <BrowserRouter basename={routerBasename}>
+                          <ApiStatusBanner />
                           <Routes>
                             {/* Visitor Routes */}
                             <Route path="/" element={<Layout />}>
