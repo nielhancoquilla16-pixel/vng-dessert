@@ -15,6 +15,9 @@ const isAuthEmailDeliveryError = (errorCode, status) => (
 const isGmailRegistrationValidationError = (errorCode, status) => (
   status === 400 && errorCode === 'INVALID_GMAIL_REGISTRATION'
 );
+const isShopCustomerSupportMigrationError = (errorCode, status) => (
+  status === 503 && errorCode === 'SHOP_CUSTOMER_SUPPORT_MIGRATION_REQUIRED'
+);
 
 export const publicErrorMessage = (message = '', status = 500, errorCode = '') => {
   const code = httpErrorStatus(status);
@@ -23,6 +26,9 @@ export const publicErrorMessage = (message = '', status = 500, errorCode = '') =
   }
   if (isAuthEmailDeliveryError(errorCode, code)) {
     return 'We could not send your verification email. Please try again later or contact the shop for help.';
+  }
+  if (isShopCustomerSupportMigrationError(errorCode, code)) {
+    return 'Customer support settings need a database update. Ask the administrator to apply the shop customer support migration, then try again.';
   }
   const text = typeof message === 'string'
     ? message.replace(/^Error\s+\d{3}:\s*/i, '').trim()
@@ -55,6 +61,9 @@ export const publicErrorDetails = (value, status = 400) => {
   }
   if (isAuthEmailDeliveryError(value.errorCode, httpErrorStatus(status))) {
     return { errorCode: 'AUTH_EMAIL_DELIVERY_UNAVAILABLE' };
+  }
+  if (isShopCustomerSupportMigrationError(value.errorCode, httpErrorStatus(status))) {
+    return { errorCode: 'SHOP_CUSTOMER_SUPPORT_MIGRATION_REQUIRED' };
   }
   if (httpErrorStatus(status) >= 500) return null;
   const details = {};

@@ -14,6 +14,11 @@ export const createShopSettingsRouter = ({
 } = {}) => {
   const router = express.Router();
 
+  const isMissingCustomerSupportColumn = (error) => (
+    ['PGRST204', '42703'].includes(error?.code)
+    && /customer_support/i.test([error?.message, error?.details, error?.hint].filter(Boolean).join(' '))
+  );
+
   router.use((req, res, next) => {
     res.set('Cache-Control', 'no-store, max-age=0');
     res.set('Surrogate-Control', 'no-store');
@@ -62,7 +67,15 @@ export const createShopSettingsRouter = ({
         .select('*')
         .single();
 
-      if (error) throw error;
+      if (error) {
+        if (isMissingCustomerSupportColumn(error)) {
+          const migrationError = new Error('Customer support settings require a database update. Apply supabase/migrations/add_shop_customer_support.sql, then try again.');
+          migrationError.status = 503;
+          migrationError.errorCode = 'SHOP_CUSTOMER_SUPPORT_MIGRATION_REQUIRED';
+          throw migrationError;
+        }
+        throw error;
+      }
       if (!data) {
         const saveError = new Error('Shop settings could not be saved. Please try again.');
         saveError.status = 503;
