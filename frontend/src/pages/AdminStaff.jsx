@@ -1,7 +1,8 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { UserPlus, Trash2, Key, Calendar, ShieldCheck, Camera, ImagePlus, Save, X, Edit2 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { PASSWORD_POLICY_MESSAGE, validatePassword } from '../utils/passwordValidation';
+import LoadingButton from '../components/LoadingButton';
 import './AdminStaff.css';
 
 const MAX_PROFILE_IMAGE_BYTES = 2 * 1024 * 1024;
@@ -96,6 +97,8 @@ const AdminStaff = () => {
   const [adminAvatarDraft, setAdminAvatarDraft] = useState('');
   const [formError, setFormError] = useState('');
   const [editFormError, setEditFormError] = useState('');
+  const [isUpdatingStaff, setIsUpdatingStaff] = useState(false);
+  const staffUpdateInProgress = useRef(false);
   const [actionError, setActionError] = useState('');
   const [actionNotice, setActionNotice] = useState('');
   const [profileError, setProfileError] = useState('');
@@ -212,6 +215,9 @@ const AdminStaff = () => {
 
   const handleEditStaff = async (e) => {
     e.preventDefault();
+    if (staffUpdateInProgress.current || !editingStaffId) {
+      return;
+    }
     setEditFormError('');
     setActionError('');
     setActionNotice('');
@@ -224,11 +230,18 @@ const AdminStaff = () => {
       }
     }
 
+    staffUpdateInProgress.current = true;
+    setIsUpdatingStaff(true);
+
     try {
       await updateStaffAccount(editingStaffId, editStaff);
       handleCloseEditModal();
+      setActionNotice('Staff account updated.');
     } catch (nextError) {
       setEditFormError(nextError.message || 'Unable to update the staff account right now.');
+    } finally {
+      staffUpdateInProgress.current = false;
+      setIsUpdatingStaff(false);
     }
   };
 
@@ -854,7 +867,8 @@ const AdminStaff = () => {
         <div className="modal-overlay">
           <div className="modal-content admin-staff-modal">
             <h2 style={{ marginBottom: '1.5rem' }}>Edit Staff Account</h2>
-            <form onSubmit={handleEditStaff}>
+            <form onSubmit={handleEditStaff} aria-busy={isUpdatingStaff}>
+              <fieldset className="admin-staff-edit-fields" disabled={isUpdatingStaff}>
               {editFormError && (
                 <div style={{ marginBottom: '1rem', color: '#b91c1c', fontWeight: 600, fontSize: '0.9rem' }}>
                   {editFormError}
@@ -996,19 +1010,28 @@ const AdminStaff = () => {
                   className="btn-pos-cancel"
                   style={{ flex: 1 }}
                   onClick={handleCloseEditModal}
+                  disabled={isUpdatingStaff}
                 >
                   Cancel
                 </button>
-                <button
+                <LoadingButton
                   type="submit"
                   className="btn-add-item"
                   style={{ flex: 1, justifyContent: 'center' }}
+                  isLoading={isUpdatingStaff}
+                  aria-label={isUpdatingStaff ? 'Updating account' : 'Update Account'}
                   disabled={Boolean(editStaff.password) && !validatePassword(editStaff.password).valid}
                 >
                   <Save size={16} /> Update Account
-                </button>
+                </LoadingButton>
               </div>
+              </fieldset>
             </form>
+            {isUpdatingStaff && (
+              <p className="admin-staff-update-status" role="status">
+                Updating account… Please wait.
+              </p>
+            )}
           </div>
         </div>
       )}

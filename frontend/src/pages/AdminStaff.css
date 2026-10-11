@@ -200,6 +200,22 @@
   flex-direction: column;
 }
 
+.admin-staff-edit-fields {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.admin-staff-update-status {
+  margin: 0.75rem 0 0;
+  color: #64748b;
+  font-size: 0.875rem;
+  text-align: center;
+}
+
 .admin-staff-actions-row {
   display: flex;
   gap: 0.5rem;
