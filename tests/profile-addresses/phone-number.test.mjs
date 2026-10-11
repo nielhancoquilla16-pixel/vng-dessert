@@ -9,10 +9,10 @@ import {
   getPhoneNumberValidationMessage as getBackendMessage,
 } from '../../dessert-ai-system/server/lib/phoneNumber.js';
 
-test('frontend strips non-digits and caps phone input at 11 digits', () => {
-  assert.equal(sanitizePhoneNumber('09628971659dadasd'), '09628971659');
-  assert.equal(sanitizePhoneNumber('+63 (962) 897-1659'), '63962897165');
-  assert.equal(sanitizePhoneNumber('١٢٣٤٥٦٧٨٩٠١'), '');
+test('frontend preserves malformed input so invalid characters cannot become valid digits', () => {
+  assert.equal(sanitizePhoneNumber('09628971659dadasd'), '09628971659dadasd');
+  assert.equal(sanitizePhoneNumber('+63 (962) 897-1659'), '+63 (962) 897-1659');
+  assert.equal(getFrontendMessage('١٢٣٤٥٦٧٨٩٠١'), PHONE_NUMBER_VALIDATION_MESSAGE);
 });
 
 test('frontend accepts only exactly 11 ASCII digits', () => {

@@ -1,3 +1,4 @@
+import { customerErrorMessage } from '../lib/publicErrors';
 import React, { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { CheckCircle2, MessageSquareText, Star } from 'lucide-react';
@@ -71,7 +72,7 @@ const Feedback = () => {
         }
       } catch (loadError) {
         if (isActive) {
-          setError(loadError.message || 'Unable to open this feedback link.');
+          setError(customerErrorMessage(loadError, 'Unable to open this feedback link.'));
         }
       } finally {
         if (isActive) {
@@ -131,7 +132,7 @@ const Feedback = () => {
         invalidReason: 'Thank you. Feedback has already been submitted for this order.',
       }));
     } catch (submitError) {
-      setError(submitError.message || 'Unable to submit feedback right now.');
+      setError(customerErrorMessage(submitError, 'Unable to submit feedback right now.'));
     } finally {
       setIsSubmitting(false);
     }

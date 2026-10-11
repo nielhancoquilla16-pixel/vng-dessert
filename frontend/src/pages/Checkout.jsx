@@ -1,3 +1,4 @@
+import { customerErrorMessage } from '../lib/publicErrors';
 import React, { useEffect, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import LoadingButton from '../components/LoadingButton';
@@ -9,6 +10,11 @@ import { useProducts } from '../context/ProductContext';
 import { useCustomerAddresses } from '../context/CustomerAddressesContext';
 import { useShopSettings } from '../context/ShopSettingsContext';
 import { apiRequest } from '../lib/api';
+import {
+  getPhoneNumberValidationMessage,
+  PHILIPPINE_MOBILE_NUMBER_PATTERN_SOURCE,
+  PHONE_NUMBER_VALIDATION_MESSAGE,
+} from '../utils/phoneNumber';
 import { CreditCard, Banknote, Store, Truck } from 'lucide-react';
 import {
   ADDRESS_PIN_ERROR,
@@ -68,7 +74,7 @@ const Checkout = () => {
     ? allCartItems.filter((item) => selectedCartIds.includes(item.id))
     : allCartItems;
   const { loggedInCustomer, updateLoggedInCustomer } = useAuth();
-  const { addOrder, refreshOrders } = useOrders();
+  const { addOrder } = useOrders();
   const { validateStockAvailability, refreshProducts } = useProducts();
   const { shopSettings, isShopOpen, isShopSettingsLoading, shopSettingsError, operatingHoursLabel, refreshShopSettings } = useShopSettings();
   const canCheckout = isShopOpen && !isShopSettingsLoading && !shopSettingsError;
@@ -116,6 +122,7 @@ const Checkout = () => {
   const hasHydratedDefaultAddressRef = useRef(false);
   const hasManualDeliveryAddressChangeRef = useRef(false);
   const checkoutCompletedRef = useRef(false);
+  const submitInFlightRef = useRef(false);
 
   useEffect(() => {
     if (cartItems.length === 0 && !isSubmitting && !checkoutCompletedRef.current) {
@@ -189,13 +196,13 @@ const Checkout = () => {
   }, []);
 
   useEffect(() => {
-    if (!paymentStatus.configured && formData.paymentMethod === 'online') {
+    if (!isPaymentStatusLoading && !paymentStatus.configured && formData.paymentMethod === 'online') {
       setFormData((current) => ({
         ...current,
         paymentMethod: 'cash',
       }));
     }
-  }, [formData.paymentMethod, paymentStatus.configured]);
+  }, [formData.paymentMethod, isPaymentStatusLoading, paymentStatus.configured]);
 
   useEffect(() => {
     if (formData.deliveryMethod === 'pickup' && formData.deliveryDistanceKm) {
@@ -209,11 +216,12 @@ const Checkout = () => {
   const subtotal = cartItems.reduce((total, item) => total + (item.price * item.quantity), 0);
   const deliveryFee = formData.deliveryMethod === 'delivery' ? DELIVERY_FEE : 0;
   const total = subtotal + deliveryFee;
+  const isOnlinePayment = formData.paymentMethod === 'online';
   const containsLecheFlan = hasLecheFlanItems(cartItems);
   const deliveryDistance = Number(formData.deliveryDistanceKm);
   const deliveryAddress = {
     recipientName: formData.deliveryRecipientName.trim(),
-    contactNumber: formData.deliveryContactNumber.trim(),
+    contactNumber: formData.deliveryContactNumber,
     streetAddress: formData.deliveryStreetAddress.trim(),
     barangay: formData.deliveryBarangay.trim(),
     city: formData.deliveryCity.trim(),
@@ -347,6 +355,12 @@ const Checkout = () => {
       return;
     }
 
+    const contactNumberError = getPhoneNumberValidationMessage(deliveryAddress.contactNumber);
+    if (contactNumberError) {
+      setSubmitError(contactNumberError);
+      return;
+    }
+
     if (!deliveryAddress.streetAddress || !deliveryAddress.city || !deliveryAddress.province) {
       setSubmitError('Street address, city/municipality, and province are required before saving an address.');
       return;
@@ -383,7 +397,7 @@ const Checkout = () => {
         ? 'Delivery address saved as your default for future orders.'
         : 'Delivery address saved. It is selected for this order.');
     } catch (error) {
-      setSubmitError(error.message || 'Unable to save the delivery address right now.');
+      setSubmitError(customerErrorMessage(error, 'Unable to save the delivery address right now.'));
     } finally {
       setIsSavingDeliveryAddress(false);
     }
@@ -391,13 +405,19 @@ const Checkout = () => {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (isSubmitting) return;
+    if (submitInFlightRef.current || checkoutCompletedRef.current) return;
+    submitInFlightRef.current = true;
     setIsSubmitting(true);
     setSubmitError('');
 
     try {
       if (!loggedInCustomer) {
         throw new Error('Please log in first before checking out.');
+      }
+
+      const phoneNumberError = getPhoneNumberValidationMessage(formData.phone);
+      if (phoneNumberError) {
+        throw new Error(phoneNumberError);
       }
 
       const latestShopSettings = await refreshShopSettings();
@@ -419,6 +439,11 @@ const Checkout = () => {
 
         if (!checkoutDeliveryAddress.recipientName || !checkoutDeliveryAddress.contactNumber) {
           throw new Error('Recipient name and contact number are required before booking delivery.');
+        }
+
+        const deliveryPhoneNumberError = getPhoneNumberValidationMessage(checkoutDeliveryAddress.contactNumber);
+        if (deliveryPhoneNumberError) {
+          throw new Error(deliveryPhoneNumberError);
         }
 
         if (!checkoutDeliveryAddress.streetAddress || !checkoutDeliveryAddress.city || !checkoutDeliveryAddress.province) {
@@ -475,7 +500,7 @@ const Checkout = () => {
 
       if (formData.paymentMethod === 'online') {
         if (!paymentStatus.configured) {
-          throw new Error('Error 503: Online payment is temporarily unavailable. Please choose cash or try again later.');
+          throw new Error('Online payment is temporarily unavailable. Please choose cash or try again later.');
         }
 
         const checkoutSession = await apiRequest('/api/payments/checkout-sessions', {
@@ -518,12 +543,11 @@ const Checkout = () => {
           throw new Error('PayMongo did not return a checkout reference.');
         }
 
-        for (const item of cartItems) {
-          await removeFromCart(item.id);
-        }
-        void refreshOrders();
+        // Once the session exists, cart cleanup must not interrupt payment or
+        // allow another submission to create a duplicate checkout.
         checkoutCompletedRef.current = true;
-        navigate(`/checkout/paymongo/success?reference=${encodeURIComponent(checkoutSession.referenceNumber)}&stage=payment-selection`);
+        await Promise.allSettled(cartItems.map((item) => removeFromCart(item.id)));
+        window.location.assign(checkoutSession.checkoutUrl);
         return;
       }
 
@@ -574,10 +598,13 @@ const Checkout = () => {
           .map((item) => `${item.productName} (${item.available} left, you selected ${item.requested})`)
           .join(', '));
       } else {
-        setSubmitError(error.message || 'Unable to place the order right now.');
+        setSubmitError(customerErrorMessage(error, 'Unable to place the order right now.'));
       }
     } finally {
-      setIsSubmitting(false);
+      submitInFlightRef.current = false;
+      if (!checkoutCompletedRef.current) {
+        setIsSubmitting(false);
+      }
     }
   };
 
@@ -649,10 +676,13 @@ const Checkout = () => {
             <div className="form-group">
               <label htmlFor="checkout-phone">Contact Number</label>
               <input
-                type="text"
+                type="tel"
                 id="checkout-phone"
-                  autoComplete="tel"
-                  name="phone"
+                autoComplete="tel-national"
+                inputMode="numeric"
+                pattern={PHILIPPINE_MOBILE_NUMBER_PATTERN_SOURCE}
+                title={PHONE_NUMBER_VALIDATION_MESSAGE}
+                name="phone"
                 className="text-input"
                 value={formData.phone}
                 onChange={handleChange}
@@ -759,8 +789,11 @@ const Checkout = () => {
                   <input
                     type="tel"
                     id="checkout-deliveryContactNumber"
-                  autoComplete="shipping tel"
-                  name="deliveryContactNumber"
+                    autoComplete="shipping tel"
+                    inputMode="numeric"
+                    pattern={PHILIPPINE_MOBILE_NUMBER_PATTERN_SOURCE}
+                    title={PHONE_NUMBER_VALIDATION_MESSAGE}
+                    name="deliveryContactNumber"
                     className="text-input"
                     value={formData.deliveryContactNumber}
                     onChange={handleChange}
@@ -935,15 +968,19 @@ const Checkout = () => {
                   checked={formData.paymentMethod === 'online'}
                   onChange={handleChange}
                   className="checkout-method-radio"
-                  disabled={!paymentStatus.configured}
+                  disabled={isPaymentStatusLoading || !paymentStatus.configured}
                 />
                 <CreditCard size={24} className="method-icon" style={{ color: '#3b82f6' }} />
                 <div className="method-details">
                   <span className="method-name">Pay Online</span>
                   <span className="method-desc">
-                    {paymentStatus.configured
-                      ? 'Generate your order reference instantly, then continue through PayMongo.'
-                      : 'Online payment is temporarily unavailable. Please choose cash or try again later.'}
+                    {isPaymentStatusLoading
+                      ? 'Checking online payment availability...'
+                      : paymentStatus.configured
+                      ? formData.deliveryMethod === 'delivery'
+                        ? 'Pay online for delivery. Your delivery details will be included with your order.'
+                        : 'Continue directly to PayMongo to complete your online payment.'
+                        : 'Online payment is temporarily unavailable. Please choose cash or try again later.'}
                   </span>
                 </div>
               </label>
@@ -969,6 +1006,13 @@ const Checkout = () => {
               </label>
             </div>
 
+            {formData.deliveryMethod === 'delivery' && formData.paymentMethod === 'online' && paymentStatus.configured && (
+              <div className="checkout-online-payment-note" role="status">
+                <CreditCard size={19} aria-hidden="true" />
+                <span>Your delivery details will be included when you continue to online payment.</span>
+              </div>
+            )}
+
             {formData.deliveryMethod === 'pickup' && formData.paymentMethod === 'online' && paymentStatus.configured && (
               <div
                 style={{
@@ -982,7 +1026,7 @@ const Checkout = () => {
                   lineHeight: 1.6,
                 }}
               >
-                Your Order ID and QR will appear right after you continue, before you leave for PayMongo payment.
+                Complete your payment through PayMongo. Your Order ID and QR will be available for pickup verification in your order details.
               </div>
             )}
 
@@ -1047,12 +1091,16 @@ const Checkout = () => {
               <span>Total</span>
               <span className="amount">{formatCurrency(total)}</span>
             </div>
-            <LoadingButton type="submit" form="customer-checkout-form" className="btn-primary place-order-btn" isLoading={isSubmitting} disabled={!canCheckout}>
-              {isShopSettingsLoading ? 'Checking hours' : shopSettingsError ? 'Hours unavailable' : !isShopOpen ? 'Shop closed' : formData.paymentMethod === 'online'
-                ? 'Review QR and Continue'
+            <LoadingButton type="submit" form="customer-checkout-form" className="btn-primary place-order-btn" isLoading={isSubmitting} disabled={!canCheckout || isPaymentStatusLoading}>
+              {isShopSettingsLoading ? 'Checking hours' : shopSettingsError ? 'Hours unavailable' : !isShopOpen ? 'Shop closed' : isOnlinePayment
+                ? 'Continue Online Payment'
                 : 'Place Order'}
             </LoadingButton>
-            <p className="checkout-helper-copy">Review your details and total before placing your order.</p>
+            <p className="checkout-helper-copy">
+              {isOnlinePayment
+                ? 'Review your delivery details and total, then continue to online payment.'
+                : 'Review your details and total before placing your order.'}
+            </p>
           </div>
         </div>
       </div>

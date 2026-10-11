@@ -1,6 +1,8 @@
 import { hasValidShopHours, isWithinOperatingHours } from './operatingHours.js';
 import { formatExpiryForCustomer, isExpired } from './expiry.js';
 import { PUBLIC_BUSINESS_INFO } from './publicBusinessInfo.js';
+import { availableAiProducts, formatAiProductList } from './aiProducts.js';
+import { AI_SECURITY_REFUSAL, guardCustomerAiReply, isRestrictedAiRequest } from '../../shared/customerAiPolicy.js';
 
 export const SUPPORT_FALLBACK = "Sorry, I don't have that information available right now. You can ask me about our products, prices, discounts, orders, location, contact information, delivery, payment, or account registration.";
 export const SUPPORT_INTENTS = ['owner', 'supplier', 'business_name', 'about_business', 'location', 'hours', 'contact', 'email', 'social_media', 'physical_store', 'services', 'discounts', 'promotions', 'signup', 'login', 'password_reset', 'guest_order', 'ordering', 'delivery', 'payment', 'order_status', 'products', 'pricing', 'availability', 'ingredients', 'nutrition', 'expiry', 'product_opinion', 'recommendation', 'greeting', 'thanks', 'help', 'unknown'];
@@ -18,7 +20,7 @@ export const normalizeHistory = (history) => (Array.isArray(history) ? history :
   .filter((entry) => entry && ['user', 'assistant'].includes(entry.role) && typeof entry.content === 'string' && entry.content.trim())
   .slice(-10).map((entry) => ({ role: entry.role, content: entry.content.trim().slice(0, 1500) }));
 
-const visibleProducts = (products = []) => products.filter((product) => product.availability !== 'hidden');
+const visibleProducts = availableAiProducts;
 const matchesProduct = (message, products) => {
   const text = normalize(message);
   const exact = products.filter((product) => {
@@ -33,11 +35,12 @@ const matchesProduct = (message, products) => {
     .some((word) => word.length > 3 && !['classic', 'original', 'special', 'sweet', 'dessert', 'with'].includes(word) && words.has(word)));
 };
 
-export const detectSupportIntent = (message, { history = [], products = [], productId } = {}) => {
+export const detectSupportIntent = (message, { history = [], products = [], productId, now = new Date() } = {}) => {
+  if (isRestrictedAiRequest(message)) return { intents: ['restricted'] };
   const text = normalize(message);
   const intents = [];
   const add = (intent, matches) => { if (matches && !intents.includes(intent)) intents.push(intent); };
-  const catalog = visibleProducts(products);
+  const catalog = visibleProducts(products, now);
   const matches = matchesProduct(text, catalog);
   const account = /\b(account|sign\s*up|signup|register|registration|login|log\s*in|sign\s*in|password|passwrod)\b/.test(text);
   const discount = /\b(discount|discounts|bulk|wholesale|large orders?|buy \d+ or more|percent off|cheaper|price break|save money)\b/.test(text);
@@ -76,11 +79,15 @@ export const detectSupportIntent = (message, { history = [], products = [], prod
   const asksForPrice = /\b(price|prices|pricing|cost|magkano)\b/.test(text)
     || (!asksForCalories && /\bhow much\b/.test(text));
   add('pricing', !discount && !intents.some((intent) => ['delivery', 'payment', 'promotions'].includes(intent)) && asksForPrice);
-  add('availability', !discount && !intents.some((intent) => ['hours', 'supplier', 'owner', 'signup', 'contact', 'promotions', 'payment', 'delivery'].includes(intent)) && /\b(stock|availability|available|sold out|how many.*(?:order|buy|get)|in stock|left|remaining)\b/.test(text) && !/\b(promo|promotions?|discounts?|services?)\b/.test(text));
+  add('availability', !discount && !intents.some((intent) => ['hours', 'supplier', 'owner', 'signup', 'contact', 'promotions', 'payment', 'delivery'].includes(intent)) && /\b(stock|availability|available|unavailable|hidden|archived|removed|expired|discontinued|sold out|how many.*(?:order|buy|get)|in stock|left|remaining)\b/.test(text) && !/\b(promo|promotions?|discounts?|services?)\b/.test(text));
   const productOpinion = /\b(?:is|are) (?:this|that|it|these|those) (?:any )?(?:good|great|tasty|delicious|nice|worth it|popular)\b|\b(?:would|do) you recommend (?:this|that|it|these|those)\b/.test(text);
   add('product_opinion', productOpinion);
   add('recommendation', !productOpinion && /\b(?:recommend(?:ation|ations)?|suggest(?:ion|ions)?|best seller|bestseller|popular|favorite|favourite|what should i (?:try|buy|get)|what can you recommend|which (?:dessert|product) should i (?:try|buy|get|choose)|what do you think i should (?:try|buy|get)|craving)\b/.test(text));
-  add('products', /\b(?:what (?:products|desserts) do you sell|show (?:me )?(?:the |your )?menu|list (?:your |the )?(?:products|desserts))\b/.test(text) || (/\b(menu|products?|desserts?)\b/.test(text) && /\b(sell|list|what|which|show|have|tell)\b/.test(text) && !intents.length));
+  add('products', /\b(?:what (?:products|desserts) do you sell|show (?:me )?(?:the |your )?menu|list (?:your |the )?(?:products|desserts))\b/.test(text) || (!intents.length && (
+    (/\b(menu|catalog|products?|desserts?|flavou?rs?|selection)\b/.test(text) && /\b(sell|list|what|which|show|have|offer|buy|order|available|tell)\b/.test(text))
+    || /\b(?:do you (?:have|sell)|what (?:can i (?:buy|order)|do you (?:have|sell)))\b/.test(text)
+    || /^(?:the |your )?(?:menu|catalog|products|desserts|flavou?rs|selection)[?.! ]*$/.test(text)
+  )));
 
   let targetId = matches.length === 1 ? matches[0].id : undefined;
   if (!targetId && intents.includes('recommendation') && catalog.some((item) => String(item.id) === String(productId))) {
@@ -88,7 +95,7 @@ export const detectSupportIntent = (message, { history = [], products = [], prod
   }
   const followup = /^(?:and |also |what about|how about|then |it\b|that\b|this\b)/.test(text) || /\b(it|that|this|those|them|its)\b/.test(text);
   const prior = normalizeHistory(history).filter((entry) => entry.role === 'user').slice(-5);
-  const previous = prior.length ? detectSupportIntent(prior.at(-1).content, { products: catalog, productId }) : null;
+  const previous = prior.length ? detectSupportIntent(prior.at(-1).content, { products: catalog, productId, now }) : null;
   if (!intents.length && followup && previous) {
     const contextIntents = previous.intents.filter((intent) => ['discounts', 'promotions', ...PRODUCT_INTENTS].includes(intent));
     if (contextIntents.length && (matches.length || /\b(it|that|this|those|them|\d+|five|ten|more|less)\b/.test(text))) intents.push(...contextIntents);
@@ -103,7 +110,7 @@ export const detectSupportIntent = (message, { history = [], products = [], prod
         const candidates = matchesProduct(entry.content, catalog);
         if (candidates.length === 1) { targetId = candidates[0].id; break; }
         // Explicit topic changes stop stale product context from leaking back.
-        const previousTopic = detectSupportIntent(entry.content, { products: catalog });
+        const previousTopic = detectSupportIntent(entry.content, { products: catalog, now });
         if (previousTopic.intents.some((intent) => !PRODUCT_INTENTS.has(intent) && !['unknown', 'greeting', 'thanks'].includes(intent))) break;
       }
       if (!targetId && catalog.some((product) => String(product.id) === String(productId))) targetId = productId;
@@ -127,20 +134,24 @@ export const validateSemanticIntent = (value, products = []) => {
 };
 
 const money = (value) => `PHP ${Number(value).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-const productLabel = (product) => `${product.name} (${Number.isFinite(product.price) ? money(product.price) : 'price unavailable'})`;
 
 export const buildSupportReply = (plan, knowledge = {}, { now = new Date() } = {}) => {
   const shop = knowledge.shop;
   const support = shop?.customerSupport || {};
-  const products = visibleProducts(knowledge.products || []);
+  const products = visibleProducts(knowledge.products || [], now);
   const product = products.find((item) => String(item.id) === String(plan.productId));
-  const available = (item) => item.stock > 0 && !['expired', 'out of stock', 'unavailable'].includes(item.availability) && !isExpired(item.expirationAt, now);
   const missing = (topic) => `Sorry, ${topic} information is currently unavailable. Please contact the shop for confirmation.`;
   const needProduct = () => knowledge.productsLoaded === false ? missing('product') : 'Which dessert do you mean? Please tell me its name so I can check.';
+  if (plan.intents?.some((intent) => ['restricted', 'supplier'].includes(intent))) return AI_SECURITY_REFUSAL;
+  if (plan.intents?.some((intent) => ['products', 'availability', 'recommendation'].includes(intent))) {
+    if (knowledge.productsLoaded === false) return '- Product information is currently unavailable. Please try again shortly.';
+    const choices = product ? [product, ...products.filter((item) => item !== product)] : products;
+    const menu = plan.intents.includes('recommendation') ? choices.slice(0, 3) : product ? [product] : choices;
+    return formatAiProductList(menu) || '- No products are available right now.';
+  }
   const replyFor = (intent) => {
     switch (intent) {
       case 'owner': return clean(support.owner) || missing('owner');
-      case 'supplier': return clean(support.supplier) || missing('supplier');
       case 'business_name': return clean(shop?.shopName) || missing('business name');
       case 'about_business': return PUBLIC_BUSINESS_INFO.about;
       case 'location': return clean(shop?.address) ? `We are located at ${shop.address}.` : missing('location');
@@ -163,21 +174,13 @@ export const buildSupportReply = (plan, knowledge = {}, { now = new Date() } = {
       case 'order_status': return 'To check your order, sign in and open My Orders. Open the order for its status and available actions. I cannot access your personal order details in this chat; contact the shop if you need help with that order.';
       case 'delivery': return `You can choose pickup or delivery at checkout. ${Number.isFinite(knowledge.deliveryFee) ? `The current delivery fee is ${money(knowledge.deliveryFee)}. ` : ''}For delivery, provide the recipient, contact number, address, and exact map pin; checkout confirms delivery eligibility and the total before you submit.`;
       case 'payment': return `Cash is supported for pickup and cash on delivery. ${knowledge.onlinePaymentConfigured === true ? `Online payment options currently include ${(knowledge.paymentMethods || []).join(', ') || 'the methods shown at checkout'}.` : knowledge.onlinePaymentConfigured === false ? 'Online payment is not currently configured; check the available methods at checkout.' : 'Please check checkout for the currently available online payment methods.'}`;
-      case 'products': {
-        if (product) return `${product.name}${clean(product.description) ? `: ${product.description}` : Number.isFinite(product.price) ? ` costs ${money(product.price)}.` : ': price information is currently unavailable.'}`;
-        if (knowledge.productsLoaded === false) return missing('product');
-        const menu = products.filter(available).slice(0, 8);
-        return menu.length ? `Available desserts include ${menu.map(productLabel).join(', ')}. See Products for the full menu and current stock.` : 'There are no available desserts in the current menu right now. Please check again later.';
-      }
       case 'pricing': return product ? (Number.isFinite(product.price) ? `${product.name} costs ${money(product.price)} per item.` : missing(`price for ${product.name}`)) : needProduct();
-      case 'availability': return product ? (available(product) ? `${product.name} currently has ${product.stock} available. You can order up to the available stock; checkout checks stock and shop hours again.` : `${product.name} is currently unavailable to order.`) : needProduct();
       case 'nutrition': {
         if (!product) return 'Which dessert would you like calorie information for?';
         return 'I can\'t estimate calories for **' + product.name + '** right now. Please try again shortly.';
       }
       case 'product_opinion': {
         if (!product) return needProduct();
-        if (!available(product)) return `${product.name} is currently unavailable to order. I can still share its menu description if you like.`;
         const details = clean(product.description);
         if (!details) return `${product.name} is on our menu${Number.isFinite(product.price) ? ` for ${money(product.price)}` : ''}. I don't have a detailed tasting description, but tell me what flavors you like and I can help you choose.`;
         return `Our menu describes ${product.name} this way: ${details} If that sounds like the kind of dessert you enjoy, it could be a good choice${Number.isFinite(product.price) ? ` at ${money(product.price)}` : ''}.`;
@@ -192,25 +195,11 @@ export const buildSupportReply = (plan, knowledge = {}, { now = new Date() } = {
         return `${publishedDetails}Sorry, a complete verified ingredient and allergen list for ${product.name} is currently unavailable. Please contact the shop before ordering if you have an allergy or dietary requirement.`;
       }
       case 'expiry': return product ? (product.expirationAt ? `${product.name} ${isExpired(product.expirationAt, now) ? 'expired' : 'expires'} on ${formatExpiryForCustomer(product.expirationAt)} PHT.${isExpired(product.expirationAt, now) ? ' It is not available to order.' : ''}` : missing(`expiry for ${product.name}`)) : needProduct();
-      case 'recommendation': {
-        if (knowledge.productsLoaded === false) return missing('product');
-        const choices = products.filter(available);
-        if (!choices.length) return 'There are no available desserts to recommend right now.';
-        const viewedProduct = product && available(product) ? product : null;
-        const alternatives = choices.filter((item) => !viewedProduct || String(item.id) !== String(viewedProduct.id))
-          .slice(0, viewedProduct ? 2 : 3);
-        const describe = (item) => `- **${item.name}** — ${Number.isFinite(item.price) ? money(item.price) : 'price unavailable'}${clean(item.description) ? `\n  ${clean(item.description)}` : ''}`;
-        if (viewedProduct) {
-          const options = [viewedProduct, ...alternatives].map(describe).join('\n\n');
-          return `Since you're viewing **${viewedProduct.name}**, here are a few good options:\n\n${options}\n\nTell me if you prefer chocolate, creamy, or fruity desserts and I can narrow it down.`;
-        }
-        return `Here are some available desserts to try:\n\n${choices.slice(0, 3).map(describe).join('\n\n')}\n\nTell me if you prefer chocolate, creamy, or fruity desserts and I can narrow it down.`;
-      }
       case 'greeting': return "Hi! I'm your V&G assistant. Ask me about products, prices, discounts, orders, location, hours, or account registration.";
       case 'thanks': return "You're welcome! I'm here if you need more help with the shop.";
-      case 'help': return 'I can help with products, prices, stock, discounts, business information, signup, ordering, delivery, and payment. What would you like to know?';
+      case 'help': return 'I can help with products, prices, availability, discounts, business information, signup, ordering, delivery, and payment. What would you like to know?';
       default: return SUPPORT_FALLBACK;
     }
   };
-  return [...new Set((plan.intents || ['unknown']).slice(0, 4).map(replyFor))].join('\n\n');
+  return guardCustomerAiReply([...new Set((plan.intents || ['unknown']).slice(0, 4).map(replyFor))].join('\n\n'));
 };

@@ -284,6 +284,10 @@ const AdminReports = () => {
     ? summaryRows.filter((row) => row.itemName.toLowerCase().includes(normalizedSearch))
     : summaryRows;
   const totals = getSummaryTotals(summaryRows);
+  const profitSummary = userRole === 'admin' ? filteredReports.reduce((total, report) => ({
+    estimatedGrossProfit: total.estimatedGrossProfit + (Number(report.estimatedGrossProfit) || 0),
+    uncostedQuantity: total.uncostedQuantity + (report.uncostedQuantity ?? report.totalQuantity ?? 0),
+  }), { estimatedGrossProfit: 0, uncostedQuantity: 0 }) : null;
   const topProducts = [...summaryRows]
     .sort((left, right) => right.quantity - left.quantity || right.totalSales - left.totalSales)
     .map((row, index) => ({
@@ -403,6 +407,7 @@ const AdminReports = () => {
       reportCount: filteredReports.length,
       returnRows: exportReturnRows,
       returnTotal: totalReturns,
+      profitSummary,
     });
   };
 
@@ -424,6 +429,7 @@ const AdminReports = () => {
       submittedReports: filteredReports,
       returnRows: exportReturnRows,
       returnTotal: totalReturns,
+      profitSummary,
     });
 
     if (!opened) {
@@ -573,6 +579,12 @@ const AdminReports = () => {
       </section>
 
       <div className="generated-report-meta">
+        {profitSummary && <span className="sales-report-profit" aria-label="Admin profit report">
+          <Wallet size={16} /> Estimated gross profit: <strong>{formatPeso(profitSummary.estimatedGrossProfit)}</strong>
+          <small>Sale revenue less recorded product costs. {profitSummary.uncostedQuantity > 0
+            ? `${profitSummary.uncostedQuantity} sold unit(s) excluded because their cost was not recorded.`
+            : 'All sold units have recorded costs.'}</small>
+        </span>}
         <span><Calendar size={16} /> {periodLabel}: {rangeLabel}</span>
         <span>{staffLabel}</span>
         <span>Generated {formatDateTime(generatedAt)}</span>

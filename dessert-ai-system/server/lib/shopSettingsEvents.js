@@ -1,4 +1,4 @@
-import { buildShopSettingsStatus } from './shopSettings.js';
+import { buildShopSettingsStatus, publicShopSettings } from './shopSettings.js';
 
 // One database poll per server instance, regardless of the number of open tabs.
 // PATCH publishes immediately; polling catches updates made on another instance.
@@ -55,7 +55,7 @@ export const createShopSettingsEvents = ({
     if (Number.isFinite(currentVersion) && (!Number.isFinite(incomingVersion) || incomingVersion < currentVersion)) {
       return;
     }
-    const status = buildShopSettingsStatus(settings, now());
+    const status = buildShopSettingsStatus(publicShopSettings(settings), now());
     const signature = JSON.stringify({ ...settings, isOpen: status.isOpen });
     latestSettings = settings;
     revision += 1;
@@ -91,7 +91,7 @@ export const createShopSettingsEvents = ({
   const subscribe = (client, settings) => {
     publish(settings);
     clients.add(client);
-    write(client, `retry: 3000\n${event('shop-settings', buildShopSettingsStatus(latestSettings, now()))}`);
+    write(client, `retry: 3000\n${event('shop-settings', buildShopSettingsStatus(publicShopSettings(latestSettings), now()))}`);
     if (clients.size > 0 && !pollTimer) {
       pollTimer = schedule(() => void refresh(), pollIntervalMs);
       heartbeatTimer = schedule(() => {

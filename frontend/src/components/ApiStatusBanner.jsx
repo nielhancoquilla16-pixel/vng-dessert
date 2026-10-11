@@ -54,7 +54,7 @@ const ApiStatusBanner = () => {
     <div className="api-status-banner" role="alert">
       <AlertTriangle size={20} aria-hidden="true" />
       <div className="api-status-banner-copy">
-        <strong>Error {status.code || 503}</strong>
+        <strong>Service temporarily unavailable</strong>
         <span>{status.message}</span>
       </div>
       <button type="button" className="api-status-retry" onClick={() => window.location.reload()}>

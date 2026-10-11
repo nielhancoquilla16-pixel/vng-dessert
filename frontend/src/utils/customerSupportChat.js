@@ -1,8 +1,13 @@
+import { AI_SECURITY_REFUSAL, isRestrictedAiConversation } from '../../../dessert-ai-system/shared/customerAiPolicy.js';
+
 const MAX_HISTORY_MESSAGES = 12;
 const MAX_HISTORY_CONTENT_LENGTH = 2000;
 
 export const CUSTOMER_SUPPORT_FALLBACK = "Sorry, I don't have that information available right now. You can ask me about our products, prices, discounts, orders, location, contact information, delivery, payment, or account registration.";
 export const CUSTOMER_SUPPORT_GREETING = "Hi! I'm your dessert assistant. I can help with products, prices, orders, discounts, delivery, payments, account registration, and questions about our shop.";
+export const getChatSecurityRefusal = (question, history = []) => (
+  isRestrictedAiConversation(question, normalizeChatHistory(history)) ? AI_SECURITY_REFUSAL : ''
+);
 
 const OPERATING_HOURS_QUESTION = /\b(?:business|store|shop|operating|opening|closing)\s+hours?\b|\b(?:your|the)\s+hours\b|\b(?:what time|when)\s+(?:do you|does (?:the )?(?:shop|store))\s+(?:open|close)\b|\bare you (?:open|closed)\b|\b(?:shop|store)\s+(?:open|closed)\b|\buntil when\b.*\border\b/i;
 const OTHER_SUPPORT_TOPIC = /\b(?:account|signup|register|login|password|supplier|owner|discount|promotion|delivery|product)\b|\bsign\s*up\b|\blog\s*in\b/i;
@@ -28,6 +33,7 @@ export const normalizeChatHistory = (messages = []) => {
 
 export const createChatFallbackReply = (question, current = {}) => {
   const text = String(question || '');
+  if (isRestrictedAiConversation(text)) return AI_SECURITY_REFUSAL;
   if (OPERATING_HOURS_QUESTION.test(text) && !OTHER_SUPPORT_TOPIC.test(text)) {
     if (current.isShopSettingsLoading || current.shopSettingsError || !current.shopSettings?.openingTime || !current.shopSettings?.closingTime || !current.operatingHoursLabel) {
       return "I cannot confirm the shop's current operating hours right now. Please check the shop information again shortly or contact the shop.";

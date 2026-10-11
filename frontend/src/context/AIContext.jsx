@@ -3,7 +3,8 @@ import React, { createContext, useContext, useState, useCallback, useEffect, use
 import { useProducts } from './ProductContext';
 import { useShopSettings } from './ShopSettingsContext';
 import { apiRequest } from '../lib/api';
-import { createChatFallbackReply, normalizeChatHistory } from '../utils/customerSupportChat';
+import { createChatFallbackReply, getChatSecurityRefusal, normalizeChatHistory } from '../utils/customerSupportChat';
+import { getCustomerProducts } from '../utils/customerProducts';
 
 const AIContext = createContext();
 const AI_REQUEST_TIMEOUT_MS = 12000;
@@ -32,6 +33,8 @@ export const AIProvider = ({ children }) => {
   ), []);
 
   const requestAIReply = useCallback(async (message, { history = [], productId } = {}) => {
+    const refusal = getChatSecurityRefusal(message, history);
+    if (refusal) return refusal;
     const controller = new AbortController();
     const timeoutId = window.setTimeout(() => controller.abort(), AI_REQUEST_TIMEOUT_MS);
 
@@ -55,12 +58,12 @@ export const AIProvider = ({ children }) => {
   }, []);
 
   const getSmartRecommendations = useCallback((currentProductId) => {
-    if (!products) return [];
+    const customerProducts = getCustomerProducts(products);
 
-    const current = products.find((p) => p.id === currentProductId);
-    if (!current) return products.slice(0, 3);
+    const current = customerProducts.find((p) => p.id === currentProductId);
+    if (!current) return customerProducts.slice(0, 3);
 
-    return products
+    return customerProducts
       .filter((p) => p.id !== currentProductId && (p.category === current.category || p.status === 'active'))
       .sort(() => 0.5 - Math.random())
       .slice(0, 3);

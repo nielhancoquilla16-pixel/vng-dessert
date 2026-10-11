@@ -6,6 +6,7 @@ import LocationPinPicker from '../components/LocationPinPicker';
 import { OrderedItemsCard, OrderFeedbackReceiptCard, OrderItemThumbnail, OrderQrCard, PaymentSummaryCard } from '../components/AdminOrderCards';
 import { getItemSubtotal, getOrderPaymentSummary } from '../utils/adminOrderDetails';
 import { formatCurrency } from '../utils/currency';
+import { getPhoneNumberValidationMessage } from '../utils/phoneNumber';
 import {
   closeLalamoveWindow,
   getLalamoveLaunchUrl,
@@ -815,7 +816,7 @@ const AdminOrders = () => {
     }
 
     if (!isLalamoveReady) {
-      const message = 'Error 503: Delivery booking is temporarily unavailable. Please check the store pickup details and try again later.';
+      const message = 'Delivery booking is temporarily unavailable. Please check the store pickup details and try again later.';
       setPageNotice('');
       setPageError(message);
       setLalamoveFeedback({ orderId: selectedOrder.id, type: 'error', message });
@@ -827,6 +828,14 @@ const AdminOrders = () => {
       setPageNotice('');
       setPageError(message);
       setLalamoveFeedback({ orderId: selectedOrder.id, type: 'error', message });
+      return;
+    }
+
+    const contactNumberError = getPhoneNumberValidationMessage(lalamoveDraft.contactNumber);
+    if (contactNumberError) {
+      setPageNotice('');
+      setPageError(contactNumberError);
+      setLalamoveFeedback({ orderId: selectedOrder.id, type: 'error', message: contactNumberError });
       return;
     }
 
@@ -1031,7 +1040,7 @@ const AdminOrders = () => {
           <div className="relative">
             <Search
               size={20}
-              className="pointer-events-none absolute left-[18px] top-1/2 -translate-y-1/2 text-slate-400"
+              className="text-slate-400"
             />
             <input
               type="text"

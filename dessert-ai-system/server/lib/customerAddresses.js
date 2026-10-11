@@ -1,3 +1,5 @@
+import { getPhoneNumberValidationMessage } from './phoneNumber.js';
+
 const ADDRESS_LABELS = new Set(['Home', 'Work', 'Other']);
 
 const normalizeText = (value = '') => String(value ?? '').trim();
@@ -5,6 +7,15 @@ const normalizeText = (value = '') => String(value ?? '').trim();
 const firstText = (...values) => (
   values.map((value) => normalizeText(value)).find(Boolean) || ''
 );
+
+const firstRawText = (...values) => {
+  for (const value of values) {
+    if (value == null) continue;
+    const text = String(value);
+    if (text !== '') return text;
+  }
+  return '';
+};
 
 const normalizeCoordinate = (value) => {
   if (typeof value !== 'number' && typeof value !== 'string') return null;
@@ -43,7 +54,7 @@ export const mapCustomerAddress = (row = {}) => ({
 export const normalizeCustomerAddressInput = (input = {}) => {
   const label = normalizeLabel(input.label);
   const recipientName = firstText(input.recipientName, input.recipient_name);
-  const phoneNumber = firstText(input.phoneNumber, input.phone_number, input.contactNumber, input.contact_number);
+  const phoneNumber = firstRawText(input.phoneNumber, input.phone_number, input.contactNumber, input.contact_number);
   const streetAddress = firstText(input.streetAddress, input.street_address);
   const barangay = firstText(input.barangay);
   const city = firstText(input.city);
@@ -80,6 +91,11 @@ export const getCustomerAddressValidationError = (address = {}) => {
 
   if (!normalizeText(address.phone_number)) {
     return 'Recipient contact number is required.';
+  }
+
+  const phoneNumberError = getPhoneNumberValidationMessage(address.phone_number);
+  if (phoneNumberError) {
+    return phoneNumberError;
   }
 
   if (!normalizeText(address.street_address) || !normalizeText(address.city) || !normalizeText(address.province)) {

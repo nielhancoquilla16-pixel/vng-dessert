@@ -159,6 +159,7 @@ router.put("/me", requireAuth, async (req, res, next) => {
           userId: req.authUser.id,
           requestBaseUrl: getRequestBaseUrl(req),
           previousValue: currentAvatarUrl,
+          supabase,
         })
       : currentAvatarUrl;
 
@@ -182,6 +183,9 @@ router.put("/me", requireAuth, async (req, res, next) => {
     });
 
     if (authUpdateError) {
+      if (hasAvatarUpdate && avatarUrl !== currentAvatarUrl) {
+        await removeManagedProfileImage(avatarUrl, { supabase, userId: req.authUser.id });
+      }
       throw authUpdateError;
     }
 
@@ -214,6 +218,9 @@ router.put("/me", requireAuth, async (req, res, next) => {
     }
 
     const updatedAuthUser = await getAuthUserById(supabase, req.authUser.id);
+    if (hasAvatarUpdate && avatarUrl !== currentAvatarUrl) {
+      await removeManagedProfileImage(currentAvatarUrl, { supabase, userId: req.authUser.id, allowAnyOwner: profileRole === "admin" });
+    }
     res.json(mapProfile(data, updatedAuthUser || {
       ...currentAuthUser,
       ...req.authUser,
@@ -592,12 +599,16 @@ router.post("/staff", requireAuth, requireRole("admin"), async (req, res, next) 
       userId: provisionalUserId,
       requestBaseUrl: getRequestBaseUrl(req),
       previousValue: "",
+      supabase,
     });
 
     const { data: createdUser, error: createError } = await supabase.auth.admin.createUser({
+      // Use the same owner ID for the account and its uploaded avatar.
+      id: provisionalUserId,
       email: normalizedEmail,
       password,
       email_confirm: true,
+      app_metadata: { provisioned_by_backend: true, application_role: role },
       user_metadata: {
         username: normalizedUsername,
         full_name: full_name || "",
@@ -608,6 +619,7 @@ router.post("/staff", requireAuth, requireRole("admin"), async (req, res, next) 
     });
 
     if (createError) {
+      await removeManagedProfileImage(avatarUrl, { supabase, userId: provisionalUserId });
       throw createError;
     }
 
@@ -731,7 +743,7 @@ router.delete("/staff/:id", requireAuth, requireRole("admin"), async (req, res, 
     }
 
     if (avatarUrl) {
-      await removeManagedProfileImage(avatarUrl);
+      await removeManagedProfileImage(avatarUrl, { supabase, userId: req.params.id, allowAnyOwner: true });
     }
 
     await writeAuditLog(supabase, req, {
@@ -787,13 +799,19 @@ router.put("/staff/:id", requireAuth, requireRole("admin"), async (req, res, nex
     const currentAuthUser = await getAuthUserById(supabase, req.params.id);
     const currentAvatarUrl = getProfileAvatarUrl(currentAuthUser);
     const hasAvatarUpdate = Object.prototype.hasOwnProperty.call(req.body || {}, "avatar_url");
-    
+
+    if (password) {
+      const passwordValidation = validatePasswordPolicy(password);
+      if (!passwordValidation.valid) return res.status(400).json({ error: passwordValidation.message });
+    }
+
     const avatarUrl = hasAvatarUpdate
       ? await resolveProfileImageValue({
           imageInput: avatar_url,
           userId: req.params.id,
           requestBaseUrl: getRequestBaseUrl(req),
           previousValue: currentAvatarUrl,
+          supabase,
         })
       : currentAvatarUrl;
 
@@ -811,11 +829,6 @@ router.put("/staff/:id", requireAuth, requireRole("admin"), async (req, res, nex
 
     // Add password update if provided
     if (password) {
-      const passwordValidation = validatePasswordPolicy(password);
-      if (!passwordValidation.valid) {
-        return res.status(400).json({ error: passwordValidation.message });
-      }
-
       authUpdateData.password = password;
     }
 
@@ -825,6 +838,9 @@ router.put("/staff/:id", requireAuth, requireRole("admin"), async (req, res, nex
     );
 
     if (authUpdateError) {
+      if (hasAvatarUpdate && avatarUrl !== currentAvatarUrl) {
+        await removeManagedProfileImage(avatarUrl, { supabase, userId: req.params.id });
+      }
       throw authUpdateError;
     }
 
@@ -864,6 +880,9 @@ router.put("/staff/:id", requireAuth, requireRole("admin"), async (req, res, nex
     });
 
     const updatedAuthUser = await getAuthUserById(supabase, req.params.id);
+    if (hasAvatarUpdate && avatarUrl !== currentAvatarUrl) {
+      await removeManagedProfileImage(currentAvatarUrl, { supabase, userId: req.params.id, allowAnyOwner: true });
+    }
     res.json(mapProfile(updatedProfile, updatedAuthUser || currentAuthUser));
   } catch (error) {
     next(error);

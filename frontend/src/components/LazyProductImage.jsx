@@ -18,18 +18,16 @@ const buildSupabaseImageSources = (source) => {
       const variant = new URL(originalUrl);
       variant.pathname = transformPath;
       variant.searchParams.set('width', String(width));
-      variant.searchParams.set('height', String(width));
-      variant.searchParams.set('resize', 'cover');
       variant.searchParams.set('quality', '75');
+      variant.searchParams.set('resize', 'contain');
       return `${variant.toString()} ${width}w`;
     });
 
     const defaultSource = new URL(originalUrl);
     defaultSource.pathname = transformPath;
     defaultSource.searchParams.set('width', '480');
-    defaultSource.searchParams.set('height', '480');
-    defaultSource.searchParams.set('resize', 'cover');
     defaultSource.searchParams.set('quality', '75');
+    defaultSource.searchParams.set('resize', 'contain');
 
     return {
       srcSet: variants.join(', '),
@@ -79,6 +77,8 @@ const LazyProductImage = ({ src, alt }) => {
   };
 
   const displayFallback = !src || hasFailed;
+  const imageSource = useOriginal ? src : (responsiveSources?.defaultSrc || src);
+  const imageSrcSet = !useOriginal ? responsiveSources?.srcSet : undefined;
 
   return (
     <span className="lazy-product-media" ref={mediaRef}>
@@ -94,12 +94,10 @@ const LazyProductImage = ({ src, alt }) => {
       {src && !hasFailed && (
         <img
           className={`shop-product-image${isLoaded ? ' is-loaded' : ''}`}
-          src={shouldLoad ? (useOriginal ? src : (responsiveSources?.defaultSrc || src)) : undefined}
-          srcSet={shouldLoad && !useOriginal ? responsiveSources?.srcSet : undefined}
+          src={shouldLoad ? imageSource : undefined}
+          srcSet={shouldLoad ? imageSrcSet : undefined}
           sizes="(max-width: 349px) 100vw, (max-width: 699px) 50vw, (max-width: 1099px) 33vw, 25vw"
           alt={alt}
-          width="720"
-          height="720"
           loading="lazy"
           decoding="async"
           fetchPriority="low"

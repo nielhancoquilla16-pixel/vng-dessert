@@ -1,7 +1,9 @@
 import express from 'express';
 import { getSupabaseAdmin, getSupabaseAnon, hasSupabaseAdminConfig } from '../lib/supabaseAdmin.js';
-import { requireAuth } from '../middleware/requireAuth.js';
+import { requireAuth, optionalAuth } from '../middleware/requireAuth.js';
 import { requireRole } from '../middleware/requireRole.js';
+import { getProductPricing } from '../../shared/productPricing.js';
+import { getPublicDiscountFields, hydrateAdminProductCosts, saveProductCost, validateProductPricingPayload } from '../lib/productFinance.js';
 import { sanitizeInventoryPayload } from '../lib/inventoryUtils.js';
 import { removeManagedProductImage, resolveProductImageValue } from '../lib/productImages.js';
 import {
@@ -57,8 +59,9 @@ const getDefaultExpiryDate = () => {
 const parsePrice = (value) => {
   const text = String(value ?? '').trim();
   const parsed = Number(text);
-  if (!text || !Number.isFinite(parsed) || parsed < 0 || !/^\d+(?:\.\d{1,2})?$/.test(text)) {
-    const error = new Error('Price must be a non-negative number with up to two decimal places.');
+  if (!text || !Number.isSafeInteger(parsed) || parsed < 0 || !/^\d+$/.test(text)) {
+    const error = new Error('Price must be a whole number of pesos (0 or more).');
+    error.publicMessage = error.message;
     error.status = 400;
     throw error;
   }
@@ -214,7 +217,8 @@ const mapProduct = (row) => {
     id: row.id,
     productName: row.product_name,
     description: row.description,
-    price: Number(row.price) || 0,
+    price: getProductPricing(row).regularPrice,
+    ...getPublicDiscountFields(row),
     category: row.category,
     stockQuantity: Number(row.stock_quantity) || 0,
     availability: row.availability === 'hidden'
@@ -230,18 +234,6 @@ const mapProduct = (row) => {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
-};
-
-const refreshExpiredProductAvailability = async (supabase) => {
-  const { error } = await supabase
-    .from('products')
-    .update({ availability: 'expired' })
-    .lte('expiration_at', new Date().toISOString())
-    .in('availability', ['available', 'out of stock']);
-
-  if (error) {
-    throw error;
-  }
 };
 
 const mapProductRecipeItem = (row) => ({
@@ -525,12 +517,11 @@ const getProductsClient = () => (
     : getSupabaseAnon()
 );
 
-router.get('/', async (req, res, next) => {
+router.get('/', optionalAuth, async (req, res, next) => {
   try {
     const supabase = getProductsClient();
-    if (hasSupabaseAdminConfig()) {
-      await refreshExpiredProductAvailability(getSupabaseAdmin());
-    }
+    // mapProduct computes expiry at read time. Keep listing products read-only:
+    // an UPDATE here fires inventory sync triggers and competes with order writes.
     const { data, error } = await supabase
       .from('products')
       .select('*')
@@ -540,7 +531,9 @@ router.get('/', async (req, res, next) => {
       throw error;
     }
 
-    res.json((data || []).map(mapProduct));
+    const isStaff = ['admin', 'staff'].includes(req.profile?.role);
+    const products = (data || []).filter((row) => isStaff || row.availability !== 'hidden').map(mapProduct);
+    res.json(await hydrateAdminProductCosts(supabase, products, req.profile?.role));
   } catch (error) {
     next(error);
   }
@@ -615,7 +608,7 @@ router.get('/recipes', requireAuth, requireRole('admin', 'staff'), async (req, r
   }
 });
 
-router.get('/:id', async (req, res, next) => {
+router.get('/:id', optionalAuth, async (req, res, next) => {
   try {
     if (!isUuid(req.params.id)) {
       return res.status(404).json({ error: 'Product not found.' });
@@ -632,11 +625,12 @@ router.get('/:id', async (req, res, next) => {
       throw error;
     }
 
-    if (!data) {
+    if (!data || (data.availability === 'hidden' && !['admin', 'staff'].includes(req.profile?.role))) {
       return res.status(404).json({ error: 'Product not found.' });
     }
 
-    res.json(mapProduct(data));
+    const [product] = await hydrateAdminProductCosts(supabase, [mapProduct(data)], req.profile?.role);
+    res.json(product);
   } catch (error) {
     next(error);
   }
@@ -644,6 +638,10 @@ router.get('/:id', async (req, res, next) => {
 
 router.post('/', requireAuth, requireRole('admin', 'staff'), async (req, res, next) => {
   try {
+    if (req.profile?.role !== 'admin' && ('cost_price' in req.body || 'costPrice' in req.body)) {
+      return res.status(403).json({ error: 'Only admins can manage cost prices.' });
+    }
+    const { cost_price: costPrice, ...pricingUpdates } = validateProductPricingPayload(req.body);
     const {
       product_name,
       productName,
@@ -675,7 +673,7 @@ router.post('/', requireAuth, requireRole('admin', 'staff'), async (req, res, ne
       expirationDate: resolvedExpirationDate,
       expirationTime: expiration_time || expirationTime,
     });
-    if (!resolvedProductName || !category) {
+    if (!normalizeText(resolvedProductName) || !normalizeText(category)) {
       return res.status(400).json({ error: 'product_name and category are required.' });
     }
 
@@ -699,8 +697,9 @@ router.post('/', requireAuth, requireRole('admin', 'staff'), async (req, res, ne
           product_name: resolvedProductName,
           description: description || null,
           price: resolvedPrice,
+          ...pricingUpdates,
           category,
-          stock_quantity: Math.max(0, Number(resolvedStockQuantity) || 0),
+          stock_quantity: pricingUpdates.stock_quantity ?? 0,
           availability: getAvailabilityForStock(Math.max(0, Number(resolvedStockQuantity) || 0), availability, resolvedExpirationAt),
           image_url: resolvedImageUrl || null,
           date_created: resolvedDateCreated,
@@ -715,6 +714,7 @@ router.post('/', requireAuth, requireRole('admin', 'staff'), async (req, res, ne
       }
 
       createdProductId = data.id;
+      await saveProductCost(supabase, data.id, costPrice);
       await syncProductInventoryBatch(supabase, {
         productId: data.id,
         productName: resolvedProductName,
@@ -726,7 +726,8 @@ router.post('/', requireAuth, requireRole('admin', 'staff'), async (req, res, ne
         category: category,
       });
 
-      return res.status(201).json(mapProduct(data));
+      const [product] = await hydrateAdminProductCosts(supabase, [mapProduct(data)], req.profile?.role);
+      return res.status(201).json(product);
     } catch (inventoryError) {
       if (createdProductId) {
         await supabase
@@ -753,6 +754,10 @@ router.patch('/:id', requireAuth, requireRole('admin', 'staff'), async (req, res
       return res.status(400).json({ error: 'Invalid product id.' });
     }
 
+    if (req.profile?.role !== 'admin' && ('cost_price' in req.body || 'costPrice' in req.body)) {
+      return res.status(403).json({ error: 'Only admins can manage cost prices.' });
+    }
+
     const updates = {};
     const fieldAliases = {
       productName: 'product_name',
@@ -768,10 +773,9 @@ router.patch('/:id', requireAuth, requireRole('admin', 'staff'), async (req, res
     Object.entries(req.body || {}).forEach(([rawField, value]) => {
       const field = fieldAliases[rawField] || rawField;
       if (allowedFields.includes(field)) {
-        if (field === 'price') {
-          updates[field] = parsePrice(value);
-        } else if (field === 'stock_quantity') {
-          updates[field] = Math.max(0, Number(value) || 0);
+        if (field === 'price' || field === 'stock_quantity') {
+          // Validate these against the existing product below.
+          updates[field] = value;
         } else if (field === 'date_created' || field === 'expiration_date') {
           updates[field] = normalizeDateString(value) || null;
         } else {
@@ -798,6 +802,12 @@ router.patch('/:id', requireAuth, requireRole('admin', 'staff'), async (req, res
 
     if (!existingProduct) {
       return res.status(404).json({ error: 'Product not found.' });
+    }
+
+    const { cost_price: costPrice, ...pricingUpdates } = validateProductPricingPayload(req.body, existingProduct);
+    Object.assign(updates, pricingUpdates);
+    if (['product_name', 'category'].some(field => field in updates && !normalizeText(updates[field]))) {
+      return res.status(400).json({ error: 'Product name and category cannot be blank.' });
     }
 
     const hasDateCreatedInput = Object.prototype.hasOwnProperty.call(req.body || {}, 'date_created')
@@ -872,6 +882,7 @@ router.patch('/:id', requireAuth, requireRole('admin', 'staff'), async (req, res
     }
 
     imagePersisted = hasImageInput && existingProduct.image_url !== data.image_url;
+    await saveProductCost(supabase, data.id, costPrice);
 
     await syncProductInventoryBatch(supabase, {
       productId: data.id,
@@ -888,7 +899,8 @@ router.patch('/:id', requireAuth, requireRole('admin', 'staff'), async (req, res
       await removeManagedProductImage(existingProduct.image_url, supabase);
     }
 
-    res.json(mapProduct(data));
+    const [product] = await hydrateAdminProductCosts(supabase, [mapProduct(data)], req.profile?.role);
+    res.json(product);
   } catch (error) {
     if (uploadedImageUrl && !imagePersisted) {
       await removeManagedProductImage(uploadedImageUrl, supabaseForImageCleanup);

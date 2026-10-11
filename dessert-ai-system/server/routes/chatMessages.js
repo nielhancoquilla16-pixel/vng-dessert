@@ -1,5 +1,6 @@
 import express from "express";
 import { buildSafeAiReply } from "./ai.js";
+import { limitAiRequests } from '../middleware/rateLimit.js';
 
 const buildAssistantMessageResource = (payload) => ({
   id: `assistant-${Date.now()}`,
@@ -9,15 +10,14 @@ const buildAssistantMessageResource = (payload) => ({
   createdAt: new Date().toISOString(),
   ai: {
     ok: payload.ok,
-    mode: payload.mode,
-    source: payload.source,
-    groqConfigured: payload.groqConfigured,
+    mode: 'assistant',
+    source: 'assistant',
   },
 });
 
 export const createChatMessagesRouter = ({ reply = buildSafeAiReply } = {}) => {
   const router = express.Router();
-  router.post("/", async (req, res, next) => {
+  router.post("/", limitAiRequests, async (req, res, next) => {
     try {
       const userContent = req.body?.content ?? req.body?.message;
       if (typeof userContent !== 'string' || !userContent.trim()) {
@@ -29,9 +29,8 @@ export const createChatMessagesRouter = ({ reply = buildSafeAiReply } = {}) => {
         data: buildAssistantMessageResource(payload),
         meta: {
           ok: payload.ok,
-          mode: payload.mode,
-          source: payload.source,
-          groqConfigured: payload.groqConfigured,
+          mode: 'assistant',
+          source: 'assistant',
         },
       });
     } catch (error) { next(error); }

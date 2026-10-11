@@ -2,11 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   normalizeHistory,
-  detectSupportIntent,
+  detectSupportIntent as detectIntent,
   buildSupportReply,
 } from '../../dessert-ai-system/server/lib/aiSupport.js';
 
 const now = new Date('2026-09-30T03:00:00Z');
+const detectSupportIntent = (question, context = {}) => detectIntent(question, { now, ...context });
 const products = [
   { id: 'flan', name: 'Leche Flan', description: 'A creamy caramel dessert.', price: 120, stock: 8, availability: 'available', expirationAt: '2026-10-02T00:00:00Z' },
   { id: 'crinkles', name: 'Chocolate Crinkles', description: 'Soft chocolate cookies.', price: 75, stock: 0, availability: 'out of stock', expirationAt: '2026-10-03T00:00:00Z' },
@@ -62,7 +63,7 @@ for (const [question, intent] of [
   ['How many products can I order?', 'availability'],
   ['Do you deliver or offer pickup?', 'delivery'],
   ['What payment methods do you accept?', 'payment'],
-  ['Who is your supplier?', 'supplier'],
+  ['Who is your supplier?', 'restricted'],
   ['Do you have Gmail?', 'email'],
   ["What's your Gmail?", 'email'],
   ["What's your email?", 'email'],
@@ -168,20 +169,15 @@ test('recommendations handle common misspellings and use the selected dessert co
     ...products,
     { id: 'cake', name: 'Chocolate Cake', description: 'Soft chocolate cake.', price: 100, stock: 4, availability: 'available' },
   ] }), { now });
-  assert.match(reply, /Since you're viewing \*\*Leche Flan\*\*/);
-  assert.match(reply, /creamy caramel dessert/);
-  assert.match(reply, /- \*\*Leche Flan\*\* — PHP 120\.00/);
+  assert.equal(reply, '- Leche Flan = PHP 120.00\n- Chocolate Cake = PHP 100.00');
   assert.match(reply, /Chocolate Cake/);
   assert.doesNotMatch(reply, /Chocolate Crinkles/);
   assert.doesNotMatch(reply, /Secret Test Cake|Old Mango Float/);
 });
 
-test('recommendations without a selected dessert offer available catalog choices and invite a preference', () => {
+test('recommendations without a selected dessert return available names and prices only', () => {
   const reply = answer('What can you recommend?');
-  assert.match(reply, /Here are some available desserts to try/);
-  assert.match(reply, /Leche Flan/);
-  assert.match(reply, /- \*\*Leche Flan\*\* — PHP 120\.00/);
-  assert.match(reply, /prefer chocolate, creamy, or fruity/i);
+  assert.equal(reply, '- Leche Flan = PHP 120.00');
   assert.doesNotMatch(reply, /Chocolate Crinkles/);
   assert.doesNotMatch(reply, /Secret Test Cake|Old Mango Float/);
 });
@@ -234,11 +230,11 @@ test('missing ownership information is explicit and never inferred from the menu
   assert.doesNotMatch(reply, /Greg|Vergie|Leche Flan|Chocolate Crinkles/);
 });
 
-test('supplier can be answered when configured and falls back when missing', () => {
+test('supplier information is refused even when configured', () => {
   const configured = answer('Who is your supplier?', { support: { supplier: 'Our packaging supplier is Sample Packaging Cooperative.' } });
-  assert.match(configured, /Sample Packaging Cooperative/);
+  assert.match(configured, /can’t provide or generate code or expose protected system information/);
   const missing = answer('Who is your supplier?');
-  assertUnavailable(missing);
+  assert.equal(missing, configured);
   assert.doesNotMatch(missing, /Leche Flan|Chocolate Crinkles/);
 });
 
@@ -269,7 +265,7 @@ test('calorie fallback does not invent a value when the estimate service is unav
   const plan = detectSupportIntent(question, { products });
   assert.deepEqual(plan.intents, ['nutrition']);
   assert.equal(plan.productId, 'flan');
-  const missingReply = buildSupportReply(plan, knowledge());
+  const missingReply = buildSupportReply(plan, knowledge(), { now });
   assert.match(missingReply, /can't estimate calories/i);
   assert.doesNotMatch(missingReply, /shop has not published verified calorie information/i);
   assert.doesNotMatch(missingReply, /\b\d+\s*calories\b/i);
@@ -328,19 +324,21 @@ test('account and business topics can be combined without treating opening an ac
 });
 
 test('switching products in an elliptical follow-up retains the requested topic', () => {
-  const plan = detectSupportIntent('And what about crinkles?', { products, history: [
+  const currentProducts = [...products, { ...products[1], stock: 5, availability: 'available' }];
+  const plan = detectSupportIntent('And what about crinkles?', { products: currentProducts, history: [
     { role: 'user', content: 'How much is Leche Flan?' },
   ] });
   assert.deepEqual(plan.intents, ['pricing']);
   assert.equal(plan.productId, 'crinkles');
-  assert.match(buildSupportReply(plan, knowledge(), { now }), /75/);
+  assert.match(buildSupportReply(plan, knowledge({}, { products: currentProducts }), { now }), /75/);
 });
 
-test('visible stock supports quantity questions and sold out items stay unavailable', () => {
+test('quantity and sold-out questions show only available names and prices', () => {
   const flan = answer('How many Leche Flan can I order?');
-  assert.match(flan, /\b8\b/);
+  assert.equal(flan, '- Leche Flan = PHP 120.00');
   const soldOut = answer('Is Chocolate Crinkles available?');
-  assert.match(soldOut, /out of stock|sold out|not available|unavailable/i);
+  assert.equal(soldOut, flan);
+  assert.doesNotMatch(soldOut, /Chocolate Crinkles|stock|sold out|unavailable/i);
 });
 
 test('hidden and expired items are never advertised as available menu choices', () => {

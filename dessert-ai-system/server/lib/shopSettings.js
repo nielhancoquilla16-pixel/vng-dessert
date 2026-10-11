@@ -13,6 +13,7 @@ const CUSTOMER_SUPPORT_KEYS = ['owner', 'supplier', 'email', 'services', 'physic
 export const normalizeCustomerSupport = (value, { strict = false } = {}) => {
   const invalid = (message) => {
     const error = new Error(message);
+    error.publicMessage = message;
     error.status = 400;
     throw error;
   };
@@ -113,6 +114,7 @@ export const buildShopSettingsUpdate = (payload = {}, current = {}) => {
     const normalized = normalizeTime(supplied, '');
     if (!normalized) {
       const error = new Error(`${label} must be a valid time in HH:MM format.`);
+      error.publicMessage = error.message;
       error.status = 400;
       throw error;
     }
@@ -123,6 +125,7 @@ export const buildShopSettingsUpdate = (payload = {}, current = {}) => {
 
   if (openingTime === closingTime) {
     const error = new Error('Opening and closing times must be different.');
+    error.publicMessage = error.message;
     error.status = 400;
     throw error;
   }
@@ -130,6 +133,7 @@ export const buildShopSettingsUpdate = (payload = {}, current = {}) => {
   const address = normalizeText(merged.address);
   if (!address) {
     const error = new Error('Shop address is required.');
+    error.publicMessage = error.message;
     error.status = 400;
     throw error;
   }
@@ -139,6 +143,7 @@ export const buildShopSettingsUpdate = (payload = {}, current = {}) => {
     const parsed = Number(value);
     if (!['string', 'number'].includes(typeof value) || !Number.isFinite(parsed) || parsed < minimum || parsed > maximum) {
       const error = new Error(`${label} must be a valid map pin coordinate between ${minimum} and ${maximum}.`);
+      error.publicMessage = error.message;
       error.status = 400;
       throw error;
     }
@@ -148,6 +153,7 @@ export const buildShopSettingsUpdate = (payload = {}, current = {}) => {
   const longitude = coordinate(merged.longitude, 'Longitude', -180, 180);
   if ((latitude == null) !== (longitude == null) || (latitude === 0 && longitude === 0)) {
     const error = new Error('Select the actual shop pickup location on the map.');
+    error.publicMessage = error.message;
     error.status = 400;
     throw error;
   }
@@ -188,12 +194,23 @@ export const buildShopSettingsStatus = (settings, referenceDate = new Date()) =>
   isOpen: isWithinOperatingHours(settings, referenceDate),
 });
 
+export const publicShopSettings = (settings = {}) => ({
+  id: settings.id, shopName: settings.shopName, address: settings.address,
+  phoneNumber: settings.phoneNumber, openingTime: settings.openingTime,
+  closingTime: settings.closingTime, preorderTimeSlots: settings.preorderTimeSlots,
+  latitude: settings.latitude, longitude: settings.longitude, updatedAt: settings.updatedAt,
+  ...(settings.customerSupport ? { customerSupport: Object.fromEntries(
+    Object.entries(normalizeCustomerSupport(settings.customerSupport)).filter(([key]) => key !== 'supplier'),
+  ) } : {}),
+});
+
 // Always read the persisted schedule at the point a new purchase is requested.
 // The event stream's in-memory snapshot is never used to authorize a purchase.
 export const assertShopOpen = async (supabase = getSupabaseAdmin(), referenceDate) => {
   const settings = await getShopSettings(supabase);
   if (!isWithinOperatingHours(settings, referenceDate || new Date())) {
     const error = new Error(getOperatingHoursMessage(settings));
+    error.publicMessage = error.message;
     error.status = 403;
     error.code = 'SHOP_CLOSED';
     throw error;

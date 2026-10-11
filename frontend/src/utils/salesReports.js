@@ -220,6 +220,7 @@ export const downloadSalesReportCsv = ({
   reportCount = 0,
   returnRows = [],
   returnTotal = 0,
+  profitSummary = null,
 }) => {
   const csvLines = [
     ['Sales Report Summary', monthLabel, staffLabel, paymentLabel, `${reportCount} completed transaction(s)`],
@@ -232,6 +233,10 @@ export const downloadSalesReportCsv = ({
     ]),
     [],
     ['Overall Total', totals.quantity, Number(totals.sales || 0).toFixed(2)],
+    ...(profitSummary ? [
+      ['Estimated Gross Profit', Number(profitSummary.estimatedGrossProfit).toFixed(2)],
+      ['Units excluded from profit (cost not recorded)', profitSummary.uncostedQuantity],
+    ] : []),
     [],
     ['Returns History', `${returnTotal} returned item(s)`],
     ['Date', 'Product Name', 'Quantity Returned', 'Reason'],
@@ -275,6 +280,7 @@ export const openSalesReportPrintView = ({
   submittedReports = [],
   returnRows = [],
   returnTotal = 0,
+  profitSummary = null,
 }) => {
   const printWindow = window.open('', '_blank', 'noopener,noreferrer');
 
@@ -539,6 +545,7 @@ export const openSalesReportPrintView = ({
 
           <section>
             <h2 class="section-title">Item Summary</h2>
+            ${profitSummary ? `<p>Estimated gross profit: <strong>${escapeHtml(formatPeso(profitSummary.estimatedGrossProfit))}</strong> (sale revenue less recorded product costs). ${escapeHtml(profitSummary.uncostedQuantity)} sold unit(s) excluded because their cost was not recorded.</p>` : ''}
             <table>
               <thead>
                 <tr>

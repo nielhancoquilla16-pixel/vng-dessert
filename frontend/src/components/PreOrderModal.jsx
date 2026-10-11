@@ -1,3 +1,4 @@
+import { customerErrorMessage } from '../lib/publicErrors';
 import React, { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import LoadingButton from './LoadingButton';
@@ -24,13 +25,19 @@ import {
   getTomorrowDateValue,
   isValidPhilippinePhoneNumber,
 } from '../utils/preOrders';
+import {
+  PHILIPPINE_MOBILE_NUMBER_PATTERN_SOURCE,
+  PHONE_NUMBER_VALIDATION_MESSAGE,
+} from '../utils/phoneNumber';
 import './PreOrderModal.css';
+import { getProductPricing } from '../../../dessert-ai-system/shared/productPricing.js';
+import { formatCurrency } from '../utils/currency';
 
-const buildInitialFormState = (product, customer) => ({
+const buildInitialFormState = (product, customer, initialQuantity = 1) => ({
   fullName: customer?.fullName || customer?.username || '',
   address: customer?.address || '',
   phoneNumber: customer?.phoneNumber || '',
-  quantity: 1,
+  quantity: initialQuantity,
   preferredOrderDate: '',
   preferredOrderTime: '',
   deliveryMethod: 'cod',
@@ -39,11 +46,11 @@ const buildInitialFormState = (product, customer) => ({
   productName: product?.name || '',
 });
 
-const PreOrderModal = ({ product, isOpen, onClose }) => {
+const PreOrderModal = ({ product, isOpen, onClose, initialQuantity = 1 }) => {
   const { loggedInCustomer, updateLoggedInCustomer } = useAuth();
   const { createPreOrder } = usePreOrders();
   const { shopSettings, isShopOpen } = useShopSettings();
-  const [formData, setFormData] = useState(() => buildInitialFormState(product, loggedInCustomer));
+  const [formData, setFormData] = useState(() => buildInitialFormState(product, loggedInCustomer, initialQuantity));
   const [formError, setFormError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submittedPreOrder, setSubmittedPreOrder] = useState(null);
@@ -57,12 +64,14 @@ const PreOrderModal = ({ product, isOpen, onClose }) => {
       setFormError('');
     }
 
-    setFormData(buildInitialFormState(product, loggedInCustomer));
-  }, [isOpen, loggedInCustomer, product]);
+    setFormData(buildInitialFormState(product, loggedInCustomer, initialQuantity));
+  }, [isOpen, loggedInCustomer, product, initialQuantity]);
 
   if (!isOpen || !product) {
     return null;
   }
+
+  const pricing = getProductPricing(product, formData.quantity);
 
   const handleChange = (event) => {
     const { name, value } = event.target;
@@ -171,7 +180,7 @@ const PreOrderModal = ({ product, isOpen, onClose }) => {
 
       setSubmittedPreOrder(createdPreOrder);
     } catch (error) {
-      setFormError(error.message || 'Unable to place the pre-order right now.');
+      setFormError(customerErrorMessage(error, 'Unable to place the pre-order right now.'));
     } finally {
       setIsSubmitting(false);
     }
@@ -305,11 +314,14 @@ const PreOrderModal = ({ product, isOpen, onClose }) => {
                     <input
                       type="tel"
                       name="phoneNumber"
-                      autoComplete="tel"
+                      autoComplete="tel-national"
+                      inputMode="numeric"
+                      pattern={PHILIPPINE_MOBILE_NUMBER_PATTERN_SOURCE}
                       value={formData.phoneNumber}
                       onChange={handleChange}
                       placeholder="09123456789"
                       required
+                      title={PHONE_NUMBER_VALIDATION_MESSAGE}
                     />
                   </div>
                 </label>
@@ -343,6 +355,10 @@ const PreOrderModal = ({ product, isOpen, onClose }) => {
                     required
                   />
                 </label>
+                <div className="preorder-summary-row" aria-live="polite">
+                  <span>{formatCurrency(pricing.unitPrice)} each{pricing.isBulkPrice ? ` · ${pricing.bulkQuantityLabel}` : ''}</span>
+                  <strong>Subtotal {formatCurrency(pricing.lineTotal)}</strong>
+                </div>
               </section>
 
               <section className="preorder-section">

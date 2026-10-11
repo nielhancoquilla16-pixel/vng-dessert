@@ -1,7 +1,10 @@
 .lazy-product-media {
   position: absolute;
   inset: 0;
-  display: block;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
   overflow: hidden;
   background: #fff0d5;
 }

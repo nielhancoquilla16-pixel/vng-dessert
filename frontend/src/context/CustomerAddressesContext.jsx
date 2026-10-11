@@ -1,3 +1,4 @@
+import { customerErrorMessage } from '../lib/publicErrors';
 /* eslint-disable react-refresh/only-export-components */
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { useAuth } from './AuthContext';
@@ -70,7 +71,7 @@ export const CustomerAddressesProvider = ({ children }) => {
       setAddressesError('');
       return nextAddresses;
     } catch (error) {
-      setAddressesError(error.message || 'Unable to load saved addresses.');
+      setAddressesError(customerErrorMessage(error, 'Unable to load saved addresses.'));
       throw error;
     } finally {
       setIsAddressesLoading(false);

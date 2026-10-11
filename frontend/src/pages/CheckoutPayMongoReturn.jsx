@@ -1,12 +1,15 @@
+import { customerErrorMessage } from '../lib/publicErrors';
 import React, { useEffect, useMemo, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { CheckCircle2, Clock3, Printer, XCircle } from 'lucide-react';
+import { ArrowRight, CheckCircle2, Clock3, CreditCard, Printer, RotateCw, Truck, XCircle } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useCart } from '../context/CartContext';
 import { useOrders } from '../context/OrderContext';
 import { useProducts } from '../context/ProductContext';
 import { apiRequest } from '../lib/api';
 import ReceiptSlip from '../components/ReceiptSlip';
+import CheckoutOrderVerification from '../components/CheckoutOrderVerification';
+import { formatCurrency } from '../utils/currency';
 import './Checkout.css';
 
 const wait = (ms) => new Promise((resolve) => {
@@ -27,10 +30,6 @@ const CheckoutPayMongoReturn = ({ mode = 'success' }) => {
   const referenceNumber = useMemo(() => (
     new URLSearchParams(location.search).get('reference') || ''
   ), [location.search]);
-  const checkoutStage = useMemo(() => (
-    new URLSearchParams(location.search).get('stage') || ''
-  ), [location.search]);
-  const isPaymentSelectionStage = checkoutStage === 'payment-selection';
 
   useEffect(() => {
     let isActive = true;
@@ -107,18 +106,14 @@ const CheckoutPayMongoReturn = ({ mode = 'success' }) => {
 
         let latestCheckout = null;
 
-        if (isPaymentSelectionStage) {
+        for (let attempt = 0; attempt < 5; attempt += 1) {
           latestCheckout = await loadCheckout();
-        } else {
-          for (let attempt = 0; attempt < 5; attempt += 1) {
-            latestCheckout = await loadCheckout();
 
-            if (latestCheckout?.status !== 'created') {
-              break;
-            }
-
-            await wait(1500);
+          if (!isActive || latestCheckout?.status !== 'created') {
+            break;
           }
+
+          if (attempt < 4) await wait(1500);
         }
 
         if (!isActive) {
@@ -130,7 +125,7 @@ const CheckoutPayMongoReturn = ({ mode = 'success' }) => {
         await refreshCheckoutSideEffects(latestCheckout);
       } catch (nextError) {
         if (isActive) {
-          setError(nextError.message || 'Unable to verify the PayMongo payment right now.');
+          setError(customerErrorMessage(nextError, 'Unable to verify the PayMongo payment right now.'));
         }
       } finally {
         if (isActive) {
@@ -144,7 +139,7 @@ const CheckoutPayMongoReturn = ({ mode = 'success' }) => {
     return () => {
       isActive = false;
     };
-  }, [checkoutStage, isAuthLoading, isPaymentSelectionStage, loggedInCustomer, mode, referenceNumber, refreshKey, refreshOrders, refreshProducts, refreshRemoteCart]);
+  }, [isAuthLoading, loggedInCustomer, mode, referenceNumber, refreshKey, refreshOrders, refreshProducts, refreshRemoteCart]);
 
   const checkoutStatus = checkout?.status || (mode === 'cancel' ? 'cancelled' : 'created');
   const hasReceipt = Boolean(checkout?.order);
@@ -152,54 +147,33 @@ const CheckoutPayMongoReturn = ({ mode = 'success' }) => {
   const isFailed = checkoutStatus === 'cancelled' || checkoutStatus === 'failed' || checkoutStatus === 'expired';
   const isManualReview = checkoutStatus === 'paid' && !checkout?.orderId;
   const isStillProcessing = checkoutStatus === 'created';
-  const isReferenceReady = isPaymentSelectionStage && isStillProcessing && hasReceipt;
   const canContinuePayment = Boolean(checkout?.checkoutUrl) && isStillProcessing;
-  const checkoutStatusLabel = isSuccessful ? 'paid' : checkoutStatus.replace(/_/g, ' ');
-
-  const statusColor = isReferenceReady
-    ? '#1d4ed8'
-    : isSuccessful
-    ? '#166534'
+  const checkoutStatusLabel = isSuccessful
+    ? 'Paid online'
     : isFailed
-      ? '#991b1b'
-      : isManualReview
-        ? '#1d4ed8'
-        : '#92400e';
-
-  const statusBackground = isReferenceReady
-    ? '#dbeafe'
-    : isSuccessful
-    ? '#dcfce7'
-    : isFailed
-      ? '#fee2e2'
-      : isManualReview
-        ? '#dbeafe'
-        : '#fef3c7';
+      ? 'Payment not completed'
+      : isManualReview ? 'Payment received' : 'Waiting for online payment';
+  const statusTone = isSuccessful ? 'success' : isFailed ? 'danger' : 'pending';
+  const order = checkout?.order;
+  const lineItems = Array.isArray(order?.lineItems) ? order.lineItems : [];
+  const itemTotal = (item) => Number(item.lineTotal ?? (Number(item.price) * Number(item.quantity))) || 0;
+  const subtotal = lineItems.reduce((sum, item) => sum + itemTotal(item), 0);
+  const total = Number(checkout?.amount ?? order?.totalAmount ?? order?.totalPrice) || 0;
+  // Checkout totals already include the delivery charge calculated by the API.
+  const deliveryFee = (checkout?.deliveryMethod || order?.deliveryMethod) === 'delivery'
+    ? Math.max(0, Math.round((total - subtotal) * 100) / 100)
+    : 0;
 
   const HeaderIcon = mode === 'cancel' && checkoutStatus === 'cancelled'
     ? XCircle
-    : isReferenceReady
-      ? CheckCircle2
     : isLoading || isStillProcessing
       ? Clock3
       : isFailed
         ? XCircle
         : CheckCircle2;
 
-  const headerIconColor = mode === 'cancel' && checkoutStatus === 'cancelled'
-    ? '#dc2626'
-    : isReferenceReady
-      ? '#2563eb'
-    : isLoading || isStillProcessing
-      ? '#d97706'
-      : isFailed
-        ? '#dc2626'
-        : '#16a34a';
-
   const pageTitle = mode === 'cancel' && checkoutStatus === 'cancelled'
     ? 'Payment Cancelled'
-    : isReferenceReady
-      ? 'Order Reference Ready'
     : isSuccessful
       ? 'Payment Confirmed'
       : isManualReview
@@ -215,190 +189,128 @@ const CheckoutPayMongoReturn = ({ mode = 'success' }) => {
   };
 
   return (
-    <div className="checkout-paymongo-return-page">
-      <div className="checkout-return-shell">
-        <div className="checkout-return-header" style={{ display: 'flex', alignItems: 'center', gap: '0.9rem', marginBottom: '1.25rem' }}>
-          <HeaderIcon size={28} color={headerIconColor} />
-          <div>
-            <h1>
-              {pageTitle}
-            </h1>
-            <p style={{ margin: '0.25rem 0 0', color: '#64748b' }}>
-              Reference: {referenceNumber || 'Unavailable'}
-            </p>
-          </div>
-        </div>
-
-        {isLoading && (
-          <div
-            role="status"
-            style={{
-              borderRadius: '1rem',
-              padding: '1rem 1.1rem',
-              background: '#eff6ff',
-              color: '#1d4ed8',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '0.75rem',
-            }}
-          >
-            <Clock3 size={18} />
-            {isPaymentSelectionStage
-              ? 'Preparing your order reference and payment details.'
-              : 'We\'re syncing your PayMongo checkout and finishing your order.'}
-          </div>
-        )}
-
-        {!isLoading && error && (
-          <div
-            role="alert"
-            style={{
-              borderRadius: '1rem',
-              padding: '1rem 1.1rem',
-              background: '#fef2f2',
-              border: '1px solid #fecaca',
-              color: '#b91c1c',
-              lineHeight: 1.6,
-            }}
-          >
-            {error}
-          </div>
-        )}
-
-        {!isLoading && error && (
-          <div className="checkout-return-secondary-actions" style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem', marginTop: '1.5rem' }}>
-            {!loggedInCustomer && (
-              <Link className="btn-primary" to="/login" style={{ textDecoration: 'none' }}>
-                Log In
-              </Link>
-            )}
-            <Link
-              to="/checkout"
-              style={{
-                textDecoration: 'none',
-                padding: '0.9rem 1.2rem',
-                borderRadius: '0.9rem',
-                background: '#e2e8f0',
-                color: '#0f172a',
-                fontWeight: 700,
-              }}
-            >
-              Back to Checkout
-            </Link>
-          </div>
-        )}
-
-        {!isLoading && !error && checkout && (
-          <>
-            <div
-              className="checkout-return-status"
-              style={{
-                display: 'inline-flex',
-                marginTop: '0.5rem',
-                marginBottom: '1rem',
-                padding: '0.4rem 0.85rem',
-                borderRadius: '999px',
-                background: statusBackground,
-                color: statusColor,
-                fontWeight: 700,
-                textTransform: 'capitalize',
-              }}
-            >
-              {checkoutStatusLabel}
+    <div className={`checkout-paymongo-return-page checkout-paymongo-return-page--${statusTone}`}>
+      <div className={`checkout-return-layout ${!order || error || isLoading ? 'checkout-return-layout--single' : ''}`}>
+        <div className="checkout-return-main">
+          <section className="checkout-return-shell" aria-labelledby="checkout-payment-title" aria-busy={isLoading}>
+            <div className="checkout-return-header">
+              <HeaderIcon className="checkout-return-header-icon" size={36} aria-hidden="true" />
+              <div>
+                <h1 id="checkout-payment-title">{pageTitle}</h1>
+                <p>Reference: {referenceNumber || 'Unavailable'}</p>
+              </div>
             </div>
 
-        {isReferenceReady && (
-          <p className="checkout-return-help" style={{ color: '#0f172a', lineHeight: 1.7 }}>
-            Your Order ID and QR code are ready below. Use them as your reference for payment verification and pickup validation, then continue to PayMongo when you're ready.
-          </p>
-        )}
-
-        {isSuccessful && (
-          <p className="checkout-return-help" style={{ color: '#0f172a', lineHeight: 1.7 }}>
-            Your payment was confirmed and your printable receipt is ready below. You can also track the order from your orders page.
-          </p>
-        )}
-
-            {isManualReview && (
-              <p className="checkout-return-help" style={{ color: '#0f172a', lineHeight: 1.7 }}>
-                PayMongo marked this checkout as paid, but the order still needs manual review on our side.
-                {checkout.failureReason ? ` ${checkout.failureReason}` : ''}
-              </p>
-            )}
-
-            {isStillProcessing && !isPaymentSelectionStage && (
-              <p className="checkout-return-help" style={{ color: '#0f172a', lineHeight: 1.7 }}>
-                We have your checkout reference, but PayMongo has not confirmed the final result yet. If you just completed the payment, wait a few seconds and refresh this status.
-              </p>
-            )}
-
-            {isFailed && (
-              <p className="checkout-return-help" style={{ color: '#0f172a', lineHeight: 1.7 }}>
-                The payment was not completed. Any temporary online order from this checkout has been marked cancelled, and you can go back to checkout to try again.
-              </p>
-            )}
-
-            {checkout.order && (
-              <div style={{ marginTop: '1.25rem' }}>
-                <ReceiptSlip
-                  order={checkout.order}
-                  receiptNumber={checkout.referenceNumber}
-                  paymentStatus={checkoutStatus}
-                  paidAt={checkout.paidAt || checkout.order.paymentCheckoutPaidAt || checkout.order.updatedAt || checkout.order.createdAt}
-                />
+            {isLoading && (
+              <div className="checkout-return-notice" role="status">
+                <Clock3 size={22} aria-hidden="true" />
+                <p>We're syncing your PayMongo checkout and finishing your order.</p>
               </div>
             )}
 
-            <div
-              className="checkout-return-actions"
-              style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem', marginTop: '1.5rem' }}
-            >
-              {canContinuePayment && (
-                <a
-                  className="btn-primary"
-                  href={checkout.checkoutUrl}
-                  style={{ textDecoration: 'none' }}
-                >
-                  Continue to PayMongo
-                </a>
-              )}
-              {isSuccessful && checkout?.order && (
-                <button
-                  type="button"
-                  className="btn-primary"
-                  onClick={handlePrintReceipt}
-                >
-                  <Printer size={16} />
-                  Print Receipt
-                </button>
-              )}
-              {isStillProcessing && (
-                <button
-                  type="button"
-                  className="btn-primary"
-                  onClick={() => setRefreshKey((current) => current + 1)}
-                >
-                  Refresh Status
-                </button>
-              )}
-              <Link className="btn-primary" to="/orders" style={{ textDecoration: 'none' }}>
-                View Orders
-              </Link>
-              <Link
-                to="/checkout"
-                style={{
-                  textDecoration: 'none',
-                  padding: '0.9rem 1.2rem',
-                  borderRadius: '0.9rem',
-                  background: '#e2e8f0',
-                  color: '#0f172a',
-                  fontWeight: 700,
-                }}
-              >
-                Back to Checkout
-              </Link>
+            {!isLoading && error && (
+              <>
+                <div className="checkout-return-notice checkout-return-notice--danger" role="alert">
+                  <XCircle size={22} aria-hidden="true" /><p>{error}</p>
+                </div>
+                <div className="checkout-return-secondary-actions">
+                  {!loggedInCustomer && <Link className="checkout-payment-continue" to="/login">Log In</Link>}
+                  <button className="checkout-return-text-action" type="button" onClick={() => setRefreshKey((current) => current + 1)}>Try Again</button>
+                  <Link className="checkout-return-text-action" to="/checkout">Back to Checkout</Link>
+                </div>
+              </>
+            )}
+
+            {!isLoading && !error && checkout && (
+              <>
+                <div className={`checkout-return-notice ${isSuccessful ? 'checkout-return-notice--success' : isFailed ? 'checkout-return-notice--danger' : ''}`} role="status">
+                  <HeaderIcon size={22} aria-hidden="true" />
+                  <p>
+                    {isSuccessful
+                      ? 'Your payment is confirmed. Your order is ready for processing.'
+                      : isFailed
+                        ? 'Your payment was not completed. You can return to checkout to try again.'
+                        : isManualReview
+                          ? `Your payment was received. Your order needs manual review.${checkout.failureReason ? ` ${checkout.failureReason}` : ''}`
+                          : 'Your order is ready. Please complete your payment to confirm.'}
+                  </p>
+                </div>
+
+                {isStillProcessing && (
+                  <div className="checkout-payment-card">
+                    <CreditCard className="checkout-payment-card-icon" size={30} aria-hidden="true" />
+                    <div>
+                      <h2>You selected to pay online.</h2>
+                      <p>After reviewing your order, click the button below to proceed with your online payment.</p>
+                      {canContinuePayment ? (
+                        <a className="checkout-payment-continue" href={checkout.checkoutUrl}>
+                          <CreditCard size={23} aria-hidden="true" />
+                          <span>Continue Online Payment</span>
+                          <ArrowRight size={21} aria-hidden="true" />
+                        </a>
+                      ) : (
+                        <p className="checkout-payment-link-unavailable">The payment link is unavailable. Refresh the status to try again.</p>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                <div className="checkout-return-secondary-actions">
+                  {isStillProcessing && (
+                    <>
+                      <p>Already paid?</p>
+                      <button className="checkout-return-text-action" type="button" onClick={() => setRefreshKey((current) => current + 1)}>
+                        <RotateCw size={16} aria-hidden="true" />Refresh Status
+                      </button>
+                    </>
+                  )}
+                  {isSuccessful && order && (
+                    <button className="checkout-payment-continue" type="button" onClick={handlePrintReceipt}>
+                      <Printer size={18} aria-hidden="true" />Print Receipt
+                    </button>
+                  )}
+                  {!isStillProcessing && <Link className="checkout-return-text-action" to="/orders">View Orders<ArrowRight size={16} aria-hidden="true" /></Link>}
+                  {isFailed && <Link className="checkout-return-text-action" to="/checkout">Back to Checkout</Link>}
+                </div>
+              </>
+            )}
+          </section>
+
+          {!isLoading && !error && order && !isFailed && <CheckoutOrderVerification order={order} />}
+
+          {!isLoading && !error && isSuccessful && order && (
+            <ReceiptSlip
+              order={order}
+              receiptNumber={checkout.referenceNumber}
+              paymentStatus={checkoutStatus}
+              paidAt={checkout.paidAt || order.paymentCheckoutPaidAt || order.updatedAt || order.createdAt}
+            />
+          )}
+        </div>
+
+        {!isLoading && !error && order && (
+          <aside className="checkout-return-summary" aria-labelledby="checkout-order-summary-title">
+            <h2 id="checkout-order-summary-title">Order Summary</h2>
+            <ul className="checkout-return-items">
+              {lineItems.map((item, index) => (
+                <li key={item.id || item.productId || index}>
+                  <span className="checkout-return-item-quantity">{item.quantity}x</span>
+                  <span className="checkout-return-item-name">{item.name}</span>
+                  <strong>{formatCurrency(itemTotal(item))}</strong>
+                </li>
+              ))}
+            </ul>
+            <dl className="checkout-return-totals">
+              <div><dt>Subtotal</dt><dd>{formatCurrency(subtotal)}</dd></div>
+              <div><dt>Delivery Fee</dt><dd>{formatCurrency(deliveryFee)}</dd></div>
+              <div className="checkout-return-total"><dt>Total</dt><dd>{formatCurrency(total)}</dd></div>
+            </dl>
+            <div className={`checkout-return-status checkout-return-status--${statusTone}`}>
+              {isStillProcessing ? <Truck size={23} aria-hidden="true" /> : <HeaderIcon size={23} aria-hidden="true" />}
+              <span>{checkoutStatusLabel}</span>
             </div>
-          </>
+            {isStillProcessing && <p className="checkout-return-payment-note">Complete your online payment to continue processing this order.</p>}
+          </aside>
         )}
       </div>
     </div>

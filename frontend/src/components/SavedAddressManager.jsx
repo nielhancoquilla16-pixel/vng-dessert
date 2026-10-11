@@ -1,3 +1,4 @@
+import { customerErrorMessage } from '../lib/publicErrors';
 import React, { useState } from 'react';
 import { Check, MapPin, Pencil, Star, Trash2, X } from 'lucide-react';
 import LoadingButton from './LoadingButton';
@@ -5,6 +6,11 @@ import LocationPinPicker from './LocationPinPicker';
 import { useCustomerAddresses } from '../context/CustomerAddressesContext';
 import { useShopSettings } from '../context/ShopSettingsContext';
 import useDialogFocus from '../hooks/useDialogFocus';
+import {
+  getPhoneNumberValidationMessage,
+  PHILIPPINE_MOBILE_NUMBER_PATTERN_SOURCE,
+  PHONE_NUMBER_VALIDATION_MESSAGE,
+} from '../utils/phoneNumber';
 import {
   ADDRESS_PIN_ERROR,
   buildDeliveryAddressText,
@@ -124,6 +130,11 @@ const SavedAddressManager = () => {
 
   const handleSave = async (event) => {
     event.preventDefault();
+    const phoneNumberError = getPhoneNumberValidationMessage(draft.phoneNumber);
+    if (phoneNumberError) {
+      setFormError(phoneNumberError);
+      return;
+    }
     if (!isValidLocation(draft)) {
       setFormError(ADDRESS_PIN_ERROR);
       return;
@@ -139,7 +150,7 @@ const SavedAddressManager = () => {
       await updateAddress(editingAddressId, addressPayload);
       closeEditor();
     } catch (error) {
-      setFormError(error.message || 'Unable to save this address.');
+      setFormError(customerErrorMessage(error, 'Unable to save this address.'));
     } finally {
       setIsSaving(false);
     }
@@ -150,7 +161,7 @@ const SavedAddressManager = () => {
     try {
       await setDefaultAddress(addressId);
     } catch (error) {
-      setFormError(error.message || 'Unable to update the default address.');
+      setFormError(customerErrorMessage(error, 'Unable to update the default address.'));
     } finally {
       setBusyAddressId('');
     }
@@ -162,7 +173,7 @@ const SavedAddressManager = () => {
     try {
       await deleteAddress(addressId);
     } catch (error) {
-      setFormError(error.message || 'Unable to delete this address.');
+      setFormError(customerErrorMessage(error, 'Unable to delete this address.'));
     } finally {
       setBusyAddressId('');
     }
@@ -242,7 +253,7 @@ const SavedAddressManager = () => {
                 </label>
                 <label>
                   Contact Number
-                  <input name="phoneNumber" type="tel" autoComplete="tel" value={draft.phoneNumber} onChange={handleFieldChange} required />
+                  <input name="phoneNumber" type="tel" autoComplete="tel-national" inputMode="numeric" pattern={PHILIPPINE_MOBILE_NUMBER_PATTERN_SOURCE} title={PHONE_NUMBER_VALIDATION_MESSAGE} value={draft.phoneNumber} onChange={handleFieldChange} required />
                 </label>
                 <label className="saved-address-form-wide">
                   Street Address

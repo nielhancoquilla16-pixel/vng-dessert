@@ -1,3 +1,4 @@
+import { customerErrorMessage } from '../lib/publicErrors';
 import React, { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Camera, Mail, MapPin, Phone, Save, ShieldCheck, UserRound, X } from 'lucide-react';
@@ -7,8 +8,8 @@ import { useAuth } from '../context/AuthContext';
 import { useCustomerAddresses } from '../context/CustomerAddressesContext';
 import {
   getPhoneNumberValidationMessage,
+  PHILIPPINE_MOBILE_NUMBER_PATTERN_SOURCE,
   PHONE_NUMBER_VALIDATION_MESSAGE,
-  sanitizePhoneNumber,
 } from '../utils/phoneNumber';
 import './CustomerProfile.css';
 
@@ -49,7 +50,7 @@ const validateImageFile = (file) => {
 const mapCustomerToForm = (customer) => ({
   username: customer?.username || '',
   fullName: customer?.fullName || '',
-  phoneNumber: sanitizePhoneNumber(customer?.phoneNumber),
+  phoneNumber: String(customer?.phoneNumber ?? ''),
   address: customer?.address || '',
   avatarUrl: customer?.avatarUrl || '',
 });
@@ -115,54 +116,19 @@ const CustomerProfile = () => {
       }));
     } catch (error) {
       setSaveNotice('');
-      setSaveError(error.message || 'Unable to use that image file.');
+      setSaveError(customerErrorMessage(error, 'Unable to use that image file.'));
     }
   };
 
   const handleFieldChange = (event) => {
     const { name, value } = event.target;
-    const nextValue = name === 'phoneNumber' ? sanitizePhoneNumber(value) : value;
     if (name === 'phoneNumber') event.target.setCustomValidity('');
     setSaveError('');
     setSaveNotice('');
     setFormData((current) => ({
       ...current,
-      [name]: nextValue,
+      [name]: value,
     }));
-  };
-
-  const handlePhoneKeyDown = (event) => {
-    if (event.ctrlKey || event.metaKey || event.altKey || event.key.length !== 1) return;
-    if (!/^\d$/.test(event.key)) {
-      event.preventDefault();
-      return;
-    }
-
-    const input = event.currentTarget;
-    const selectedLength = (input.selectionEnd || 0) - (input.selectionStart || 0);
-    if (input.value.length - selectedLength >= 11) event.preventDefault();
-  };
-
-  const handlePhonePaste = (event) => {
-    event.preventDefault();
-    const input = event.currentTarget;
-    const currentValue = sanitizePhoneNumber(input.value);
-    const selectionStart = input.selectionStart ?? currentValue.length;
-    const selectionEnd = input.selectionEnd ?? currentValue.length;
-    const start = Math.min(selectionStart, selectionEnd);
-    const end = Math.max(selectionStart, selectionEnd);
-    const availableDigits = 11 - (currentValue.length - (end - start));
-    const pastedDigits = sanitizePhoneNumber(event.clipboardData?.getData('text') || '')
-      .slice(0, Math.max(0, availableDigits));
-    const nextValue = `${currentValue.slice(0, start)}${pastedDigits}${currentValue.slice(end)}`;
-
-    setFormData((current) => ({ ...current, phoneNumber: nextValue }));
-    setSaveError('');
-    setSaveNotice('');
-    input.setCustomValidity('');
-    requestAnimationFrame(() => {
-      input.setSelectionRange(start + pastedDigits.length, start + pastedDigits.length);
-    });
   };
 
   const handleReset = () => {
@@ -173,6 +139,11 @@ const CustomerProfile = () => {
 
   const handleSubmit = async (event) => {
     event.preventDefault();
+    const phoneNumberError = getPhoneNumberValidationMessage(formData.phoneNumber);
+    if (phoneNumberError) {
+      setSaveError(phoneNumberError);
+      return;
+    }
     setIsSaving(true);
     setSaveError('');
     setSaveNotice('');
@@ -181,7 +152,7 @@ const CustomerProfile = () => {
       const updatedProfile = await updateMyProfile({
         username: formData.username.trim(),
         fullName: formData.fullName.trim(),
-        phoneNumber: formData.phoneNumber.trim(),
+        phoneNumber: formData.phoneNumber,
         address: formData.address.trim(),
         avatarUrl: formData.avatarUrl.trim(),
       });
@@ -196,7 +167,7 @@ const CustomerProfile = () => {
         setSaveError('Your profile was saved, but Saved Addresses could not refresh. Please reload the page.');
       }
     } catch (error) {
-      setSaveError(error.message || 'Unable to update your profile right now.');
+      setSaveError(customerErrorMessage(error, 'Unable to update your profile right now.'));
     } finally {
       setIsSaving(false);
     }
@@ -360,17 +331,14 @@ const CustomerProfile = () => {
                     id="phoneNumber"
                     name="phoneNumber"
                     type="tel"
-                    autoComplete="tel"
+                    autoComplete="tel-national"
                     inputMode="numeric"
-                    pattern="[0-9]{11}"
-                    maxLength={11}
+                    pattern={PHILIPPINE_MOBILE_NUMBER_PATTERN_SOURCE}
                     required
                     className="customer-profile-input customer-profile-input-plain"
                     placeholder="09123456789"
                     value={formData.phoneNumber}
                     onChange={handleFieldChange}
-                    onKeyDown={handlePhoneKeyDown}
-                    onPaste={handlePhonePaste}
                     onInvalid={(event) => {
                       const message = getPhoneNumberValidationMessage(event.currentTarget.value);
                       event.currentTarget.setCustomValidity(message);

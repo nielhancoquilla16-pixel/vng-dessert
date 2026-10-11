@@ -1,3 +1,5 @@
+import { isValidPhilippinePhoneNumber as isValidPhilippineMobileNumber } from './phoneNumber';
+
 export const PRE_ORDER_STATUSES = ['pending', 'confirmed', 'completed', 'rejected'];
 
 // Future pre-orders use their own schedule; today's stock does not limit them.
@@ -49,11 +51,11 @@ export const getPreOrderMethodLabel = (value = '') => (
 );
 
 export const normalizePhoneNumber = (value = '') => (
-  String(value || '').trim().replace(/[^\d+]/g, '')
+  String(value ?? '')
 );
 
 export const isValidPhilippinePhoneNumber = (value = '') => (
-  /^(?:\+63|0)9\d{9}$/.test(normalizePhoneNumber(value))
+  isValidPhilippineMobileNumber(value)
 );
 
 export const getTomorrowDateValue = () => {

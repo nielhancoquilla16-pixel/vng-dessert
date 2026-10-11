@@ -6,8 +6,14 @@ import { requireAuth } from '../middleware/requireAuth.js';
 import { requireRole } from '../middleware/requireRole.js';
 import { writeAuditLog } from '../lib/auditLog.js';
 import { normalizeAuthEmailError } from '../lib/authEmailErrors.js';
+import { getPhoneNumberValidationMessage } from '../lib/phoneNumber.js';
+import { canonicalGmailAddress } from '../../shared/registrationEmail.js';
+import { BLOCKED_CUSTOMER_MESSAGE, isBlockedCustomerMailbox, validateCustomerRegistrationEmail } from '../lib/registrationEmail.js';
+import { registrationGuard } from '../middleware/registrationGuard.js';
+import { createRateLimitMiddleware, createRequestLimiter } from '../middleware/rateLimit.js';
 
 const router = express.Router();
+router.use(createRateLimitMiddleware({ limiter: createRequestLimiter({ limit: 60, windowMs: 5 * 60000 }), category: 'authentication' }));
 const EMAIL_LINK_RESEND_COOLDOWN_MS = 35 * 1000;
 const CAPTCHA_EXPIRY_MS = 10 * 60 * 1000;
 const MFA_EXPIRY_MS = 5 * 60 * 1000;
@@ -41,18 +47,10 @@ const isValidEmail = (value = '') => {
     && /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/i.test(domain);
 };
 const validateGmailRegistration = (value = '') => {
-  const email = normalizeIdentifier(value);
-  if (!isValidEmail(email)) {
-    return { valid: false, status: 'Invalid email format', reason: 'The email address is not correctly formatted.' };
-  }
-  if (email.split('@').at(-1) !== 'gmail.com') {
-    return {
-      valid: false,
-      status: 'Invalid Gmail address',
-      reason: 'Email is not a valid Gmail address ending in @gmail.com.',
-    };
-  }
-  return { valid: true };
+  const result = validateCustomerRegistrationEmail(value);
+  const status = result.reason === 'disposable_mailbox' ? 'Known disposable Gmail mailbox'
+    : result.reason === 'suspicious_pattern' ? 'Suspicious Gmail address' : 'Invalid Gmail address';
+  return { ...result, status };
 };
 const isGmailAddress = (value = '') => (
   normalizeIdentifier(value).split('@').at(-1) === 'gmail.com'
@@ -257,8 +255,8 @@ const resolveAccountForLogin = async (supabase, identifier) => {
     id: authUser.id,
     username: normalizeIdentifier(profileById?.username || authUser.user_metadata?.username),
     email: normalizeIdentifier(authUser.email),
-    role: normalizeRole(profileById?.role || authUser.user_metadata?.role),
-    emailVerified: Boolean(profileById?.email_verified || authUser.email_confirmed_at),
+    role: normalizeRole(profileById?.role || 'customer'),
+    emailVerified: Boolean(authUser.email_confirmed_at),
     lockedUntil: profileById?.locked_until || null,
     failedLoginAttempts: Number(profileById?.failed_login_attempts) || 0,
   };
@@ -293,7 +291,7 @@ const getRegistrationConflicts = async (supabase, normalizedEmail, normalizedUse
 
   return {
     username: Boolean(existingByUsername || findAuthUserByUsername(authUsers, normalizedUsername)),
-    email: Boolean(existingByEmail || findAuthUserByEmail(authUsers, normalizedEmail)),
+    email: Boolean(existingByEmail || authUsers.some((user) => canonicalGmailAddress(user.email) === canonicalGmailAddress(normalizedEmail))),
   };
 };
 
@@ -373,6 +371,10 @@ router.post('/resolve-login', async (req, res, next) => {
 
     if (!resolvedAccount?.email) {
       return res.status(404).json({ error: 'Account not found.' });
+    }
+
+    if (resolvedAccount.role === 'customer' && isBlockedCustomerMailbox(resolvedAccount.email)) {
+      return res.status(403).json({ error: BLOCKED_CUSTOMER_MESSAGE });
     }
 
     if (!allowLocked && isAccountLocked({ locked_until: resolvedAccount.lockedUntil })) {
@@ -512,7 +514,7 @@ router.get('/admin/invalid-gmail-registrations', requireAuth, requireRole('admin
   }
 });
 
-router.post('/register', async (req, res, next) => {
+router.post('/register', registrationGuard.middleware, async (req, res, next) => {
   try {
     const {
       email,
@@ -533,6 +535,13 @@ router.post('/register', async (req, res, next) => {
       return res.status(400).json({ error: 'email, password, and username are required.' });
     }
 
+    if (phone_number != null && phone_number !== '') {
+      const phoneNumberError = getPhoneNumberValidationMessage(phone_number);
+      if (phoneNumberError) {
+        return res.status(400).json({ error: phoneNumberError });
+      }
+    }
+
     if (!captchaValidation.valid) {
       return res.status(400).json({ error: captchaValidation.error });
     }
@@ -551,7 +560,7 @@ router.post('/register', async (req, res, next) => {
     const normalizedTermsVersion = normalizeOptionalText(terms_version);
     const normalizedTermsAcceptedAt = normalizeAcceptedTermsAt(terms_accepted_at);
 
-    const gmailValidation = validateGmailRegistration(normalizedEmail);
+    const gmailValidation = validateGmailRegistration(email);
     if (!gmailValidation.valid) {
       await writeGmailRegistrationAudit(getSupabaseAdmin(), req, {
         username: normalizedUsername,
@@ -561,8 +570,9 @@ router.post('/register', async (req, res, next) => {
         reason: gmailValidation.reason,
       });
       return res.status(400).json({
-        error: 'Enter a correctly formatted Gmail address ending in @gmail.com.',
-        errorCode: 'INVALID_GMAIL_REGISTRATION',
+        error: gmailValidation.message,
+        errorCode: ['suspicious_pattern', 'username_too_long', 'disposable_mailbox'].includes(gmailValidation.reason)
+          ? 'SUSPICIOUS_GMAIL_REGISTRATION' : 'INVALID_GMAIL_REGISTRATION',
       });
     }
 
@@ -580,6 +590,14 @@ router.post('/register', async (req, res, next) => {
       });
     }
 
+    const signupApproval = randomUUID();
+    const { error: approvalError } = await supabase.from('audit_logs').insert({
+      created_at: new Date().toISOString(),
+      action: 'customer_signup_approved', actor_role: 'anonymous', target_type: 'registration_attempt',
+      metadata: { approval: signupApproval, email: normalizedEmail },
+    });
+    if (approvalError) throw approvalError;
+
     const userMetadata = {
       username: normalizedUsername,
       full_name,
@@ -588,6 +606,7 @@ router.post('/register', async (req, res, next) => {
       terms_accepted_at: normalizedTermsAcceptedAt,
       terms_version: normalizedTermsVersion,
       email_verified: false,
+      registration_approval: signupApproval,
     };
     const anon = getSupabaseAnon();
     const { data: signupData, error: signupError } = await anon.auth.signUp({
@@ -623,6 +642,15 @@ router.post('/register', async (req, res, next) => {
 
     if (!signupData?.user?.id) {
       return res.status(502).json({ error: 'Unable to start email verification right now.' });
+    }
+
+    if (signupData.session || signupData.user.email_confirmed_at) {
+      // If confirmation is disabled at the auth provider, do not accidentally
+      // activate a customer without proving ownership of the mailbox.
+      await supabase.auth.admin.deleteUser(signupData.user.id);
+      const verificationError = new Error('Email confirmation must be enabled before accepting customer registrations.');
+      verificationError.status = 503;
+      throw verificationError;
     }
 
     const sentAt = new Date();
@@ -678,12 +706,19 @@ router.post('/register', async (req, res, next) => {
   }
 });
 
-router.post('/register/resend-link', async (req, res, next) => {
+router.post('/register/resend-link', registrationGuard.middleware, async (req, res, next) => {
   try {
     const email = normalizeIdentifier(req.body?.email);
 
     if (!email || !isValidEmail(email)) {
       return res.status(400).json({ error: 'A valid email address is required.' });
+    }
+
+    if (isBlockedCustomerMailbox(email)) {
+      return res.status(400).json({
+        error: validateCustomerRegistrationEmail(email).message,
+        errorCode: 'SUSPICIOUS_GMAIL_REGISTRATION',
+      });
     }
 
     const supabase = getSupabaseAdmin();
@@ -966,7 +1001,7 @@ router.post('/password/change', requireAuth, async (req, res, next) => {
   }
 });
 
-router.get('/test-supabase', async (req, res, next) => {
+router.get('/test-supabase', requireAuth, requireRole('admin'), async (req, res, next) => {
   try {
     const url = process.env.SUPABASE_URL;
     const key = process.env.SUPABASE_ANON_KEY;

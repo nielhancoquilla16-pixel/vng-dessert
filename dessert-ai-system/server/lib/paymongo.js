@@ -2,7 +2,7 @@ import crypto from 'crypto';
 
 const PAYMONGO_API_BASE_URL = 'https://api.paymongo.com/v1';
 const DEFAULT_FRONTEND_APP_URL = 'http://localhost:5173';
-const DEFAULT_PAYMENT_METHOD_TYPES = ['gcash'];
+const DEFAULT_PAYMENT_METHOD_TYPES = ['gcash', 'card', 'grab_pay', 'paymaya', 'qrph'];
 
 export class PayMongoApiError extends Error {
   constructor(message, status = 500, details = null) {
@@ -12,6 +12,21 @@ export class PayMongoApiError extends Error {
     this.details = details;
   }
 }
+
+// PayMongo v1 dates are Unix seconds; PostgreSQL timestamp fields require
+// a date string. Also accept ISO dates from newer provider responses.
+export const normalizePayMongoTimestamp = (value) => {
+  if (!['number', 'string'].includes(typeof value)) return null;
+  const text = String(value).trim();
+  if (!text) return null;
+  const unixSeconds = typeof value === 'number' || /^\d+(?:\.\d+)?$/.test(text);
+  if (!unixSeconds && !/^\d{4}-\d{2}-\d{2}T/.test(text)) return null;
+  const milliseconds = unixSeconds ? Number(text) * 1000 : Date.parse(text);
+  if (!Number.isFinite(milliseconds) || milliseconds <= 0) return null;
+  const date = new Date(milliseconds);
+  if (!Number.isFinite(date.getTime()) || date.getUTCFullYear() > 9999) return null;
+  return date.toISOString();
+};
 
 const trimTrailingSlash = (value = '') => String(value || '').replace(/\/$/, '');
 

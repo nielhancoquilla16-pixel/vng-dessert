@@ -67,7 +67,10 @@ export const createPurchaseFixture = () => {
     rows,
     database: {
       from: (table) => new Query(table),
-      auth: { getUser: async (token) => ({ data: { user: rows.profiles.find((profile) => profile.id === token) || null }, error: null }) },
+      auth: { getUser: async (token) => {
+        const profile = rows.profiles.find((entry) => entry.id === token);
+        return { data: { user: profile ? { ...profile, email_confirmed_at: '2026-09-01T00:00:00Z' } : null }, error: null };
+      } },
     },
   };
 };

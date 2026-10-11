@@ -30,7 +30,7 @@ import {
   normalizeDeliveryAddressFields,
   orderSelect,
 } from '../lib/orderUtils.js';
-import { validateReceiptImageDataUrl } from '../lib/receiptImages.js';
+import { storeReceiptImage, validateReceiptImageDataUrl } from '../lib/receiptImages.js';
 import {
   buildLalamoveTrackingPatch,
   extractLalamoveWebhookState,
@@ -54,6 +54,7 @@ import {
 } from '../lib/orderQr.js';
 import { assertShopOpen, getShopSettings } from '../lib/shopSettings.js';
 import { getOwnedCustomerAddress, toOrderDeliveryAddress } from '../lib/customerAddresses.js';
+import { getPhoneNumberValidationMessage } from '../lib/phoneNumber.js';
 import {
   RETURN_REFUND_STATUSES,
   buildReturnRefundHistoryEntry,
@@ -781,6 +782,11 @@ const getDeliveryAddressValidationError = (deliveryAddress = {}) => {
     return 'Recipient name and contact number are required before booking delivery.';
   }
 
+  const phoneNumberError = getPhoneNumberValidationMessage(deliveryAddress.contactNumber);
+  if (phoneNumberError) {
+    return phoneNumberError;
+  }
+
   if (!deliveryAddress.streetAddress || !deliveryAddress.city || !deliveryAddress.province) {
     return 'Street address, city/municipality, and province are required before booking delivery.';
   }
@@ -1246,6 +1252,13 @@ router.post('/', requireAuth, async (req, res, next) => {
     const isStaffWalkInOrder = ['admin', 'staff'].includes(placedByRole) && normalizedDeliveryMethod === 'pickup';
     const isCustomerOrder = !isStaffWalkInOrder;
 
+    if (isCustomerOrder) {
+      const phoneNumberError = getPhoneNumberValidationMessage(phone_number || req.profile?.phone_number || '');
+      if (phoneNumberError) {
+        return res.status(400).json({ error: phoneNumberError });
+      }
+    }
+
     if (!VALID_ORDER_STATUSES.includes(requestedStatus)) {
       return res.status(400).json({
         error: 'order_status must be a valid status.',
@@ -1404,6 +1417,10 @@ router.post('/:id/lalamove/book', requireAuth, requireRole('admin', 'staff'), as
     }, instructions);
     if (!deliveryAddress.recipientName || !deliveryAddress.contactNumber || !addressPatch.address) {
       return res.status(400).json({ error: 'The saved delivery needs a recipient name, contact number, and address before booking.' });
+    }
+    const deliveryPhoneNumberError = getPhoneNumberValidationMessage(deliveryAddress.contactNumber);
+    if (deliveryPhoneNumberError) {
+      return res.status(400).json({ error: deliveryPhoneNumberError });
     }
     if (!String(coordinates.latitude ?? '').trim() || !String(coordinates.longitude ?? '').trim() || !isValidDeliveryCoordinates(coordinates)) {
       return res.status(400).json({ error: ADDRESS_GEOCODE_ERROR });
@@ -1932,9 +1949,10 @@ const handleCustomerReceiptConfirmation = async (req, res, next) => {
       buildNotificationEntry('admin_staff', 'receipt_confirmed', `Customer confirmed receipt for Order ${currentOrder.order_code || currentOrder.id}. The sale has now been recorded.`),
     ];
 
+    const receiptImageReference = await storeReceiptImage(supabase, currentOrder.id, receiptImageDataUrl);
     const updatedOrder = await updateOrderRecord(supabase, currentOrder.id, {
       order_status: 'completed',
-      receipt_image_url: receiptImageDataUrl,
+      receipt_image_url: receiptImageReference,
       receipt_received_at: now,
       status_timestamps: statusTimestamps,
       review_status: 'none',
@@ -2464,7 +2482,7 @@ router.patch('/:id/status', requireAuth, async (req, res, next) => {
   }
 });
 
-router.post('/analyze', (req, res) => {
+router.post('/analyze', requireAuth, requireRole('admin', 'staff'), (req, res) => {
   const { orders } = req.body;
 
   if (!orders || orders.length === 0) {

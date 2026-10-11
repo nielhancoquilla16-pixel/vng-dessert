@@ -5,6 +5,7 @@ import { TERMS_VERSION } from '../content/termsAndConditions';
 import {supabase, isSupabaseConfigured, clearSupabaseSessionStorage, setRememberMePreference,
 } from '../lib/supabase';
 import { appUrl } from '../lib/appUrl';
+import { validateRegistrationEmail } from '../../../dessert-ai-system/shared/registrationEmail.js';
 
 const getAuthErrorMessage = (error) => {
   if (error instanceof ApiError) {
@@ -15,7 +16,17 @@ const getAuthErrorMessage = (error) => {
       : error.message;
   }
   console.error('Authentication request failed:', error);
-  return new ApiError(error?.message, error?.status || 500).message;
+  return new ApiError('', error?.status || 500).message;
+};
+
+const getLoginErrorMessage = (error) => {
+  const message = error instanceof ApiError ? error.userMessage : error?.message;
+  const isInvalidCredentials = /invalid login credentials/i.test(String(message || ''))
+    || (error?.status === 404 && /^account not found\.?$/i.test(String(message || '').trim()));
+
+  return isInvalidCredentials
+    ? 'Invalid login credentials'
+    : getAuthErrorMessage(error);
 };
 
 const AuthContext = createContext();
@@ -420,7 +431,7 @@ export const AuthProvider = ({ children }) => {
     } catch (error) {
       return {
         success: false,
-        message: getAuthErrorMessage(error),
+        message: getLoginErrorMessage(error),
       };
     }
   }, [fetchStaffAccounts, recordFailedLogin, recordSuccessfulLogin, refreshProfile, resolveLoginAccount]);
@@ -448,6 +459,8 @@ export const AuthProvider = ({ children }) => {
     captchaId = '',
     captchaAnswer = '',
   }) => {
+    const emailValidation = validateRegistrationEmail(email);
+    if (!emailValidation.valid) return { success: false, message: emailValidation.message };
     if (!isSupabaseConfigured || !supabase) {
       return { success: false, message: new ApiError('', 503).message };
     }

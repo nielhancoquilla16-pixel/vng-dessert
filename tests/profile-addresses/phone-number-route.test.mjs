@@ -2,6 +2,7 @@ import test, { after, before, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import express from '../../dessert-ai-system/node_modules/express/index.js';
 import * as realSupabase from '../../dessert-ai-system/server/lib/supabaseAdmin.js';
+import { PHONE_NUMBER_VALIDATION_MESSAGE } from '../../dessert-ai-system/server/lib/phoneNumber.js';
 
 let supabaseCalls = 0;
 mock.module('../../dessert-ai-system/server/lib/supabaseAdmin.js', {
@@ -49,7 +50,7 @@ test('customer profile route rejects malformed phone numbers before writing the 
     });
     assert.equal(response.status, 400);
     assert.deepEqual(await response.json(), {
-      error: 'Phone number must contain exactly 11 digits.',
+      error: PHONE_NUMBER_VALIDATION_MESSAGE,
     });
   }
   assert.equal(supabaseCalls, 0);

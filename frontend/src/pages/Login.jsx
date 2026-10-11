@@ -1,3 +1,4 @@
+import { customerErrorMessage } from '../lib/publicErrors';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { CheckCircle2, Eye, EyeOff, Link2, Lock, Mail, RefreshCw, UserPlus } from 'lucide-react';
@@ -12,6 +13,7 @@ import {
 import { apiRequest } from '../lib/api';
 import { getRememberMePreference, passwordRecoveryMode } from '../lib/supabase';
 import { PASSWORD_REQUIREMENTS, validatePassword } from '../utils/passwordValidation';
+import { validateRegistrationEmail } from '../../../dessert-ai-system/shared/registrationEmail.js';
 import './Login.css';
 
 const initialCaptcha = {
@@ -35,6 +37,13 @@ const getCustomerReturnPath = (location) => {
   return requestedPath === '/cart' || requestedPath === '/checkout' || requestedPath?.startsWith('/checkout/')
     ? requestedPath
     : '';
+};
+
+const getLoginAlertMessage = (message = '') => {
+  const text = String(message || '').trim();
+  return /invalid login credentials/i.test(text)
+    ? 'Invalid login credentials'
+    : text || 'Unable to log in.';
 };
 
 const getMessageClass = (type) => (
@@ -230,7 +239,7 @@ const Login = () => {
     } catch (error) {
       setCaptcha({
         ...initialCaptcha,
-        error: error.message || 'Unable to load CAPTCHA.',
+        error: customerErrorMessage(error, 'Unable to load CAPTCHA.'),
       });
     }
   }, []);
@@ -325,7 +334,7 @@ const Login = () => {
       return;
     }
 
-    showAlert(result.message || 'Unable to log in.');
+    showAlert(getLoginAlertMessage(result.message));
   };
 
   const submitSignup = async () => {
@@ -413,6 +422,12 @@ const Login = () => {
 
     if (signupPassword !== signupConfirmPassword) {
       showAlert('Passwords do not match.');
+      return;
+    }
+
+    const emailValidation = validateRegistrationEmail(signupEmail);
+    if (!emailValidation.valid) {
+      showAlert(emailValidation.message);
       return;
     }
 

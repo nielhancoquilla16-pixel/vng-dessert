@@ -1,4 +1,5 @@
-﻿import { useState, useRef, useEffect } from 'react';
+import { customerErrorMessage } from '../lib/publicErrors';
+import { useState, useRef, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { CalendarDays, Search, Plus, Minus, Sparkles, X, Send, ShoppingBag } from 'lucide-react';
@@ -8,6 +9,8 @@ import { useAI } from '../context/AIContext';
 import { useAuth } from '../context/AuthContext';
 import { useShopSettings } from '../context/ShopSettingsContext';
 import { formatCurrency } from '../utils/orderAnalytics';
+import { getProductPricing } from '../../../dessert-ai-system/shared/productPricing.js';
+import { getCustomerProducts, isProductExpired } from '../utils/customerProducts';
 import { CUSTOMER_SUPPORT_GREETING } from '../utils/customerSupportChat';
 import AssistantMessage from '../components/AssistantMessage';
 import { getPreOrderUnavailableReason as getProductPreOrderUnavailableReason } from '../utils/preOrders';
@@ -26,19 +29,21 @@ const Products = () => {
   const { isShopOpen, isShopSettingsLoading, shopSettingsError, operatingHoursLabel, closingTimeLabel } = useShopSettings();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
-  const [chatProduct, setChatProduct] = useState(null);
-  const [preOrderProduct, setPreOrderProduct] = useState(null);
+  const [selectedChatProduct, setChatProduct] = useState(null);
+  const [selectedPreOrderProduct, setPreOrderProduct] = useState(null);
+  const [preOrderQuantity, setPreOrderQuantity] = useState(1);
   const [messages, setMessages] = useState([]);
   const [inputValue, setInputValue] = useState('');
   const [isSending, setIsSending] = useState(false);
   const [detailQuantity, setDetailQuantity] = useState(1);
-  const [isAdding, setIsAdding] = useState(false);
   const [purchaseMessage, setPurchaseMessage] = useState('');
   const [purchaseError, setPurchaseError] = useState(false);
   const messagesEndRef = useRef(null);
   const chatRequestRef = useRef(0);
 
-  const storeProducts = products.filter((product) => !product.type || product.type === 'product');
+  const storeProducts = getCustomerProducts(products);
+  const chatProduct = storeProducts.find((product) => product.id === selectedChatProduct?.id) || null;
+  const preOrderProduct = storeProducts.find((product) => product.id === selectedPreOrderProduct?.id) || null;
   const categories = ['All Categories', ...new Set(storeProducts.map((product) => product.category).filter(Boolean))];
   const detailProduct = storeProducts.find((product) => String(product.id) === searchParams.get('product')) || null;
   const filteredProducts = storeProducts.filter((product) => {
@@ -55,15 +60,17 @@ const Products = () => {
   const getPreOrderUnavailableReason = (product) => getProductPreOrderUnavailableReason(product, {
     isShopOpen, isShopSettingsLoading, shopSettingsError,
   });
+  const canOrder = isShopOpen && !isShopSettingsLoading && !shopSettingsError;
   const canAddProductToCart = (product) => !isAdmin
+    && canOrder
     && remainingStock(product) > 0
-    && product?.availability !== 'expired'
-    && product?.availability !== 'hidden'
-    && !product?.isExpired;
+    && !isProductExpired(product)
+    && product?.availability !== 'hidden';
   const getAvailability = (product) => product.availability === 'expired' || product.availability === 'hidden'
     ? 'Unavailable' : Number(product.stock) > 0 ? `${product.stock} available` : 'Out of stock';
   const purchaseLabel = (product) => isAdmin ? 'Customer cart only'
     : getAvailability(product) === 'Unavailable' ? 'Unavailable'
+      : !canOrder ? (isShopSettingsLoading ? 'Checking shop hours' : shopSettingsError ? 'Shop hours unavailable' : 'Shop closed')
       : Number(product.stock) <= 0 ? 'Out of stock'
         : remainingStock(product) <= 0 ? 'Cart limit reached' : 'Add to Cart';
 
@@ -109,7 +116,7 @@ const Products = () => {
     setPurchaseMessage('');
   }
 
-  function openPreOrder(product) {
+  function openPreOrder(product, quantity = 1) {
     if (getPreOrderUnavailableReason(product)) return;
     closeDetails();
     if (!loggedInCustomer) {
@@ -117,22 +124,19 @@ const Products = () => {
       return;
     }
     setPreOrderProduct(product);
+    setPreOrderQuantity(quantity);
   }
 
-  async function purchaseProduct(product, quantity = 1) {
-    if (!canAddProductToCart(product) || isAdding) return;
-    setIsAdding(true);
+  function purchaseProduct(product, quantity = 1) {
+    if (!canAddProductToCart(product)) return;
     setPurchaseMessage('');
     setPurchaseError(false);
-    try {
-      await addToCart(product, quantity);
-      setPurchaseMessage(`${quantity === 1 ? 'Item' : `${quantity} items`} added to your cart.`);
-    } catch (error) {
-      setPurchaseError(true);
-      setPurchaseMessage(error.message || 'Could not add this item. Please try again.');
-    } finally {
-      setIsAdding(false);
-    }
+    addToCart(product, quantity)
+      .then(() => setPurchaseMessage(`${quantity === 1 ? 'Item' : `${quantity} items`} added to your cart.`))
+      .catch((error) => {
+        setPurchaseError(true);
+        setPurchaseMessage(customerErrorMessage(error, 'Could not add this item. Please try again.'));
+      });
   }
 
   async function sendMessage(event) {
@@ -154,6 +158,7 @@ const Products = () => {
   }
 
   const selectedQuantity = Math.max(1, Math.min(detailQuantity, remainingStock(detailProduct)));
+  const detailPricing = getProductPricing(detailProduct || {}, selectedQuantity);
 
   function changeDetailQuantity(event) {
     const value = event.target.value;
@@ -243,7 +248,8 @@ const Products = () => {
               <div className="dessert-detail-info">
                 <span className="products-eyebrow">{detailProduct.category}</span>
                 <h2 id="dessert-detail-title">{detailProduct.name}</h2>
-                <div className="dessert-detail-price">{formatCurrency(detailProduct.price)}</div>
+                <div className="dessert-detail-price">{formatCurrency(detailPricing.unitPrice)} each</div>
+                {detailPricing.bulkPrice !== null && <p className="shop-product-bulk-price">{formatCurrency(detailPricing.bulkPrice)} each · {detailPricing.bulkQuantityLabel}</p>}
                 <p className="dessert-detail-stock">{getAvailability(detailProduct)}</p>
                 <p className="dessert-detail-description">{detailProduct.description || 'A sweet treat from V & G Leche Flan.'}</p>
                 <p className="dessert-hours-note">Ordering hours: {operatingHoursLabel}.</p>
@@ -264,7 +270,7 @@ const Products = () => {
             <footer className="dessert-detail-footer">
               <div className="dessert-purchase-row">
                 <div className="dessert-quantity" role="group" aria-label="Quantity">
-                  <button type="button" aria-label="Decrease quantity" disabled={selectedQuantity <= 1 || isAdding} onClick={() => setDetailQuantity(selectedQuantity - 1)}><Minus size={18} /></button>
+                  <button type="button" aria-label="Decrease quantity" disabled={selectedQuantity <= 1} onClick={() => setDetailQuantity(selectedQuantity - 1)}><Minus size={18} /></button>
                   <input
                     type="number"
                     inputMode="numeric"
@@ -274,7 +280,7 @@ const Products = () => {
                     step="1"
                     value={detailQuantity === '' ? '' : selectedQuantity}
                     style={{ width: `${String(selectedQuantity).length}ch` }}
-                    disabled={isAdding || !canAddProductToCart(detailProduct)}
+                    disabled={!canAddProductToCart(detailProduct)}
                     onChange={changeDetailQuantity}
                     onBlur={() => setDetailQuantity(selectedQuantity)}
                     onFocus={(event) => event.target.select()}
@@ -286,10 +292,10 @@ const Products = () => {
                       if (!/^\d+$/.test(event.clipboardData.getData('text'))) event.preventDefault();
                     }}
                   />
-                  <button type="button" aria-label="Increase quantity" disabled={selectedQuantity >= remainingStock(detailProduct) || isAdding || !canAddProductToCart(detailProduct)} onClick={() => setDetailQuantity(selectedQuantity + 1)}><Plus size={18} /></button>
+                  <button type="button" aria-label="Increase quantity" disabled={selectedQuantity >= remainingStock(detailProduct) || !canAddProductToCart(detailProduct)} onClick={() => setDetailQuantity(selectedQuantity + 1)}><Plus size={18} /></button>
                 </div>
-                <button className="shop-add-button" type="button" disabled={!canAddProductToCart(detailProduct) || isAdding} onClick={() => void purchaseProduct(detailProduct, selectedQuantity)}>
-                  {isAdding ? 'Adding…' : purchaseLabel(detailProduct)}{canAddProductToCart(detailProduct) && <span>{formatCurrency(detailProduct.price * selectedQuantity)}</span>}
+                <button className="shop-add-button" type="button" disabled={!canAddProductToCart(detailProduct)} onClick={() => purchaseProduct(detailProduct, selectedQuantity)}>
+                  {purchaseLabel(detailProduct)}{canAddProductToCart(detailProduct) && <span>{formatCurrency(detailPricing.lineTotal)}</span>}
                 </button>
               </div>
               <p className={`dessert-purchase-message${purchaseError ? ' has-error' : ''}`} role="status">{purchaseMessage}</p>
@@ -315,14 +321,14 @@ const Products = () => {
               <button type="submit" className="dessert-icon-button" aria-label="Send message" disabled={isSending || !inputValue.trim()}><Send size={20} /></button>
             </form>
             <footer className="dessert-chat-footer">
-              <button className="shop-add-button" type="button" disabled={!canAddProductToCart(chatProduct) || isAdding} onClick={() => void purchaseProduct(chatProduct)}>{isAdding ? 'Adding…' : purchaseLabel(chatProduct)} · {formatCurrency(chatProduct.price)}</button>
+              <button className="shop-add-button" type="button" disabled={!canAddProductToCart(chatProduct)} onClick={() => purchaseProduct(chatProduct)}>{purchaseLabel(chatProduct)} · {formatCurrency(chatProduct.price)}</button>
               <p className={`dessert-purchase-message${purchaseError ? ' has-error' : ''}`} role="status">{purchaseMessage}</p>
             </footer>
           </section>
         </div>, document.body,
       )}
 
-      <PreOrderModal product={preOrderProduct} isOpen={Boolean(preOrderProduct)} onClose={() => setPreOrderProduct(null)} />
+      <PreOrderModal product={preOrderProduct} initialQuantity={preOrderQuantity} isOpen={Boolean(preOrderProduct)} onClose={() => setPreOrderProduct(null)} />
     </div>
   );
 };

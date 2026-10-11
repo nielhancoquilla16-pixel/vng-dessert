@@ -3,7 +3,9 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { apiRequest } from '../lib/api';
 import { useAuth } from './AuthContext';
 import { useProducts } from './ProductContext';
+import { useShopSettings } from './ShopSettingsContext';
 import { resolveAssetUrl } from '../lib/publicUrl';
+import { getProductDiscountConfig, getProductPricing } from '../../../dessert-ai-system/shared/productPricing.js';
 
 const CartContext = createContext();
 const GUEST_CART_KEY = 'vng_guest_cart';
@@ -12,6 +14,7 @@ const GUEST_CART_MERGE_KEY_PREFIX = 'vng_guest_cart_merge:';
 const normalizeCartItem = (item) => {
   const product = item.product || item;
   const stock = Math.max(0, Number(product.stock ?? product.stockQuantity) || 0);
+  const discount = getProductDiscountConfig(product);
 
   return {
     cartItemId: item.cartItemId || item.cart_item_id || '',
@@ -19,7 +22,9 @@ const normalizeCartItem = (item) => {
     productId: product.id || item.productId || item.product_id,
     name: product.name || product.productName || '',
     description: product.description || '',
-    price: Number(product.price) || 0,
+    price: Number(product.regularPrice ?? product.price) || 0,
+    discountEnabled: discount.enabled,
+    discountTiers: discount.tiers,
     category: product.category || 'Uncategorized',
     stock,
     stockQuantity: stock,
@@ -30,11 +35,37 @@ const normalizeCartItem = (item) => {
   };
 };
 
+const dedupeCartItems = (items) => {
+  const itemsByProduct = new Map();
+
+  items.forEach((item) => {
+    const productId = item?.id ?? item?.productId;
+    if (productId === undefined || productId === null) return;
+
+    const key = String(productId);
+    const existingItem = itemsByProduct.get(key);
+    if (!existingItem) {
+      itemsByProduct.set(key, item);
+      return;
+    }
+
+    const combinedQuantity = existingItem.quantity + item.quantity;
+    const stock = Math.max(0, Number(existingItem.stock) || Number(item.stock) || 0);
+    itemsByProduct.set(key, {
+      ...existingItem,
+      cartItemId: existingItem.cartItemId || item.cartItemId,
+      quantity: stock > 0 ? Math.min(combinedQuantity, stock) : combinedQuantity,
+    });
+  });
+
+  return [...itemsByProduct.values()];
+};
+
 const readGuestCart = () => {
   try {
     const saved = localStorage.getItem(GUEST_CART_KEY);
     return saved
-      ? JSON.parse(saved).map((item) => ({ ...normalizeCartItem(item), cartItemId: '' }))
+      ? dedupeCartItems(JSON.parse(saved).map((item) => ({ ...normalizeCartItem(item), cartItemId: '' })))
       : [];
   } catch {
     return [];
@@ -58,6 +89,7 @@ export const useCart = () => useContext(CartContext);
 export const CartProvider = ({ children }) => {
   const { session, loggedInCustomer, isAdmin, isAuthLoading } = useAuth();
   const { products } = useProducts();
+  const { isShopOpen, isShopSettingsLoading, shopSettingsError } = useShopSettings();
   const [cartItems, setCartItems] = useState(() => readGuestCart());
   const cartItemsRef = useRef(cartItems);
   const mergeAttemptedForUserRef = useRef('');
@@ -85,7 +117,6 @@ export const CartProvider = ({ children }) => {
         if (item.cartItemId) {
           remoteItemIdsRef.current.set(productId, item.cartItemId);
         }
-        remoteItemQuantitiesRef.current.set(productId, item.quantity);
       }
     });
   }, []);
@@ -104,12 +135,13 @@ export const CartProvider = ({ children }) => {
   }, []);
 
   const commitCartItems = useCallback((nextItems) => {
-    cartItemsRef.current = nextItems;
+    const uniqueItems = dedupeCartItems(nextItems);
+    cartItemsRef.current = uniqueItems;
     if (isRemoteCart) {
-      rememberRemoteItemIds(nextItems);
+      rememberRemoteItemIds(uniqueItems);
     }
-    setCartItems(nextItems);
-    return nextItems;
+    setCartItems(uniqueItems);
+    return uniqueItems;
   }, [isRemoteCart, rememberRemoteItemIds]);
 
   const commitLocalCartItems = useCallback((nextItems) => {
@@ -118,7 +150,7 @@ export const CartProvider = ({ children }) => {
   }, [commitCartItems]);
 
   const updateCartItems = useCallback((updater) => {
-    const nextItems = updater(cartItemsRef.current);
+    const nextItems = dedupeCartItems(updater(cartItemsRef.current));
     if (!isRemoteCart) {
       persistGuestCart(nextItems);
     }
@@ -356,11 +388,14 @@ export const CartProvider = ({ children }) => {
           : nextQuantity;
 
         if (incrementBy > 0) {
-          updateCartItems((prev) => prev.map((item) => (
-            String(item.id) === normalizedProductId
-              ? { ...item, quantity: targetQuantity }
-              : item
-          )));
+          const localItem = cartItemsRef.current.find((item) => String(item.id) === normalizedProductId);
+          if (localItem && localItem.quantity < targetQuantity) {
+            updateCartItems((prev) => prev.map((item) => (
+              String(item.id) === normalizedProductId
+                ? { ...item, quantity: targetQuantity }
+                : item
+            )));
+          }
         }
 
         const remoteItemId = remoteItemIdsRef.current.get(normalizedProductId);
@@ -443,6 +478,15 @@ export const CartProvider = ({ children }) => {
     if (isAdmin) {
       throw new Error('Only customer accounts can use the shopping cart.');
     }
+    if (isShopSettingsLoading) {
+      throw new Error('Shop hours are being checked. Please try again shortly.');
+    }
+    if (shopSettingsError) {
+      throw new Error('Shop hours are currently unavailable. Please try again shortly.');
+    }
+    if (!isShopOpen) {
+      throw new Error('The shop is closed. Add items during opening hours.');
+    }
 
     const requestedQuantity = Math.max(1, Number(quantity) || 1);
     const currentProduct = products.find((item) => String(item.id) === String(product.id)) || product;
@@ -462,15 +506,15 @@ export const CartProvider = ({ children }) => {
       throw new Error('This product is out of stock.');
     }
 
-    const existingItem = cartItemsRef.current.find((item) => item.id === normalizedProduct.id);
+    const existingItem = cartItemsRef.current.find((item) => String(item.id) === String(normalizedProduct.id));
     const nextQuantity = Math.min((existingItem?.quantity || 0) + requestedQuantity, maxStock);
 
     if (isRemoteCart) {
       updateCartItems((prev) => {
-        const liveItem = prev.find((item) => item.id === normalizedProduct.id);
+        const liveItem = prev.find((item) => String(item.id) === String(normalizedProduct.id));
         if (liveItem) {
           return prev.map((item) => (
-            item.id === normalizedProduct.id
+            String(item.id) === String(normalizedProduct.id)
               ? { ...item, ...normalizedProduct, quantity: nextQuantity }
               : item
           ));
@@ -486,10 +530,10 @@ export const CartProvider = ({ children }) => {
     }
 
     updateCartItems((prev) => {
-      const liveItem = prev.find((item) => item.id === normalizedProduct.id);
+      const liveItem = prev.find((item) => String(item.id) === String(normalizedProduct.id));
       if (liveItem) {
         return prev.map((item) => (
-          item.id === normalizedProduct.id
+          String(item.id) === String(normalizedProduct.id)
             ? { ...item, ...normalizedProduct, quantity: nextQuantity }
             : item
         ));
@@ -497,31 +541,33 @@ export const CartProvider = ({ children }) => {
 
       return [...prev, { ...normalizedProduct, quantity: Math.min(requestedQuantity, maxStock) }];
     });
-  }, [isAdmin, isRemoteCart, products, syncRemoteQuantity, updateCartItems]);
+  }, [isAdmin, isRemoteCart, isShopOpen, isShopSettingsLoading, products, shopSettingsError, syncRemoteQuantity, updateCartItems]);
 
   const removeFromCart = useCallback(async (id) => {
+    const productId = String(id);
     if (isRemoteCart) {
       if (
-        !cartItemsRef.current.some((item) => item.id === id)
-        && !remoteItemIdsRef.current.get(id)
+        !cartItemsRef.current.some((item) => String(item.id) === productId)
+        && !remoteItemIdsRef.current.get(productId)
       ) {
         return;
       }
 
-      updateCartItems((prev) => prev.filter((item) => item.id !== id));
-      await syncRemoteQuantity(id, 0);
+      updateCartItems((prev) => prev.filter((item) => String(item.id) !== productId));
+      await syncRemoteQuantity(productId, 0);
       return;
     }
 
-    updateCartItems((prev) => prev.filter((item) => item.id !== id));
+    updateCartItems((prev) => prev.filter((item) => String(item.id) !== productId));
   }, [isRemoteCart, syncRemoteQuantity, updateCartItems]);
 
   const updateQuantity = useCallback(async (id, quantity) => {
     if (quantity < 1) {
-      return;
+      return removeFromCart(id);
     }
 
-    const liveItem = cartItemsRef.current.find((item) => item.id === id);
+    const productId = String(id);
+    const liveItem = cartItemsRef.current.find((item) => String(item.id) === productId);
     if (!liveItem) return;
     const currentProduct = products.find((item) => String(item.id) === String(id)) || liveItem;
     if (quantity > liveItem.quantity) {
@@ -542,16 +588,16 @@ export const CartProvider = ({ children }) => {
 
     if (isRemoteCart) {
       updateCartItems((prev) => prev.map((item) => (
-        item.id === id ? { ...item, quantity: nextQuantity } : item
+        String(item.id) === productId ? { ...item, quantity: nextQuantity } : item
       )));
-      await syncRemoteQuantity(id, nextQuantity);
+      await syncRemoteQuantity(productId, nextQuantity);
       return;
     }
 
     updateCartItems((prev) => prev.map((item) => (
-      item.id === id ? { ...item, quantity: nextQuantity } : item
+      String(item.id) === productId ? { ...item, quantity: nextQuantity } : item
     )));
-  }, [isRemoteCart, products, syncRemoteQuantity, updateCartItems]);
+  }, [isRemoteCart, products, removeFromCart, syncRemoteQuantity, updateCartItems]);
 
   const clearCart = useCallback(async () => {
     if (isRemoteCart) {
@@ -595,9 +641,17 @@ export const CartProvider = ({ children }) => {
     return () => window.clearTimeout(timer);
   }, [commitCartItems, products]);
 
+  const pricedCartItems = useMemo(() => cartItems.map((item) => {
+    const product = products.find((candidate) => String(candidate.id) === String(item.id)) || item;
+    const pricing = getProductPricing(product, item.quantity);
+    return { ...item, regularPrice: pricing.regularPrice, price: pricing.unitPrice,
+      bulkPrice: pricing.bulkPrice, bulkQuantityLabel: pricing.bulkQuantityLabel,
+      isBulkPrice: pricing.isBulkPrice, lineTotal: pricing.lineTotal };
+  }), [cartItems, products]);
+
   const cartTotal = useMemo(() => (
-    cartItems.reduce((total, item) => total + (item.price * item.quantity), 0)
-  ), [cartItems]);
+    pricedCartItems.reduce((total, item) => total + item.lineTotal, 0)
+  ), [pricedCartItems]);
 
   const cartCount = useMemo(() => (
     cartItems.reduce((count, item) => count + item.quantity, 0)
@@ -606,7 +660,7 @@ export const CartProvider = ({ children }) => {
   return (
     <CartContext.Provider
       value={{
-        cartItems,
+        cartItems: pricedCartItems,
         addToCart,
         removeFromCart,
         updateQuantity,

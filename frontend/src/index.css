@@ -109,6 +109,7 @@ summary {
 .api-status-banner-copy { display: grid; gap: 0.2rem; flex: 1; min-width: 0; }
 .api-status-banner-copy strong { font-size: 1rem; }
 .api-status-banner-copy span { font-size: 0.9rem; font-weight: 400; line-height: 1.4; }
+.api-status-banner-copy .api-status-banner-route { font-size: 0.75rem; overflow-wrap: anywhere; opacity: 0.88; }
 .api-status-retry {
   flex-shrink: 0;
   padding: 0.55rem 0.85rem;

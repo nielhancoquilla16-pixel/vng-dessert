@@ -8,6 +8,7 @@ import { useShopSettings } from '../context/ShopSettingsContext';
 import { apiRequest } from '../lib/api';
 import { resolveAssetUrl } from '../lib/publicUrl';
 import { formatCurrency } from '../utils/orderAnalytics';
+import { getCustomerProducts } from '../utils/customerProducts';
 import MediaEmbed from '../components/MediaEmbed';
 import ShopProductCard from '../components/ShopProductCard';
 import './Home.css';
@@ -148,7 +149,7 @@ const Home = () => {
     };
   }, []);
 
-  const storeProducts = products.filter((product) => !product.type || product.type === 'product');
+  const storeProducts = getCustomerProducts(products);
   const fallbackBestSellers = buildFallbackBestSellers(storeProducts);
   const liveBestSellers = bestSellers
     .filter((product) => product.soldCount > 0 && storeProducts.some((item) => String(item.id) === String(product.id)))

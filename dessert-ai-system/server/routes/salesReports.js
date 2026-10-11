@@ -5,10 +5,11 @@ import {
   mapOrder,
   normalizeOrderStatus,
   normalizeStatusTimestamps,
-  orderSelect,
 } from '../lib/orderUtils.js';
+import { salesReportOrderSelect } from '../lib/salesReportQueries.js';
 import { requireAuth } from '../middleware/requireAuth.js';
 import { requireRole } from '../middleware/requireRole.js';
+import { estimateSaleProfit } from '../lib/productFinance.js';
 
 const router = express.Router();
 
@@ -199,7 +200,7 @@ const buildOrderDerivedSalesReportQuery = (supabase, req) => {
 
   let query = supabase
     .from('orders')
-    .select(orderSelect)
+    .select(salesReportOrderSelect)
     .eq('order_status', 'completed')
     .order('updated_at', { ascending: false });
 
@@ -429,6 +430,22 @@ router.get('/', requireAuth, requireRole('admin', 'staff'), async (req, res, nex
     const reports = hydratedOrders
       .filter((order) => isCompletedTransaction(order))
       .map((order) => mapOrderToSalesReport(order));
+
+    if (req.profile?.role === 'admin') {
+      const itemsByOrder = new Map(hydratedOrders.map(order => [order.id, order.order_items || []]));
+      const itemIds = reports.flatMap(report => (itemsByOrder.get(report.orderId) || []).map(item => item.id));
+      const snapshots = [];
+      // Bound both the query URL and PostgREST row count for large reports.
+      for (let index = 0; index < itemIds.length; index += 200) {
+        const { data: costs, error: costsError } = await supabase.from('order_item_costs')
+          .select('order_item_id, unit_cost').in('order_item_id', itemIds.slice(index, index + 200));
+        if (costsError) throw costsError;
+        snapshots.push(...(costs || []));
+      }
+      for (const report of reports) {
+        Object.assign(report, estimateSaleProfit(itemsByOrder.get(report.orderId) || [], snapshots));
+      }
+    }
 
     res.json(filterOrderDerivedSalesReports(reports, req));
   } catch (error) {

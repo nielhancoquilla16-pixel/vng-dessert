@@ -4,6 +4,7 @@ import { useProducts } from '../context/ProductContext';
 import { useOrders } from '../context/OrderContext';
 import ReceiptSlip from '../components/ReceiptSlip';
 import { formatCurrency, formatCurrencyText } from '../utils/currency';
+import { getProductPricing } from '../../../dessert-ai-system/shared/productPricing.js';
 import './AdminPOS.css';
 
 const POS_AUTO_PRINT_STORAGE_KEY = 'vng-pos-auto-print';
@@ -38,7 +39,14 @@ const AdminPOS = () => {
 
   const categories = ['All', 'Leche Flan', 'Cakes', 'Special Desserts', 'Pastries', 'Cringkles'];
 
-  const total = posCart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+  const pricedPosCart = posCart.map((item) => {
+    const liveProduct = products.find(product => product.id === item.id) || item;
+    const pricing = getProductPricing(liveProduct, item.quantity);
+    return { ...item, price: pricing.unitPrice, lineTotal: pricing.lineTotal,
+      isBulkPrice: pricing.isBulkPrice, bulkQuantityLabel: pricing.bulkQuantityLabel };
+  });
+  const subtotal = pricedPosCart.reduce((sum, item) => sum + item.lineTotal, 0);
+  const total = subtotal;
   const cashTendered = Number.parseFloat(cashAmount);
   const hasCashTender = Number.isFinite(cashTendered);
   const cashDifference = hasCashTender ? Number((cashTendered - total).toFixed(2)) : null;
@@ -133,7 +141,7 @@ const AdminPOS = () => {
       return;
     }
 
-    const lineItems = posCart.map((item) => ({
+    const lineItems = pricedPosCart.map((item) => ({
       productId: item.id,
       name: item.name,
       category: item.category || 'Uncategorized',
@@ -260,6 +268,9 @@ const AdminPOS = () => {
     setSaleReceipt(null);
     setPosCart((prev) => {
       const existing = prev.find((item) => item.id === product.id);
+      if (existing && existing.quantity >= availableStock) {
+        return prev;
+      }
       if (existing) {
         return prev.map((item) => item.id === product.id ? { ...item, quantity: item.quantity + 1 } : item);
       }
@@ -268,21 +279,23 @@ const AdminPOS = () => {
   };
 
   const removeFromPOSCart = (id) => {
+    setSaleError('');
     setSaleReceipt(null);
     setPosCart((prev) => prev.filter((item) => item.id !== id));
   };
 
   const updateQuantity = (id, delta) => {
+    if (delta > 0) {
+      const product = products.find((item) => item.id === id);
+      if (product) addToPOSCart(product);
+      return;
+    }
+
     setSaleError('');
     setSaleReceipt(null);
-    setPosCart((prev) => prev.map((item) => {
-      if (item.id === id) {
-        const maxStock = Math.max(1, Number(item.stock) || item.quantity);
-        const newQty = Math.min(maxStock, Math.max(1, item.quantity + delta));
-        return { ...item, quantity: newQty };
-      }
-      return item;
-    }));
+    setPosCart((prev) => prev
+      .map((item) => item.id === id ? { ...item, quantity: item.quantity + delta } : item)
+      .filter((item) => item.quantity > 0));
   };
 
   return (
@@ -321,13 +334,13 @@ const AdminPOS = () => {
         <div className="pos-products-panel">
           <div className="pos-card-grid">
             {filteredProducts.map((product) => (
-              <div key={product.id} className="pos-item-card" onClick={() => addToPOSCart(product)}>
+              <button key={product.id} type="button" className="pos-item-card" aria-label={`Add ${product.name} to cart`} onClick={() => addToPOSCart(product)}>
                 <img src={product.image} alt={product.name} className="pos-item-img" />
                 <div className="pos-item-info">
                   <div className="pos-item-name">{product.name}</div>
                   <div className="pos-item-price">{formatCurrency(product.price)}</div>
                 </div>
-              </div>
+              </button>
             ))}
           </div>
         </div>
@@ -371,20 +384,22 @@ const AdminPOS = () => {
               Cart is empty
             </div>
           ) : (
-            posCart.map((item) => (
+            pricedPosCart.map((item) => (
               <div key={item.id} className="pos-cart-item">
-                <div style={{ flex: 1 }}>
+                <div className="pos-cart-item-details">
                   <div style={{ fontWeight: 700 }}>{item.name}</div>
                   <div style={{ fontSize: '0.8rem', color: '#64748b' }}>{formatCurrency(item.price)} x {item.quantity}</div>
+                  {item.isBulkPrice && <div className="pos-cart-item-total">Bulk price applied · {item.bulkQuantityLabel}</div>}
+                  <div className="pos-cart-item-total">Subtotal: {formatCurrency(item.price * item.quantity)}</div>
                 </div>
 
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                <div className="pos-cart-item-actions">
                   <div style={{ display: 'flex', background: '#f8fafc', borderRadius: '0.5rem', overflow: 'hidden', border: '1px solid #e2e8f0' }}>
-                    <button onClick={() => updateQuantity(item.id, -1)} style={{ padding: '0.25rem 0.5rem', background: 'none', border: 'none' }}><Minus size={14} /></button>
+                    <button type="button" aria-label={`Decrease quantity of ${item.name}`} onClick={() => updateQuantity(item.id, -1)} style={{ padding: '0.25rem 0.5rem', background: 'none', border: 'none' }}><Minus size={14} /></button>
                     <span style={{ padding: '0.25rem 0.5rem', fontWeight: 700, fontSize: '0.85rem' }}>{item.quantity}</span>
-                    <button onClick={() => updateQuantity(item.id, 1)} style={{ padding: '0.25rem 0.5rem', background: 'none', border: 'none' }}><Plus size={14} /></button>
+                    <button type="button" aria-label={`Increase quantity of ${item.name}`} onClick={() => updateQuantity(item.id, 1)} style={{ padding: '0.25rem 0.5rem', background: 'none', border: 'none' }}><Plus size={14} /></button>
                   </div>
-                  <button onClick={() => removeFromPOSCart(item.id)} style={{ color: '#ef4444' }}><Trash2 size={18} /></button>
+                  <button type="button" aria-label={`Remove ${item.name} from cart`} onClick={() => removeFromPOSCart(item.id)} style={{ color: '#ef4444' }}><Trash2 size={18} /></button>
                 </div>
               </div>
             ))
@@ -392,6 +407,7 @@ const AdminPOS = () => {
         </div>
 
         <div className="pos-total-centered">
+          <div className="pos-subtotal-row"><span>Subtotal:</span><span>{formatCurrency(subtotal)}</span></div>
           <div style={{ color: '#64748b', fontWeight: 600, marginBottom: '0.5rem' }}>Total:</div>
           <span className="pos-total-price-large">{formatCurrency(total)}</span>
         </div>

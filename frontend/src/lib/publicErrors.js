@@ -6,7 +6,8 @@ export const httpErrorStatus = (status, fallback = 500) => {
 
 export const containsTechnicalDetails = (value = '') => (
   /permission denied for|row.level.security|violates.*constraint|\b(?:host|hostname|port|connection string|access token)\b/i.test(String(value)) ||
-  /supabase|postgres|postgrest|paymongo|lalamove|railway|groq|smtp|gmail|sqlstate|\bdns\b|\bsql\b|\bapi\b|backend|database|schema|migration|stack\s*trace|\b(?:type|syntax|reference|aggregate)error\b|\b(?:ENOTFOUND|ECONN\w*|EACCES|ETIMEDOUT)\b|fetch failed|failed to fetch|environment variable|configuration|service.role|secret.key|api.key|\.env\b|https?:\/\/|[A-Z][A-Z0-9]+_[A-Z0-9_]+|(?:column|relation|table|constraint).*?(?:exist|cache|violat|missing)|invalid input syntax|\bat\s+\S+\s*\([^)]*:\d+|[<>]|(?:[A-Za-z]:\\|\/(?:api|server|src|node_modules)\/)/i.test(String(value))
+  /\b(?:internal|exception|traceback|error:\s|query failed|request failed|response failed)\b/i.test(String(value)) ||
+  /^\s*[45]\d{2}\s*$|\(\s*[45]\d{2}\s*\)|\[\s*[45]\d{2}\s*\]|\b(?:error|http(?:\s+status)?|status(?:\s+code)?)\s*[:#]?\s*[45]\d{2}\b|\bhttp\/\d(?:\.\d)?\s+[45]\d{2}\b|\b[45]\d{2}\s+(?:not found|bad gateway|service unavailable|gateway timeout)\b|supabase|postgres|postgrest|paymongo|lalamove|railway|groq|smtp|gmail|sqlstate|\bdns\b|\bsql\b|\bapi\b|backend|database|schema|migration|stack\s*trace|\b(?:type|syntax|reference|aggregate)error\b|\b(?:ENOTFOUND|ECONN\w*|EACCES|ETIMEDOUT)\b|fetch failed|failed to fetch|environment variable|configuration|service.role|secret.key|api.key|\.env\b|https?:\/\/|[A-Z][A-Z0-9]+_[A-Z0-9_]+|(?:column|relation|table|constraint).*?(?:exist|cache|violat|missing)|invalid input syntax|\bat\s+\S+\s*\([^)]*:\d+|[<>]|(?:[A-Za-z]:\\|\/(?:api|server|src|node_modules)\/)/i.test(String(value))
 );
 
 const isAuthEmailDeliveryError = (errorCode, status) => (
@@ -15,9 +16,11 @@ const isAuthEmailDeliveryError = (errorCode, status) => (
 const isGmailRegistrationValidationError = (errorCode, status) => (
   status === 400 && errorCode === 'INVALID_GMAIL_REGISTRATION'
 );
+const isSuspiciousRegistration = (errorCode, status) => status === 400 && errorCode === 'SUSPICIOUS_GMAIL_REGISTRATION';
 
 export const publicErrorMessage = (message = '', status = 500, errorCode = '') => {
   const code = httpErrorStatus(status);
+  if (isSuspiciousRegistration(errorCode, code)) return 'We could not accept this email address. Please use your usual Gmail address or contact the shop for help.';
   if (isGmailRegistrationValidationError(errorCode, code)) {
     return 'Enter a correctly formatted Gmail address ending in @gmail.com.';
   }
@@ -27,13 +30,13 @@ export const publicErrorMessage = (message = '', status = 500, errorCode = '') =
   const text = typeof message === 'string'
     ? message.replace(/^Error\s+\d{3}:\s*/i, '').trim()
     : '';
-  if (code < 500 && text && text.length <= 400 && !containsTechnicalDetails(text)) return text;
+  if (code !== 404 && code < 500 && text && text.length <= 400 && !containsTechnicalDetails(text)) return text;
 
   const messages = {
     400: 'Please check your information and try again.',
     401: 'Please sign in to continue.',
     403: 'You do not have permission to do that.',
-    404: 'We could not find what you requested.',
+    404: 'Sorry, the requested page or information is currently unavailable. Please try again.',
     408: 'This is taking too long. Please try again.',
     409: 'This action cannot be completed right now. Please refresh and try again.',
     410: 'This is no longer available. Please refresh and try again.',
@@ -50,6 +53,7 @@ export const publicErrorMessage = (message = '', status = 500, errorCode = '') =
 // Keep the stock and verification information used by forms, never raw diagnostics.
 export const publicErrorDetails = (value, status = 400) => {
   if (!value || typeof value !== 'object') return null;
+  if (isSuspiciousRegistration(value.errorCode, httpErrorStatus(status))) return { errorCode: 'SUSPICIOUS_GMAIL_REGISTRATION' };
   if (isGmailRegistrationValidationError(value.errorCode, httpErrorStatus(status))) {
     return { errorCode: 'INVALID_GMAIL_REGISTRATION' };
   }
@@ -72,4 +76,32 @@ export const publicErrorDetails = (value, status = 400) => {
     }));
   }
   return Object.keys(details).length ? details : null;
+};
+
+// API errors already carry a sanitized userMessage. Other exceptions are
+// logged and use a fixed fallback, except for known local form validations.
+const LOCAL_FORM_VALIDATION_MESSAGES = new Set([
+  'Enter a valid Philippine mobile number with 11 digits, starting with 09.',
+  'Only PNG and JPG/JPEG profile pictures are supported.', 'Profile pictures must be 2MB or smaller.',
+  'Unable to read the selected image.', 'Please log in first before checking out.',
+  'Please enter the delivery distance so we can verify the leche flan restriction.',
+  'Select the actual pickup or drop-off location on the map before booking delivery.',
+  'Recipient name and contact number are required before booking delivery.',
+  'Street address, city/municipality, and province are required before booking delivery.',
+  'Leche flan delivery is limited to 3 km only.',
+  'The shop is closed for orders. Your cart is saved; please return during our ordering hours.',
+  'Your saved delivery address is still loading. Please wait a moment and try again.',
+  'Online payment is temporarily unavailable. Please choose cash or try again later.',
+  'Only customer accounts can use the shopping cart.',
+  'Shop hours are being checked. Please try again shortly.',
+  'Shop hours are currently unavailable. Please try again shortly.',
+  'The shop is closed. Add items during opening hours.',
+  'This product is no longer available to order.', 'This product is out of stock.',
+  'There is no more stock available for this product.',
+]);
+export const customerErrorMessage = (error, fallback = 'Something went wrong. Please try again later.') => {
+  if (typeof error?.userMessage === 'string') return publicErrorMessage(error.userMessage, error.status, error.details?.errorCode);
+  console.error('Customer action failed:', error);
+  const message = typeof error?.message === 'string' ? error.message : '';
+  return LOCAL_FORM_VALIDATION_MESSAGES.has(message) ? message : fallback;
 };

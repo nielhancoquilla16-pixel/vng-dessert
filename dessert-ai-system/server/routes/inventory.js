@@ -324,7 +324,7 @@ router.delete('/:id', requireAuth, requireRole('admin', 'staff'), async (req, re
   }
 });
 
-router.post('/report', (req, res) => {
+router.post('/report', requireAuth, requireRole('admin', 'staff'), (req, res) => {
   const { products } = req.body;
 
   if (!products || products.length === 0) {
@@ -367,7 +367,7 @@ router.post('/report', (req, res) => {
   });
 });
 
-router.get('/health', (req, res) => {
+router.get('/health', requireAuth, requireRole('admin', 'staff'), (req, res) => {
   res.json({
     status: 'ready',
     message: 'Inventory route is active. CRUD is powered by Supabase and /report remains available for AI analysis.',

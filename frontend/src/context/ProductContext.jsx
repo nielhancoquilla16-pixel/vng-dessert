@@ -4,6 +4,8 @@ import { apiRequest, isBackendIssueError } from '../lib/api';
 import { subscribeToDatabaseChanges } from '../lib/realtime';
 import { useAuth } from './AuthContext';
 import { resolveAssetUrl } from '../lib/publicUrl';
+import { getProductDiscountConfig, getProductPricing } from '../../../dessert-ai-system/shared/productPricing.js';
+import { expireProducts, getNextProductExpiryDelay, isProductExpired } from '../utils/customerProducts';
 import {
   DEFAULT_EXPIRY_WARNING_DAYS,
   getExpirationTime,
@@ -30,7 +32,8 @@ const mapProduct = (product) => {
   const stock = Math.max(0, normalizeNumber(product.stockQuantity ?? product.stock_quantity));
   const expirationDate = normalizeInventoryDate(product.expirationDate || product.expiration_date);
   const expirationAt = normalizeExpirationAt(product.expirationAt || product.expiration_at, expirationDate);
-  const expiryStatus = product.expiryStatus || product.expiry_status || getInventoryBatchStatus({
+  const expiryStatus = isProductExpired({ ...product, expirationDate, expirationAt }) ? 'expired'
+    : product.expiryStatus || product.expiry_status || getInventoryBatchStatus({
     dateCreated: product.dateCreated || product.date_created || product.createdAt,
     expirationDate,
     expirationAt,
@@ -38,21 +41,25 @@ const mapProduct = (product) => {
   const availability = product.availability === 'hidden'
     ? 'hidden'
     : (expiryStatus === 'expired' ? 'expired' : (product.availability || 'available'));
+  const discount = getProductDiscountConfig(product);
 
   return {
     id: product.id,
     name: product.productName || product.product_name || '',
     productName: product.productName || product.product_name || '',
     description: product.description || '',
-    price: normalizeNumber(product.price),
+    price: getProductPricing(product).regularPrice,
+    discountEnabled: discount.enabled,
+    discountTiers: discount.tiers,
+    ...(Object.hasOwn(product, 'costPrice') ? { costPrice: product.costPrice } : {}),
     category: product.category || 'Uncategorized',
     stock,
     stockQuantity: stock,
     availability,
     expiryStatus,
-    isExpired: availability === 'expired',
+    isExpired: expiryStatus === 'expired',
     status: getProductStatus(stock),
-    imageUrl: resolveAssetUrl(product.imageUrl || product.image_url || product.image, 'logo.png'),
+    imageUrl: resolveAssetUrl(product.imageUrl || product.image_url || product.image),
     image: resolveAssetUrl(product.imageUrl || product.image_url || product.image, 'logo.png'),
     soldCount: normalizeNumber(product.soldCount),
     type: 'product',
@@ -115,12 +122,36 @@ export const ProductProvider = ({ children }) => {
   const [inventoryItems, setInventoryItems] = useState([]);
   const [isProductsLoading, setIsProductsLoading] = useState(true);
 
+  useEffect(() => {
+    let timeout;
+    const scheduleExpiry = () => {
+      window.clearTimeout(timeout);
+      const delay = getNextProductExpiryDelay(products);
+      if (delay !== null) timeout = window.setTimeout(checkExpiry, delay);
+    };
+    function checkExpiry() {
+      setProducts((current) => expireProducts(current));
+      scheduleExpiry();
+    }
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') checkExpiry();
+    };
+    scheduleExpiry();
+    window.addEventListener('focus', checkExpiry);
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => {
+      window.clearTimeout(timeout);
+      window.removeEventListener('focus', checkExpiry);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+    };
+  }, [products]);
+
   const refreshProducts = useCallback(async () => {
-    const response = await apiRequest('/api/products');
+    const response = await apiRequest('/api/products', {}, { auth: Boolean(session?.access_token) && ['admin', 'staff'].includes(userRole) });
     const mappedProducts = (response || []).map(mapProduct);
     setProducts(mappedProducts);
     return mappedProducts;
-  }, []);
+  }, [session?.access_token, userRole]);
 
   const refreshInventory = useCallback(async () => {
     if (!session?.access_token || !['admin', 'staff'].includes(userRole)) {
@@ -230,12 +261,21 @@ export const ProductProvider = ({ children }) => {
       return undefined;
     }
 
+    if (!['admin', 'staff'].includes(userRole)) {
+      // Customers refresh the public API instead of subscribing to raw rows
+      // that may acquire business-only columns later.
+      const refresh = () => { if (document.visibilityState !== 'hidden') void refreshProducts().catch(() => {}); };
+      const interval = window.setInterval(refresh, 15000);
+      window.addEventListener('focus', refresh);
+      return () => { window.clearInterval(interval); window.removeEventListener('focus', refresh); };
+    }
+
     return subscribeToDatabaseChanges({
       channelName: 'products-sync',
       tables: ['products'],
       onChange: refreshProducts,
     });
-  }, [isAuthLoading, refreshProducts]);
+  }, [isAuthLoading, refreshProducts, userRole]);
 
   useEffect(() => {
     if (
@@ -260,13 +300,16 @@ export const ProductProvider = ({ children }) => {
         product_name: product.name || product.productName,
         description: product.description || '',
         price: normalizeNumber(product.price),
+        ...(Object.hasOwn(product, 'costPrice') ? { cost_price: product.costPrice === '' ? null : product.costPrice } : {}),
+        discount_enabled: product.discountEnabled === true,
+        discount_tiers: product.discountTiers || [],
         category: product.category || 'Uncategorized',
         stock_quantity: Math.max(0, normalizeNumber(product.stock)),
         availability: product.availability,
         image_url: product.image || product.imageUrl || '',
-      date_created: product.dateCreated || new Date().toISOString().split('T')[0],
-      expiration_date: product.expirationDate,
-      expiration_time: product.expirationTime,
+        date_created: product.dateCreated || new Date().toISOString().split('T')[0],
+        expiration_date: product.expirationDate,
+        expiration_time: product.expirationTime,
       expiration_at: product.expirationAt,
       }),
     }, {
@@ -289,6 +332,9 @@ export const ProductProvider = ({ children }) => {
         product_name: updatedProduct.name || updatedProduct.productName,
         description: updatedProduct.description || '',
         price: normalizeNumber(updatedProduct.price),
+        ...(Object.hasOwn(updatedProduct, 'costPrice') ? { cost_price: updatedProduct.costPrice === '' ? null : updatedProduct.costPrice } : {}),
+        discount_enabled: updatedProduct.discountEnabled === true,
+        discount_tiers: updatedProduct.discountTiers || [],
         category: updatedProduct.category || 'Uncategorized',
         stock_quantity: Math.max(0, normalizeNumber(updatedProduct.stock)),
         availability: updatedProduct.availability,

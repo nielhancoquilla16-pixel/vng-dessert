@@ -60,7 +60,9 @@ export const ShopSettingsProvider = ({ children }) => {
     const controller = new AbortController();
     const timeout = window.setTimeout(() => controller.abort(), 8000);
     try {
-      const response = await apiRequest('/api/shop-settings', { cache: 'no-store', signal: controller.signal });
+      const isAdmin = userRole === 'admin' && Boolean(session?.access_token);
+      const response = await apiRequest(isAdmin ? '/api/shop-settings/internal' : '/api/shop-settings',
+        { cache: 'no-store', signal: controller.signal }, { auth: isAdmin });
       const normalized = acceptSettings(response, sequence);
       if (mountedRef.current) setStreamBase(API_BASE_URL);
       return normalized;
@@ -73,7 +75,7 @@ export const ShopSettingsProvider = ({ children }) => {
     } finally {
       window.clearTimeout(timeout);
     }
-  }, [acceptSettings]);
+  }, [acceptSettings, userRole, session?.access_token]);
 
   useEffect(() => {
     let disposed = false;
@@ -112,7 +114,11 @@ export const ShopSettingsProvider = ({ children }) => {
     const stream = new EventSource(`${streamBase.replace(/\/$/, '')}/api/shop-settings/events`);
     const receive = (event) => {
       try {
-        acceptSettings(JSON.parse(event.data), ++sequenceRef.current);
+        const publicSettings = JSON.parse(event.data);
+        acceptSettings(userRole === 'admin' ? { ...publicSettings, customerSupport: {
+          ...publicSettings.customerSupport, ...(settingsRef.current.customerSupport?.supplier
+            ? { supplier: settingsRef.current.customerSupport.supplier } : {}),
+        } } : publicSettings, ++sequenceRef.current);
         streamConnectedRef.current = true;
       } catch { void refreshShopSettings().catch(() => {}); }
     };
@@ -133,11 +139,11 @@ export const ShopSettingsProvider = ({ children }) => {
       streamConnectedRef.current = false;
       stream.close();
     };
-  }, [acceptSettings, refreshShopSettings, streamBase]);
+  }, [acceptSettings, refreshShopSettings, streamBase, userRole]);
 
   useEffect(() => subscribeToDatabaseChanges({
-    channelName: 'shop-settings-sync', tables: ['shop_settings'], onChange: refreshShopSettings,
-  }), [refreshShopSettings]);
+    channelName: 'shop-settings-sync', tables: userRole === 'admin' ? ['shop_settings'] : [], onChange: refreshShopSettings,
+  }), [refreshShopSettings, userRole]);
 
   useEffect(() => {
     let timeout;

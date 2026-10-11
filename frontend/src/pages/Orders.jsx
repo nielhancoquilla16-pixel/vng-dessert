@@ -1,3 +1,4 @@
+import { customerErrorMessage } from '../lib/publicErrors';
 import React, { useEffect, useMemo, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import {
@@ -100,9 +101,6 @@ const OrderVerificationPanel = ({ order }) => {
   const [qrActionError, setQrActionError] = useState('');
   const [qrActionMessage, setQrActionMessage] = useState('');
   const hasQrPayload = Boolean(order?.verificationRequired && order?.qrPayload);
-  const isAwaitingOnlinePayment = String(order?.paymentMethod || '').toLowerCase() === 'online'
-    && String(order?.paymentCheckoutStatus || '').toLowerCase() === 'created'
-    && Boolean(order?.paymentCheckout?.checkoutUrl);
   const orderQrPayload = order?.qrPayload || '';
   const orderQrUsedAt = order?.qrUsedAt || null;
   const orderQrExpiryTime = Date.parse(order?.qrExpiresAt || '');
@@ -138,7 +136,7 @@ const OrderVerificationPanel = ({ order }) => {
       await refreshOrders();
       setQrActionMessage('A new QR Code/Order ID is ready and will expire in six minutes.');
     } catch (error) {
-      setQrActionError(error.message || 'Unable to generate a new QR Code/Order ID.');
+      setQrActionError(customerErrorMessage(error, 'Unable to generate a new QR Code/Order ID.'));
     } finally {
       setIsRegeneratingQr(false);
     }
@@ -196,9 +194,7 @@ const OrderVerificationPanel = ({ order }) => {
             {orderQrExpired
               ? 'This QR Code/Order ID has expired. Please generate a new one.'
               : order.qrUsedAt
-              ? 'This QR code has already been used and cannot be scanned again.'
-              : isAwaitingOnlinePayment
-                ? 'Your QR and Order ID are ready. Complete the online payment to continue processing this order.'
+                ? 'This QR code has already been used and cannot be scanned again.'
                 : isWalkInOrder(order)
                   ? 'Show this QR code or Order ID to staff when your pickup order is ready.'
                   : 'Please present your QR code or Order ID when claiming your order. QR codes are valid for six minutes and one-time use only.'}
@@ -222,17 +218,6 @@ const OrderVerificationPanel = ({ order }) => {
                 <RotateCcw size={16} />
                 {isRegeneratingQr ? 'Generating…' : 'Generate a New QR / Order ID'}
               </button>
-            </div>
-          )}
-          {isAwaitingOnlinePayment && (
-            <div className="order-qr-actions">
-              <a
-                className="order-button order-button--primary"
-                href={order.paymentCheckout.checkoutUrl}
-                style={{ textDecoration: 'none' }}
-              >
-                Continue Online Payment
-              </a>
             </div>
           )}
         </div>
@@ -472,7 +457,7 @@ const Orders = () => {
       setReceiptDraft(orderId, {
         receiptImageDataUrl: '',
         receiptImageName: '',
-        error: error.message || 'Unable to load that image.',
+        error: customerErrorMessage(error, 'Unable to load that image.'),
       });
     }
   };
@@ -494,9 +479,9 @@ const Orders = () => {
       setPageNotice(`Order ${order.displayId || order.orderCode || order.id} is now completed.`);
     } catch (error) {
       setReceiptDraft(order.id, {
-        error: error.message || 'Unable to confirm this order right now.',
+        error: customerErrorMessage(error, 'Unable to confirm this order right now.'),
       });
-      setPageError(error.message || 'Unable to confirm this order right now.');
+      setPageError(customerErrorMessage(error, 'Unable to confirm this order right now.'));
     } finally {
       setLoadingAction(null);
     }
@@ -519,9 +504,9 @@ const Orders = () => {
       setPageNotice(`Order ${order.displayId || order.orderCode || order.id} has been cancelled.`);
     } catch (error) {
       setCancelDraft(order.id, {
-        error: error.message || 'Unable to cancel this order right now.',
+        error: customerErrorMessage(error, 'Unable to cancel this order right now.'),
       });
-      setPageError(error.message || 'Unable to cancel this order right now.');
+      setPageError(customerErrorMessage(error, 'Unable to cancel this order right now.'));
     } finally {
       setLoadingAction(null);
     }
@@ -550,7 +535,7 @@ const Orders = () => {
       setReturnRefundDraft(orderId, {
         evidenceImageDataUrl: '',
         evidenceImageName: '',
-        error: error.message || 'Unable to load that image.',
+        error: customerErrorMessage(error, 'Unable to load that image.'),
       });
     }
   };
@@ -581,8 +566,8 @@ const Orders = () => {
       setConfirmReturnRefundOrderId('');
       setPageNotice(`Your ${draft.type || 'refund'} request for order ${order.displayId || order.orderCode || order.id} was submitted.`);
     } catch (error) {
-      setReturnRefundDraft(order.id, { error: error.message || 'Unable to submit the request right now.' });
-      setPageError(error.message || 'Unable to submit the request right now.');
+      setReturnRefundDraft(order.id, { error: customerErrorMessage(error, 'Unable to submit the request right now.') });
+      setPageError(customerErrorMessage(error, 'Unable to submit the request right now.'));
       setConfirmReturnRefundOrderId('');
     } finally {
       setLoadingAction(null);
@@ -1129,6 +1114,9 @@ const Orders = () => {
     const latestReport = order.latestIssueReport;
     const isUnderReview = normalizeReviewStatus(order.reviewStatus) === 'under_review';
     const isHistoryCard = variant === 'history';
+    const isAwaitingOnlinePayment = !isHistoryCard
+      && String(order.paymentMethod || '').toLowerCase() === 'online'
+      && String(order.paymentCheckoutStatus || '').toLowerCase() === 'created';
     const isCancelled = order.status === 'cancelled';
     const isRefunded = order.status === 'refunded';
     const isCancelOpen = openCancelOrderId === order.id;
@@ -1175,7 +1163,10 @@ const Orders = () => {
           </div>
           <div>
             <span>Payment</span>
-            <strong>{order.paymentStatusLabel || getPaymentStatusLabel(order)}</strong>
+            <strong>{isAwaitingOnlinePayment ? 'Waiting for online payment' : order.paymentStatusLabel || getPaymentStatusLabel(order)}</strong>
+            {isAwaitingOnlinePayment && (
+              <p className="customer-order-payment-note">Complete your online payment to continue processing this order.</p>
+            )}
           </div>
           <div>
             <span>Delivery</span>
@@ -1296,6 +1287,15 @@ const Orders = () => {
         )}
 
         <div className="customer-order-actions">
+          {isAwaitingOnlinePayment && order.paymentCheckout?.checkoutUrl && (
+            <a
+              className="order-button order-button--primary"
+              href={order.paymentCheckout.checkoutUrl}
+              style={{ textDecoration: 'none' }}
+            >
+              Continue Online Payment
+            </a>
+          )}
           {variant === 'active' && (
             <>
             {canCustomerCancelOrder(order) && (

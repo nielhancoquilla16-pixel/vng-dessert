@@ -2,6 +2,8 @@ import express from 'express';
 import { getSupabaseAdmin } from '../lib/supabaseAdmin.js';
 import { requireAuth } from '../middleware/requireAuth.js';
 import { getExpiryStatus } from '../lib/expiry.js';
+import { getProductPricing } from '../../shared/productPricing.js';
+import { getPublicDiscountFields } from '../lib/productFinance.js';
 
 const router = express.Router();
 
@@ -18,6 +20,8 @@ const selectCartQuery = `
       product_name,
       description,
       price,
+      discount_enabled,
+      discount_tiers,
       category,
       stock_quantity,
       availability,
@@ -42,7 +46,8 @@ const mapCart = (row) => ({
           id: item.products.id,
           productName: item.products.product_name,
           description: item.products.description,
-          price: Number(item.products.price) || 0,
+          price: getProductPricing(item.products).regularPrice,
+          ...getPublicDiscountFields(item.products),
           category: item.products.category,
           stockQuantity: Number(item.products.stock_quantity) || 0,
           availability: item.products.availability,
@@ -125,8 +130,9 @@ const assertProductCanBeOrdered = async (supabase, productId) => {
     expirationAt: product?.expiration_at,
     expirationDate: product?.expiration_date,
   }) === 'expired';
-  if (!product || product.availability === 'hidden' || product.availability === 'expired' || expired || Number(product.stock_quantity) <= 0) {
+  if (!product || product.availability !== 'available' || expired || Number(product.stock_quantity) <= 0) {
     const unavailableError = new Error(expired ? 'This product has expired and cannot be added to an order.' : 'This product is not currently available.');
+    unavailableError.publicMessage = unavailableError.message;
     unavailableError.status = 409;
     throw unavailableError;
   }
@@ -160,6 +166,9 @@ router.post('/mine/items', requireAuth, async (req, res, next) => {
     const { product_id, quantity } = req.body;
     if (!product_id || !quantity) {
       return res.status(400).json({ error: 'product_id and quantity are required.' });
+    }
+    if (!['number', 'string'].includes(typeof quantity) || !Number.isSafeInteger(Number(quantity)) || Number(quantity) < 1) {
+      return res.status(400).json({ error: 'Quantity must be a positive whole number.' });
     }
 
     const supabase = getSupabaseAdmin();
@@ -204,6 +213,9 @@ router.patch('/mine/items/:itemId', requireAuth, async (req, res, next) => {
     const { quantity } = req.body;
     if (!quantity) {
       return res.status(400).json({ error: 'quantity is required.' });
+    }
+    if (!['number', 'string'].includes(typeof quantity) || !Number.isSafeInteger(Number(quantity)) || Number(quantity) < 1) {
+      return res.status(400).json({ error: 'Quantity must be a positive whole number.' });
     }
 
     const supabase = getSupabaseAdmin();

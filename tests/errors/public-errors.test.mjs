@@ -6,6 +6,7 @@ import express from '../../dessert-ai-system/node_modules/express/index.js';
 import { publicErrorResponses } from '../../dessert-ai-system/server/middleware/publicErrorResponses.js';
 import * as serverPolicy from '../../dessert-ai-system/server/lib/publicErrors.js';
 import * as clientPolicy from '../../frontend/src/lib/publicErrors.js';
+import { requestErrorHandler } from '../../dessert-ai-system/server/middleware/requestErrorHandler.js';
 
 const internal = 'Backend cannot reach Supabase. Set SUPABASE_URL=https://private.example then restart. EACCES at read (server/file.js:10:2)';
 const logs = [];
@@ -39,7 +40,7 @@ for (const [label, policy] of [['server', serverPolicy], ['client', clientPolicy
     }
     assert.equal(policy.publicErrorMessage('PRIVATE_FAILURE', 500), 'Something went wrong. Please try again later.');
     assert.match(policy.publicErrorMessage('', 503), /temporarily unavailable/);
-    assert.match(policy.publicErrorMessage('', 404), /could not find/);
+    assert.match(policy.publicErrorMessage('', 404), /currently unavailable/);
     assert.equal(policy.publicErrorMessage('Enter a valid email address.', 400), 'Enter a valid email address.');
     assert.equal(policy.publicErrorMessage('permission denied for table profiles', 403), 'You do not have permission to do that.');
     assert.equal(policy.httpErrorStatus('503'), 503);
@@ -95,9 +96,9 @@ test('HTTP responses hide diagnostics while server logs retain the cause', async
 // Provide Vite's environment and an inert auth client without contacting external systems.
 const loadApi = async () => {
   let source = await readFile(new URL('../../frontend/src/lib/api.js', import.meta.url), 'utf8');
-  source = source.replace(/import \{ supabase, isSupabaseConfigured \} from '.\/supabase';/, 'const supabase = null; const isSupabaseConfigured = false;');
+  source = source.replace(/import \{ supabase, isSupabaseConfigured, clearSupabaseSessionStorage \} from '.\/supabase';/, 'const supabase = null; const isSupabaseConfigured = false; const clearSupabaseSessionStorage = () => {};');
   source = source.replace("'./publicErrors'", JSON.stringify(new URL('../../frontend/src/lib/publicErrors.js', import.meta.url).href));
-  source = source.replaceAll('import.meta.env', '({ DEV: true, VITE_API_BASE_URL: "http://localhost:3001" })');
+  source = source.replaceAll('import.meta.env', '({ DEV: true, VITE_API_BASE_URL: "https://vng-dessert-production.up.railway.app" })');
   return import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
 };
 
@@ -108,7 +109,7 @@ test('client retains HTTP codes, protects details and does not dismiss failures 
   }), { status: 503, headers: { 'Content-Type': 'application/json' } }));
   await assert.rejects(api.apiRequest('/api/products'), (error) => {
     assert.equal(error.status, 503);
-    assert.match(error.message, /^Error 503: /);
+    assert.doesNotMatch(error.message, /Error 503|HTTP|status code/i);
     assert.doesNotMatch(error.message, /Supabase|SUPABASE|EACCES|https/);
     assert.equal(error.details, null);
     return true;
@@ -130,7 +131,7 @@ test('client retains HTTP codes, protects details and does not dismiss failures 
   mockFetch.mock.mockImplementation(async () => new Response('Cannot GET /api/private-route', { status: 404 }));
   await assert.rejects(api.apiRequest('/api/missing'), (error) => {
     assert.equal(error.status, 404);
-    assert.match(error.message, /^Error 404: /);
+    assert.match(error.message, /currently unavailable/);
     assert.doesNotMatch(error.message, /api|private-route/i);
     return true;
   });
@@ -176,4 +177,40 @@ test('email delivery failures stay on the signup form without hiding unrelated s
   }));
   await assert.rejects(api.apiRequest('/api/auth/register'));
   assert.equal(api.getApiStatus().path, '/api/auth/register');
+});
+
+test('customer form errors use friendly fallbacks for unexpected exceptions and preserve local validation', (t) => {
+  const log = t.mock.method(console, 'error', () => {});
+  for (const message of [internal, 'Error 404: Resource Not Found', 'Internal exception failed', 'Unknown offset in private serializer', 'Please enter private credentials']) {
+    const error = new Error(message);
+    assert.equal(clientPolicy.customerErrorMessage(error, 'Please try again.'), 'Please try again.');
+  }
+  assert.equal(clientPolicy.customerErrorMessage(new Error('Profile pictures must be 2MB or smaller.')), 'Profile pictures must be 2MB or smaller.');
+  assert.ok(log.mock.callCount() >= 5);
+});
+
+test('unexpected backend exceptions cannot expose their message even with a 4xx status', async (t) => {
+  const logs = [];
+  t.mock.method(console, 'error', (...args) => logs.push(args));
+  const application = express();
+  application.use(publicErrorResponses);
+  application.get('/failure/:status', (req, res, next) => next(Object.assign(new Error('Unknown offset in private serializer'), { status: Number(req.params.status) })));
+  application.use(requestErrorHandler);
+  const listener = application.listen(0, '127.0.0.1');
+  await once(listener, 'listening');
+  t.after(() => new Promise((resolve) => listener.close(resolve)));
+  for (const status of [400, 404, 409, 500]) {
+    const response = await fetch(`http://127.0.0.1:${listener.address().port}/failure/${status}`);
+    assert.equal(response.status, status);
+    assert.doesNotMatch(JSON.stringify(await response.json()), /offset|private|serializer|stack/);
+  }
+  assert.ok(logs.every((entry) => entry[1].error.message === 'Unknown offset in private serializer'));
+});
+
+test('embedded HTTP errors and internal diagnostic text are sanitized consistently', () => {
+  for (const policy of [serverPolicy, clientPolicy]) {
+    for (const value of ['HTTP 400 connection lost', 'Request failed (404)', 'Status code: 409', '400', '404 Not Found', 'Unexpected TypeError at request (server/index.js:42:5)', 'Customer support settings need a database migration']) {
+      assert.doesNotMatch(policy.publicErrorMessage(value, 400), /HTTP|\b40\d\b|TypeError|request failed|database|migration|server/i);
+    }
+  }
 });

@@ -1,6 +1,6 @@
 import express from 'express';
 import { getSupabaseAdmin } from '../lib/supabaseAdmin.js';
-import { buildShopSettingsStatus, buildShopSettingsUpdate, getShopSettings, mapShopSettings } from '../lib/shopSettings.js';
+import { buildShopSettingsStatus, buildShopSettingsUpdate, getShopSettings, mapShopSettings, publicShopSettings } from '../lib/shopSettings.js';
 import { createShopSettingsEvents } from '../lib/shopSettingsEvents.js';
 import { requireAuth } from '../middleware/requireAuth.js';
 import { requireRole } from '../middleware/requireRole.js';
@@ -27,10 +27,15 @@ export const createShopSettingsRouter = ({
 
   router.get('/', async (req, res, next) => {
     try {
-      res.json(buildShopSettingsStatus(await getShopSettings(getSupabase()), now()));
+      res.json(buildShopSettingsStatus(publicShopSettings(await getShopSettings(getSupabase())), now()));
     } catch (error) {
       next(error);
     }
+  });
+
+  router.get('/internal', authenticate, authorizeAdmin, async (req, res, next) => {
+    try { res.json(buildShopSettingsStatus(await getShopSettings(getSupabase()), now())); }
+    catch (error) { next(error); }
   });
 
   router.get('/events', async (req, res, next) => {

@@ -28,11 +28,14 @@ import {
   getPayMongoFrontendBaseUrl,
   getPayMongoStatusPayload,
   isPayMongoConfigured,
+  normalizePayMongoTimestamp,
   retrievePayMongoCheckoutSession,
   verifyPayMongoWebhookSignature,
 } from '../lib/paymongo.js';
 import { assertShopOpen } from '../lib/shopSettings.js';
 import { getOwnedCustomerAddress, toOrderDeliveryAddress } from '../lib/customerAddresses.js';
+import { getPhoneNumberValidationMessage } from '../lib/phoneNumber.js';
+import { publicErrorMessage } from '../lib/publicErrors.js';
 
 const router = express.Router();
 
@@ -81,6 +84,11 @@ const getDeliveryAddressValidationError = (deliveryAddress = {}) => {
     return 'Recipient name and contact number are required before booking delivery.';
   }
 
+  const phoneNumberError = getPhoneNumberValidationMessage(deliveryAddress.contactNumber);
+  if (phoneNumberError) {
+    return phoneNumberError;
+  }
+
   if (!deliveryAddress.streetAddress || !deliveryAddress.city || !deliveryAddress.province) {
     return 'Street address, city/municipality, and province are required before booking delivery.';
   }
@@ -119,7 +127,8 @@ const extractCheckoutStateFromPayMongoSession = (session) => {
     paymentId: firstPayment?.id || paymentAttributes.id || '',
     paymentIntentId: paymentIntent?.id || paymentIntentAttributes.id || paymentAttributes.payment_intent_id || '',
     referenceNumber: attributes.reference_number || paymentAttributes.reference_number || '',
-    paidAt: paymentAttributes.paid_at || paymentAttributes.created_at || null,
+    paidAt: normalizePayMongoTimestamp(paymentAttributes.paid_at)
+      || normalizePayMongoTimestamp(paymentAttributes.created_at),
   };
 };
 
@@ -179,7 +188,7 @@ const mapCheckoutResponse = (checkout, order = null, extras = {}) => ({
   deliveryDistanceKm: Number.isFinite(Number(checkout.delivery_distance_km))
     ? Number(checkout.delivery_distance_km)
     : null,
-  failureReason: checkout.failure_reason || '',
+  failureReason: checkout.failure_reason ? publicErrorMessage(checkout.failure_reason, 409) : '',
   paidAt: checkout.paid_at || null,
   orderId: checkout.order_id || '',
   order,
@@ -391,7 +400,9 @@ const finalizePaidCheckout = async (supabase, checkout) => {
     };
   }
 
-  const finalizedItems = enrichItemsFromProducts(normalizedItems, productsById).map((item) => ({
+  // This checkout's prices were saved by the server when the gateway charged
+  // the customer. Keep that snapshot if the price list has changed since then.
+  const finalizedItems = enrichItemsFromProducts(normalizedItems, productsById, { preserveStoredPrices: true }).map((item) => ({
     ...item,
     available_stock_quantity: Number(productsById.get(item.product_id)?.stock_quantity) || 0,
   }));
@@ -525,7 +536,8 @@ const syncCheckoutFromPayMongo = async (supabase, checkout) => {
 };
 
 router.get('/status', (req, res) => {
-  res.json(getPayMongoStatusPayload());
+  const status = getPayMongoStatusPayload();
+  res.json({ configured: status.configured, paymentMethodTypes: status.paymentMethodTypes });
 });
 
 router.post('/checkout-sessions', requireAuth, async (req, res, next) => {
@@ -563,6 +575,12 @@ router.post('/checkout-sessions', requireAuth, async (req, res, next) => {
 
     if (normalizedItems.length === 0) {
       return res.status(400).json({ error: 'At least one checkout item is required.' });
+    }
+
+    const customerPhoneNumber = phoneNumber || req.profile?.phone_number || '';
+    const customerPhoneNumberError = getPhoneNumberValidationMessage(customerPhoneNumber);
+    if (customerPhoneNumberError) {
+      return res.status(400).json({ error: customerPhoneNumberError });
     }
 
     const productIds = [...new Set(normalizedItems.map((item) => item.product_id).filter(Boolean))];

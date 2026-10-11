@@ -32,6 +32,47 @@
   overflow-y: auto;
 }
 
+/* Let the right panel scroll without collapsing the cart between its controls. */
+.pos-right > * {
+  flex-shrink: 0;
+}
+
+.pos-right .pos-cart-list {
+  flex: 1 0 auto;
+  overflow-y: visible;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.pos-cart-item-details {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.pos-cart-item-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-shrink: 0;
+}
+
+.pos-subtotal-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+  color: #64748b;
+  font-size: 0.85rem;
+}
+
+.pos-item-card:focus-visible,
+.pos-cart-item button:focus-visible {
+  outline: 2px solid #f97316;
+  outline-offset: 2px;
+}
+
 .pos-hero-kicker {
   margin: 0 0 0.4rem;
   font-size: 0.8rem;
@@ -137,6 +178,7 @@
 .pos-left .pos-item-card {
   padding: 0.62rem;
   border-radius: 0.95rem;
+  font-family: inherit;
 }
 
 .pos-left .pos-item-img {
@@ -269,6 +311,8 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
+  flex-wrap: wrap;
+  gap: 0.75rem;
   padding: 0.75rem;
   background: #f8fafc;
   border-radius: 0.5rem;
@@ -286,6 +330,7 @@
 }
 
 .pos-cart-item-total {
+  font-size: 0.8rem;
   font-weight: 700;
   color: var(--secondary-color);
 }

@@ -68,6 +68,10 @@ const normalizeSalesReport = (report = {}) => {
     createdAt: report.createdAt || report.created_at || '',
     updatedAt: report.updatedAt || report.updated_at || '',
     items,
+    ...(Object.hasOwn(report, 'estimatedGrossProfit') ? {
+      estimatedGrossProfit: roundCurrencyAmount(report.estimatedGrossProfit),
+      uncostedQuantity: Number(report.uncostedQuantity) || 0,
+    } : {}),
   };
 };
 

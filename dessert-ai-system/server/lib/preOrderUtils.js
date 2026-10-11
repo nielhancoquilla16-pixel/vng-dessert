@@ -1,3 +1,6 @@
+import { isValidPhilippinePhoneNumber } from './phoneNumber.js';
+import { getProductPricing } from '../../shared/productPricing.js';
+
 const PRE_ORDER_STATUS_ALIASES = new Map([
   ['approve', 'confirmed'],
   ['approved', 'confirmed'],
@@ -38,7 +41,9 @@ export const preOrderSelect = `
     product_name,
     category,
     image_url,
-    price
+    price,
+    discount_enabled,
+    discount_tiers
   )
 `;
 
@@ -55,11 +60,11 @@ export const normalizePreOrderMethod = (value = 'cod') => {
 };
 
 export const normalizeContactNumber = (value = '') => (
-  normalizeText(value).replace(/[^\d+]/g, '')
+  String(value ?? '')
 );
 
 export const isValidContactNumber = (value = '') => (
-  /^(?:\+63|0)9\d{9}$/.test(normalizeContactNumber(value))
+  isValidPhilippinePhoneNumber(value)
 );
 
 export const isValidDateInput = (value = '') => DATE_PATTERN.test(normalizeText(value));
@@ -136,7 +141,7 @@ export const mapPreOrder = (row = {}) => {
     productName: product.product_name || 'Dessert Item',
     productCategory: product.category || 'Uncategorized',
     productImageUrl: product.image_url || '',
-    productPrice: Number(product.price) || 0,
+    productPrice: getProductPricing(product, row.quantity).unitPrice,
     customerName: row.customer_name || '',
     phoneNumber: row.phone_number || '',
     address: row.address || '',

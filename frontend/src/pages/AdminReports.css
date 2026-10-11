@@ -4,6 +4,21 @@
   color: #111827;
 }
 
+.sales-report-profit {
+  flex-basis: 100%;
+  flex-wrap: wrap;
+  padding: 0.8rem 1rem;
+  border: 1px solid #fed7aa;
+  border-radius: 0.75rem;
+  background: #fff7ed;
+  color: #78350f;
+}
+
+.sales-report-profit small {
+  flex-basis: 100%;
+  color: #64748b;
+}
+
 .admin-sales-reports__header,
 .admin-sales-title,
 .report-shell__header,

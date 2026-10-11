@@ -1,4 +1,4 @@
-import { supabase, isSupabaseConfigured } from './supabase';
+import { supabase, isSupabaseConfigured, clearSupabaseSessionStorage } from './supabase';
 import { httpErrorStatus, publicErrorDetails, publicErrorMessage } from './publicErrors';
 
 export const normalizeApiErrorMessage = publicErrorMessage;
@@ -24,7 +24,7 @@ const resolveDevApiBaseUrl = (value = '') => {
     return baseUrl;
   }
 };
-const productionFallbackBase = 'https://dessert-ai-backend-production-5c00.up.railway.app';
+const productionFallbackBase = 'https://vng-dessert-production.up.railway.app';
 const configuredApiBases = Array.from(new Set(
   (
     import.meta.env.DEV
@@ -56,7 +56,7 @@ export class ApiError extends Error {
   constructor(message, status = 500, details = null) {
     const code = httpErrorStatus(status);
     const safeMessage = publicErrorMessage(message, code, details?.errorCode);
-    super(`Error ${code}: ${safeMessage}`);
+    super(safeMessage);
     this.name = 'ApiError';
     this.status = code;
     this.userMessage = safeMessage;
@@ -71,6 +71,7 @@ const setApiStatus = (nextStatus) => {
     && apiStatus.code === nextStatus.code
     && apiStatus.source === nextStatus.source
     && apiStatus.path === nextStatus.path
+    && apiStatus.method === nextStatus.method
   ) {
     return;
   }
@@ -276,18 +277,63 @@ const recoverBackendConnection = () => {
   return backendRecoveryPromise;
 };
 
-const getSessionAccessToken = async () => {
+let sessionRefreshPromise = null;
+let sessionSignOutPromise = null;
+
+const isTemporaryAuthError = (error) => (
+  error?.name === 'AuthRetryableFetchError'
+  || Number(error?.status) >= 500
+  || [408, 429].includes(Number(error?.status))
+  || /fetch failed|failed to fetch|network|timeout/i.test(error?.message || '')
+);
+
+const expireSession = async (rejectedToken) => {
+  if (!supabase || !isSupabaseConfigured) return;
+  const { data, error } = await supabase.auth.getSession();
+  if (error && isTemporaryAuthError(error)) throw new ApiError('', 503);
+  // A delayed response from an old session must not sign out a newer session.
+  if (data?.session?.access_token && data.session.access_token !== rejectedToken) return;
+  if (!sessionSignOutPromise) {
+    sessionSignOutPromise = (async () => {
+      clearSupabaseSessionStorage();
+      await supabase.auth.signOut({ scope: 'local' });
+    })().finally(() => { sessionSignOutPromise = null; });
+  }
+  await sessionSignOutPromise;
+};
+
+const getSessionAccessToken = async (fallbackToken = '') => {
   if (!isSupabaseConfigured || !supabase) {
-    return '';
+    return fallbackToken;
   }
 
   const { data, error } = await supabase.auth.getSession();
 
   if (error) {
-    throw new ApiError(error.message, error.status || 503);
+    throw new ApiError('', isTemporaryAuthError(error) ? 503 : 401);
   }
 
   return data.session?.access_token || '';
+};
+
+const refreshRejectedSession = async (rejectedToken) => {
+  if (!isSupabaseConfigured || !supabase) return '';
+  const currentToken = await getSessionAccessToken();
+  if (!currentToken) return '';
+  // Another request or Supabase's automatic refresh may have renewed it already.
+  if (currentToken !== rejectedToken) return currentToken;
+  if (!sessionRefreshPromise) {
+    sessionRefreshPromise = (async () => {
+      const { data, error } = await supabase.auth.refreshSession();
+      if (error) {
+        if (isTemporaryAuthError(error)) throw new ApiError('', 503);
+        await expireSession(rejectedToken);
+        throw new ApiError('', 401);
+      }
+      return data.session?.access_token || '';
+    })().finally(() => { sessionRefreshPromise = null; });
+  }
+  return sessionRefreshPromise;
 };
 
 export const apiRequest = async (path, options = {}, config = {}) => {
@@ -309,9 +355,13 @@ export const apiRequest = async (path, options = {}, config = {}) => {
     headers.set('Content-Type', 'application/json');
   }
 
+  let accessToken = '';
   if (config.auth) {
-    const accessToken = config.accessToken || await getSessionAccessToken();
+    // getSession renews expiring tokens. A token captured in React state can be
+    // stale after background refresh, a suspended tab, or signing out elsewhere.
+    accessToken = await getSessionAccessToken(config.accessToken);
     if (!accessToken) {
+      if (isSupabaseConfigured && supabase) await expireSession(config.accessToken);
       throw new ApiError('You need to sign in first.', 401);
     }
 
@@ -360,6 +410,16 @@ export const apiRequest = async (path, options = {}, config = {}) => {
     return null;
   }
 
+  if (response.status === 401 && config.auth && isSupabaseConfigured && supabase) {
+    if (!config.skipSessionRefresh) {
+      const refreshedToken = await refreshRejectedSession(accessToken);
+      if (refreshedToken && refreshedToken !== accessToken) {
+        return apiRequest(path, options, { ...config, skipSessionRefresh: true });
+      }
+    }
+    await expireSession(accessToken);
+  }
+
   if (!response.ok) {
     const responseMessage = typeof responseData === 'object'
       ? responseData?.error || responseData?.message || ''
@@ -373,7 +433,14 @@ export const apiRequest = async (path, options = {}, config = {}) => {
 
     // The signup form displays this failure; the rest of the shop is still available.
     if (response.status >= 500 && !isVerificationEmailFailure) {
-      setApiStatus({ level: 'error', code: response.status, message, source: 'response', path });
+      setApiStatus({
+        level: 'error',
+        code: response.status,
+        message,
+        source: 'response',
+        path,
+        method: String(options.method || 'GET').toUpperCase(),
+      });
     }
 
     throw new ApiError(message, response.status, responseData);

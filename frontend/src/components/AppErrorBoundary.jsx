@@ -20,8 +20,8 @@ class AppErrorBoundary extends React.Component {
       return (
         <div className="app-error-shell">
           <div className="app-error-card" role="alert">
-            <h1>Error 500</h1>
-            <p>Something went wrong. Please try again later.</p>
+            <h1>Something went wrong</h1>
+            <p>Sorry, the requested page or information is currently unavailable. Please try again.</p>
             <button type="button" className="btn-login" onClick={() => window.location.reload()}>
               Try Again
             </button>

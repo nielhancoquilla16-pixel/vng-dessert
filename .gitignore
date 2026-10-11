@@ -32,4 +32,10 @@ Thumbs.db
 supabase/.temp/
 tmp/
 
+# Internal project notes (keep local copies)
+/DEPLOY_GITHUB_PAGES.md
+/DEPLOY_NO_GITHUB.md
+/PRICING_REFERENCE.md
+/SECURITY_UPDATE.md
+
 .vercel

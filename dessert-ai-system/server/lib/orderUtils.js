@@ -1,6 +1,8 @@
 import { publicErrorMessage } from './publicErrors.js';
 import { randomInt, randomUUID } from 'node:crypto';
 import { getExpiryStatus } from './expiry.js';
+import { getProductPricing } from '../../shared/productPricing.js';
+import { hydrateReceiptImages } from './receiptImages.js';
 import { mapReturnRefundRequest, normalizeReturnRefundStatus } from './returnRefund.js';
 import { createOrderQrExpiry, getOrderQrExpiry, isOrderQrExpired } from './orderQr.js';
 
@@ -121,6 +123,15 @@ const firstText = (...values) => (
     .find(Boolean) || ''
 );
 
+const firstRawText = (...values) => {
+  for (const value of values) {
+    if (value == null) continue;
+    const text = String(value);
+    if (text !== '') return text;
+  }
+  return '';
+};
+
 const firstDefined = (...values) => values.find((value) => value !== undefined && value !== null && value !== '');
 
 const normalizeCoordinate = (value) => {
@@ -152,7 +163,7 @@ export const normalizeDeliveryAddressFields = (source = {}, fallback = {}) => {
     nested.recipientName,
     fallback.recipientName,
   );
-  const contactNumber = firstText(
+  const contactNumber = firstRawText(
     source.deliveryContactNumber,
     source.delivery_contact_number,
     source.contactNumber,
@@ -637,10 +648,10 @@ export const hydrateOrdersWithProfiles = async (supabase, orders = []) => {
   const userIds = [...new Set(rows.map((row) => row.user_id).filter(Boolean))];
 
   if (userIds.length === 0) {
-    return rows.map((row) => ({
+    return hydrateReceiptImages(supabase, rows.map((row) => ({
       ...row,
       profiles: null,
-    }));
+    })));
   }
 
   const { data: profiles, error } = await supabase
@@ -654,10 +665,10 @@ export const hydrateOrdersWithProfiles = async (supabase, orders = []) => {
 
   const profilesById = new Map((profiles || []).map((profile) => [profile.id, profile]));
 
-  return rows.map((row) => ({
+  return hydrateReceiptImages(supabase, rows.map((row) => ({
     ...row,
     profiles: profilesById.get(row.user_id) || null,
-  }));
+  })));
 };
 
 export const hydrateOrderWithProfile = async (supabase, order = null) => {
@@ -737,7 +748,8 @@ const normalizePaymentCheckout = (checkout = {}) => ({
   checkoutUrl: checkout.checkout_url || checkout.checkoutUrl || '',
   amount: Number(checkout.amount) || 0,
   currency: checkout.currency || 'PHP',
-  failureReason: checkout.failure_reason || checkout.failureReason || '',
+  failureReason: checkout.failure_reason || checkout.failureReason
+    ? publicErrorMessage(checkout.failure_reason || checkout.failureReason, 409) : '',
   paidAt: checkout.paid_at || checkout.paidAt || null,
   createdAt: checkout.created_at || checkout.createdAt || '',
   updatedAt: checkout.updated_at || checkout.updatedAt || '',
@@ -1001,16 +1013,34 @@ export const mapOrder = (row) => {
   };
 };
 
-export const normalizeRequestedItems = (items = []) => (
-  items.map((item) => ({
-    product_id: item.product_id || item.productId || item.id,
-    quantity: Math.max(1, Number(item.quantity) || 1),
-    price: Math.max(0, Number(item.price) || 0),
-    name: item.name || item.product_name || item.product?.productName || 'Dessert Item',
-    category: item.category || item.product?.category || 'Uncategorized',
-    description: item.description || '',
-  }))
-);
+export const normalizeRequestedItems = (items = []) => {
+  const combined = new Map();
+  for (const item of items) {
+    const quantity = Number(item?.quantity);
+    if (!item || typeof item !== 'object' || !['number', 'string'].includes(typeof item.quantity) || !Number.isSafeInteger(quantity) || quantity < 1) {
+      const error = new Error('Each order quantity must be a positive whole number.');
+      error.publicMessage = error.message;
+      error.status = 400;
+      throw error;
+    }
+    const productId = item.product_id || item.productId || item.id;
+    const previous = combined.get(productId);
+    const totalQuantity = quantity + (previous?.quantity || 0);
+    if (!Number.isSafeInteger(totalQuantity)) {
+      const error = new Error('The requested quantity is too large.');
+      error.publicMessage = error.message;
+      error.status = 400;
+      throw error;
+    }
+    combined.set(productId, {
+      product_id: productId, quantity: totalQuantity,
+      price: Math.max(0, Number(item.price) || 0),
+      name: item.name || item.product_name || item.product?.productName || 'Dessert Item',
+      category: item.category || item.product?.category || 'Uncategorized', description: item.description || '',
+    });
+  }
+  return [...combined.values()];
+};
 
 export const getAvailabilityForStock = (stockQuantity) => (stockQuantity <= 0 ? 'out of stock' : 'available');
 
@@ -1056,8 +1086,7 @@ export const getShortagesForItems = (normalizedItems = [], productsById = new Ma
       expirationDate: matchingProduct?.expiration_date,
     });
     const unavailable = !matchingProduct
-      || matchingProduct.availability === 'hidden'
-      || matchingProduct.availability === 'expired'
+      || matchingProduct.availability !== 'available'
       || expiryStatus === 'expired';
     if (unavailable || availableStock < item.quantity) {
       shortages.push({
@@ -1075,14 +1104,18 @@ export const getShortagesForItems = (normalizedItems = [], productsById = new Ma
   return shortages;
 };
 
-export const enrichItemsFromProducts = (normalizedItems = [], productsById = new Map()) => (
+export const enrichItemsFromProducts = (normalizedItems = [], productsById = new Map(), { preserveStoredPrices = false } = {}) => (
   normalizedItems.map((item) => {
     const matchingProduct = productsById.get(item.product_id);
     const livePrice = Number(matchingProduct?.price);
+    const pricing = getProductPricing({
+      ...(matchingProduct || item),
+      price: Number.isFinite(livePrice) ? livePrice : item.price,
+    }, item.quantity);
 
     return {
       ...item,
-      price: Number.isFinite(livePrice) ? livePrice : item.price,
+      price: preserveStoredPrices ? item.price : pricing.unitPrice,
       name: matchingProduct?.product_name || item.name,
       category: matchingProduct?.category || item.category,
       description: matchingProduct?.description || item.description || '',

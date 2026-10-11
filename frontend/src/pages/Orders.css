@@ -1086,6 +1086,13 @@
   color: #0f172a;
 }
 
+.customer-order-payment-note {
+  margin: 0.35rem 0 0;
+  color: #64748b;
+  font-size: 0.9rem;
+  line-height: 1.6;
+}
+
 .customer-order-items {
   display: grid;
   gap: 0.85rem;

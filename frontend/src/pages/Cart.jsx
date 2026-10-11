@@ -1,3 +1,4 @@
+import { customerErrorMessage } from '../lib/publicErrors';
 import React, { useState } from 'react';
 import { useCart } from '../context/CartContext';
 import { useAuth } from '../context/AuthContext';
@@ -12,7 +13,6 @@ const Cart = () => {
   const { loggedInCustomer, isAdmin } = useAuth();
   const { isShopOpen, isShopSettingsLoading, shopSettingsError, operatingHoursLabel } = useShopSettings();
   const [cartError, setCartError] = useState('');
-  const [isUpdating, setIsUpdating] = useState(false);
   const canOrder = isShopOpen && !isShopSettingsLoading && !shopSettingsError;
   const [selectedIds, setSelectedIds] = useState(null);
   const navigate = useNavigate();
@@ -53,18 +53,20 @@ const Cart = () => {
   const finalTotal = selectedTotal + deliveryFee;
 
   const handleCheckout = () => {
-    if (selectedCount > 0 && canOrder && !isUpdating) {
+    if (selectedCount > 0 && canOrder) {
       navigate('/checkout', { state: { selectedCartIds: activeSelectedIds } });
     }
   };
 
-  const changeCart = async (action) => {
-    if (isUpdating) return;
+  const changeCart = (action) => {
     setCartError('');
-    setIsUpdating(true);
-    try { await action(); }
-    catch (error) { setCartError(error.message || 'Unable to update your cart. Please try again.'); }
-    finally { setIsUpdating(false); }
+    try {
+      Promise.resolve(action()).catch((error) => {
+        setCartError(customerErrorMessage(error, 'Unable to update your cart. Please try again.'));
+      });
+    } catch (error) {
+      setCartError(customerErrorMessage(error, 'Unable to update your cart. Please try again.'));
+    }
   };
 
   if (cartItems.length === 0) {
@@ -126,16 +128,17 @@ const Cart = () => {
                 <div className="cart-item-details">
                   <h3 className="cart-item-title">{item.name}</h3>
                   <div className="cart-item-price">{formatCurrency(item.price)} each</div>
+                  {item.isBulkPrice && <div className="cart-item-stock">Bulk price applied · {item.bulkQuantityLabel}</div>}
                   <div className="cart-item-stock">{Number(item.stock) > 0 ? `${item.stock} available` : 'Out of stock'}</div>
 
                   <div className="quantity-controls" role="group" aria-label={`Quantity for ${item.name}`}>
-                    <button className="qty-btn" aria-label={`Decrease quantity of ${item.name}`} disabled={item.quantity <= 1 || isUpdating} onClick={() => changeCart(() => updateQuantity(item.id, item.quantity - 1))}>−</button>
+                    <button className="qty-btn" aria-label={`Decrease quantity of ${item.name}`} onClick={() => changeCart(() => updateQuantity(item.id, item.quantity - 1))}>−</button>
                     <span className="qty-value" aria-live="polite">{item.quantity}</span>
                     <button
                       className="qty-btn"
                       aria-label={`Increase quantity of ${item.name}`}
                       onClick={() => changeCart(() => updateQuantity(item.id, item.quantity + 1))}
-                      disabled={isUpdating || item.quantity >= (Number(item.stock) || item.quantity)}
+                      disabled={item.quantity >= (Number(item.stock) || item.quantity)}
                     >
                       +
                     </button>
@@ -144,7 +147,7 @@ const Cart = () => {
 
                 <div className="cart-item-actions">
                   <div className="cart-item-total">{formatCurrency(item.price * item.quantity)}</div>
-                  <button className="btn-remove" aria-label={`Remove ${item.name} from cart`} disabled={isUpdating} onClick={() => changeCart(() => removeFromCart(item.id))}>
+                  <button className="btn-remove" aria-label={`Remove ${item.name} from cart`} onClick={() => changeCart(() => removeFromCart(item.id))}>
                     <Trash2 size={16} /> Remove
                   </button>
                 </div>
@@ -178,7 +181,7 @@ const Cart = () => {
               <button
                 onClick={handleCheckout}
                 className={`btn-primary btn-block ${selectedCount === 0 ? 'disabled' : ''}`}
-                disabled={selectedCount === 0 || !canOrder || isUpdating}
+                disabled={selectedCount === 0 || !canOrder}
               >
                 Proceed to Checkout
               </button>
@@ -197,7 +200,7 @@ const Cart = () => {
               Continue Shopping
             </Link>
 
-            <button className="btn-remove btn-block" style={{ justifyContent: 'center' }} disabled={isUpdating} onClick={() => changeCart(clearCart)}>
+            <button className="btn-remove btn-block" style={{ justifyContent: 'center' }} onClick={() => changeCart(clearCart)}>
               Clear Cart
             </button>
           </div>

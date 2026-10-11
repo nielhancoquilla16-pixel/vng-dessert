@@ -1,6 +1,7 @@
 import express from "express";
 import { publicErrorResponses } from "./middleware/publicErrorResponses.js";
-import { httpErrorStatus } from "./lib/publicErrors.js";
+import { requestErrorHandler } from './middleware/requestErrorHandler.js';
+import { createRateLimitMiddleware, createRequestLimiter } from './middleware/rateLimit.js';
 import cors from "cors";
 import dotenv from "dotenv";
 import fetch from "node-fetch";
@@ -60,6 +61,7 @@ app.use((req, res, next) => {
 });
 app.use(cors({ origin: process.env.CORS_ORIGIN || "*" }));
 app.use(publicErrorResponses);
+app.use('/api', createRateLimitMiddleware({ limiter: createRequestLimiter({ limit: 240, windowMs: 60000 }), category: 'api' }));
 app.use(express.json({
   limit: "15mb",
   verify: (req, res, buffer) => {
@@ -161,32 +163,7 @@ app.get("/", (req, res) => {
   res.sendFile(join(clientDir, "index.html"));
 });
 
-const isMalformedJsonError = (error) => (
-  error?.type === "entity.parse.failed"
-  || (
-    error instanceof SyntaxError
-    && error?.status === 400
-    && Object.prototype.hasOwnProperty.call(error, "body")
-  )
-);
-
-app.use((error, req, res, next) => {
-  if (res.headersSent) return next(error);
-
-  if (isMalformedJsonError(error)) {
-    // Do not log the submitted body: it may contain passwords or other private input.
-    console.warn("Rejected malformed JSON request:", { method: req.method, path: req.path });
-    res.locals.errorLogged = true;
-    return res.status(400).json({ error: "Please check your information and try again." });
-  }
-
-  console.error("Request exception:", { method: req.method, path: req.path, error });
-  res.locals.errorLogged = true;
-  const diagnostic = [error?.message, error?.details, error?.cause?.code].filter(Boolean).join(" ");
-  const unavailable = /fetch failed|ENOTFOUND|ECONN\w*|ETIMEDOUT|EACCES|configuration is incomplete/i.test(diagnostic);
-  const status = httpErrorStatus(error?.status || error?.statusCode, unavailable ? 503 : 500);
-  res.status(status).json({ error: error?.message, errorCode: error?.errorCode });
-});
+app.use(requestErrorHandler);
 
 const startServer = async () => {
   const healthUrl = `http://127.0.0.1:${PORT}/api/health`;
