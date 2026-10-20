@@ -21,9 +21,9 @@ jobs:
     runs-on: ubuntu-latest
     env:
       VITE_PASSWORD_RECOVERY_MODE: link
-      VITE_API_BASE_URL: https://dessert-ai-backend-production.up.railway.app
-      VITE_SUPABASE_URL: https://uqniavennyrfdyakmxan.supabase.co
-      VITE_SUPABASE_ANON_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVxbmlhdmVubnlyZmR5YWtteGFuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM5MjExMDksImV4cCI6MjA4OTQ5NzEwOX0.on-Kxg62tR-7tFiPSsRu7vWoqm3Nv0OGjGQlWZtURuE
+      VITE_API_BASE_URL: https://vng-dessert-production.up.railway.app
+      VITE_SUPABASE_URL: https://tuybevrjakpsubjhfcrq.supabase.co
+      VITE_SUPABASE_ANON_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InR1eWJldnJqYWtwc3ViamhmY3JxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODU4MzMyNzUsImV4cCI6MjEwMTQwOTI3NX0.k5s9tTqTP_v2k_OGDCvM3jDQNGViJtkPAaD3PKxE6P4
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
