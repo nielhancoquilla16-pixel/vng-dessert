@@ -27,6 +27,19 @@ const normalizeOptionalValue = (value = "") => {
 };
 
 const getRequestBaseUrl = (req) => `${req.protocol}://${req.get("host")}`;
+const mapStaffManagementError = (error) => {
+  const messages = {
+    SUPER_ADMIN_REQUIRED: [403, "Only the current Super Admin can transfer Super Admin access."],
+    SUPER_ADMIN_TARGET_INVALID: [400, "Choose another existing admin account to become Super Admin."],
+    SUPER_ADMIN_PROTECTED: [409, "Transfer Super Admin access before deleting this account."],
+  };
+  const known = messages[error?.message]
+    || (error?.code === "23514" && /profiles_super_admin_role_check/.test(error.message || "")
+      ? [409, "Transfer Super Admin access before changing this account's role."] : null);
+  return known
+    ? Object.assign(new Error(known[1], { cause: error }), { status: known[0], publicMessage: known[1] })
+    : error;
+};
 const ACTIVE_ADDRESS_ORDER_STATUSES = new Set([
   "pending",
   "confirmed",
@@ -44,6 +57,7 @@ const mapProfile = (row, authUser = null) => ({
   email: row.email,
   fullName: row.full_name,
   role: row.role,
+  isSuperAdmin: row.role === "admin" && row.is_super_admin === true,
   address: row.address,
   phoneNumber: row.phone_number,
   avatarUrl: getProfileAvatarUrl(authUser),
@@ -719,6 +733,34 @@ router.post("/staff/:id/reset-password", requireAuth, requireRole("admin"), asyn
   }
 });
 
+router.post("/staff/:id/super-admin", requireAuth, requireRole("admin"), async (req, res, next) => {
+  try {
+    if (!req.profile?.is_super_admin) {
+      return res.status(403).json({ error: "Only the current Super Admin can transfer Super Admin access." });
+    }
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(req.params.id)) {
+      return res.status(400).json({ error: "Choose another existing admin account to become Super Admin." });
+    }
+    const supabase = getSupabaseAdmin();
+    const { data: superAdminId, error } = await supabase.rpc("transfer_super_admin", {
+      p_actor_id: req.authUser.id,
+      p_target_id: req.params.id,
+    });
+    if (error) throw error;
+    await writeAuditLog(supabase, req, {
+      action: "super_admin_transferred",
+      actorId: req.authUser.id,
+      actorRole: "admin",
+      targetId: superAdminId,
+      targetType: "profile",
+      metadata: { previousSuperAdminId: req.authUser.id, superAdminId },
+    });
+    res.json({ previousSuperAdminId: req.authUser.id, superAdminId });
+  } catch (error) {
+    next(mapStaffManagementError(error));
+  }
+});
+
 router.delete("/staff/:id", requireAuth, requireRole("admin"), async (req, res, next) => {
   try {
     if (req.params.id === req.authUser.id) {
@@ -726,6 +768,18 @@ router.delete("/staff/:id", requireAuth, requireRole("admin"), async (req, res, 
     }
 
     const supabase = getSupabaseAdmin();
+    const { data: target, error: targetError } = await supabase
+      .from("profiles").select("*").eq("id", req.params.id).maybeSingle();
+    if (targetError) throw targetError;
+    if (!target || !["admin", "staff"].includes(target.role)) {
+      return res.status(404).json({ error: "Staff account not found." });
+    }
+    if (target.is_super_admin) {
+      return res.status(409).json({ error: "Transfer Super Admin access before deleting this account." });
+    }
+    if (target.role === "admin" && !req.profile?.is_super_admin) {
+      return res.status(403).json({ error: "Only the Super Admin can delete another admin account." });
+    }
     const {
       data: { user },
       error: userError,
@@ -756,7 +810,7 @@ router.delete("/staff/:id", requireAuth, requireRole("admin"), async (req, res, 
 
     res.status(204).send();
   } catch (error) {
-    next(error);
+    next(mapStaffManagementError(error));
   }
 });
 
@@ -794,6 +848,19 @@ router.put("/staff/:id", requireAuth, requireRole("admin"), async (req, res, nex
 
     if (profileFetchError || !currentProfile) {
       return res.status(404).json({ error: "Staff account not found." });
+    }
+
+    if (!["admin", "staff"].includes(currentProfile.role)) {
+      return res.status(404).json({ error: "Staff account not found." });
+    }
+    if (currentProfile.role === "admin" && req.params.id !== req.authUser.id && !req.profile?.is_super_admin) {
+      return res.status(403).json({ error: "Only the Super Admin can edit another admin account." });
+    }
+    if (currentProfile.is_super_admin && role !== "admin") {
+      return res.status(409).json({ error: "Transfer Super Admin access before changing this account's role." });
+    }
+    if (req.params.id === req.authUser.id && role !== "admin") {
+      return res.status(400).json({ error: "You cannot change your own admin role." });
     }
 
     const currentAuthUser = await getAuthUserById(supabase, req.params.id);
@@ -885,7 +952,7 @@ router.put("/staff/:id", requireAuth, requireRole("admin"), async (req, res, nex
     }
     res.json(mapProfile(updatedProfile, updatedAuthUser || currentAuthUser));
   } catch (error) {
-    next(error);
+    next(mapStaffManagementError(error));
   }
 });
 

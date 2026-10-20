@@ -78,6 +78,7 @@ const normalizeProfile = (profile, authUser = null) => ({
   email: profile?.email || authUser?.email || '',
   fullName: profile?.fullName || profile?.full_name || authUser?.user_metadata?.full_name || '',
   role: profile?.role || 'customer',
+  isSuperAdmin: profile?.role === 'admin' && Boolean(profile?.isSuperAdmin ?? profile?.is_super_admin),
   address: profile?.address || '',
   phoneNumber: profile?.phoneNumber || profile?.phone_number || '',
   avatarUrl: profile?.avatarUrl || profile?.avatar_url || authUser?.user_metadata?.avatar_url || '',
@@ -765,9 +766,23 @@ export const AuthProvider = ({ children }) => {
       accessToken: session.access_token,
     });
 
-    await fetchStaffAccounts(session);
-    return normalizeProfile(updatedStaff);
-  }, [fetchStaffAccounts, session]);
+    const normalizedStaff = normalizeProfile(updatedStaff);
+    setStaffAccounts((current) => current.map((staff) => staff.id === id ? normalizedStaff : staff));
+    setProfile((current) => current?.id === id ? normalizedStaff : current);
+    return normalizedStaff;
+  }, [session]);
+
+  const transferSuperAdmin = useCallback(async (id) => {
+    if (!session?.access_token) throw new ApiError('You need to sign in first.', 401);
+    const result = await apiRequest(`/api/profiles/staff/${id}/super-admin`, {
+      method: 'POST',
+    }, { auth: true, accessToken: session.access_token });
+    setStaffAccounts((current) => current.map((staff) => ({
+      ...staff, isSuperAdmin: staff.role === 'admin' && staff.id === result.superAdminId,
+    })));
+    setProfile((current) => current ? { ...current, isSuperAdmin: current.id === result.superAdminId } : current);
+    return result;
+  }, [session]);
 
   const resetStaffPassword = useCallback(async (id, password) => {
     if (!session?.access_token) {
@@ -869,6 +884,7 @@ export const AuthProvider = ({ children }) => {
         updateStaffAccount,
         resetStaffPassword,
         deleteStaffAccount,
+        transferSuperAdmin,
         refreshProfile,
         isPasswordRecovery,
       }}

@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { UserPlus, Trash2, Key, Calendar, ShieldCheck, Camera, ImagePlus, Save, X, Edit2 } from 'lucide-react';
+import { UserPlus, Trash2, Key, Calendar, ShieldCheck, Crown, Camera, ImagePlus, Save, X, Edit2 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { PASSWORD_POLICY_MESSAGE, validatePassword } from '../utils/passwordValidation';
 import LoadingButton from '../components/LoadingButton';
@@ -85,6 +85,7 @@ const AdminStaff = () => {
     resetStaffPassword,
     deleteStaffAccount,
     updateMyProfile,
+    transferSuperAdmin,
   } = useAuth();
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
@@ -110,6 +111,14 @@ const AdminStaff = () => {
   const [resetStaffInfo, setResetStaffInfo] = useState(null);
   const [resetPasswordForm, setResetPasswordForm] = useState({ ...emptyResetPasswordForm });
   const [resetFormError, setResetFormError] = useState('');
+  const [transferTarget, setTransferTarget] = useState(null);
+  const [isTransferring, setIsTransferring] = useState(false);
+  const transferInProgress = useRef(false);
+  const [transferError, setTransferError] = useState('');
+  const editingAccount = staffAccounts.find((staff) => staff.id === editingStaffId);
+
+  const canEditAccount = (staff) => staff?.role === 'staff'
+    || (staff?.role === 'admin' && (staff.id === profile?.id || profile?.isSuperAdmin));
 
   useEffect(() => {
     setAdminAvatarDraft(profile?.avatarUrl || '');
@@ -193,6 +202,10 @@ const AdminStaff = () => {
   const handleOpenEditModal = (staff) => {
     setActionError('');
     setActionNotice('');
+    if (!canEditAccount(staff)) {
+      setActionError('Only the Super Admin can edit another admin account.');
+      return;
+    }
     setEditStaff({
       username: staff.username || '',
       email: staff.email || '',
@@ -204,6 +217,26 @@ const AdminStaff = () => {
     setEditingStaffId(staff.id);
     setEditFormError('');
     setIsEditModalOpen(true);
+  };
+
+  const handleTransferSuperAdmin = async () => {
+    if (!transferTarget?.id || transferInProgress.current) return;
+    transferInProgress.current = true;
+    setIsTransferring(true);
+    setTransferError('');
+    setActionError('');
+    setActionNotice('');
+    const name = transferTarget.fullName || transferTarget.username;
+    try {
+      await transferSuperAdmin(transferTarget.id);
+      setTransferTarget(null);
+      setActionNotice(`Super Admin access transferred to ${name}. They can now sign in and delete the former admin account if needed.`);
+    } catch (error) {
+      setTransferError(error.message || 'Unable to transfer Super Admin access. Please try again.');
+    } finally {
+      transferInProgress.current = false;
+      setIsTransferring(false);
+    }
   };
 
   const handleCloseEditModal = () => {
@@ -555,7 +588,7 @@ const AdminStaff = () => {
                   <td>
                     <span className="status-badge status-active" style={{ background: '#fef3c7', color: '#d97706' }}>
                       <ShieldCheck size={14} style={{ marginRight: '4px' }} />
-                      {staff.role === 'admin' ? 'Admin Role' : 'Staff Role'}
+                      {staff.isSuperAdmin ? 'Super Admin' : staff.role === 'admin' ? 'Admin Role' : 'Staff Role'}
                     </span>
                   </td>
                   <td style={{ color: '#64748b' }}>
@@ -566,6 +599,14 @@ const AdminStaff = () => {
                   </td>
                   <td style={{ paddingRight: '2rem' }}>
                     <div className="admin-staff-actions-row">
+                      {profile.isSuperAdmin && staff.role === 'admin' && staff.id !== profile.id && (
+                        <button type="button" className="btn-add-item"
+                          onClick={() => { setTransferTarget(staff); setTransferError(''); }}
+                          disabled={isTransferring || isUpdatingStaff || Boolean(deletingId)}
+                          style={{ padding: '0.4rem 0.8rem', background: '#92400e', color: 'white' }}>
+                          <Crown size={16} /> Make Super Admin
+                        </button>
+                      )}
                       {staff.role === 'staff' && (
                         <button
                           className="btn-add-item"
@@ -580,7 +621,7 @@ const AdminStaff = () => {
                       <button
                         className="btn-add-item"
                         onClick={() => handleOpenEditModal(staff)}
-                        disabled={staff.id === profile?.id}
+                        disabled={!canEditAccount(staff) || isTransferring}
                         style={{ padding: '0.4rem 0.8rem', background: '#3b82f6', color: 'white' }}
                         title="Edit staff account"
                       >
@@ -988,6 +1029,7 @@ const AdminStaff = () => {
                 <select
                   className="modal-input"
                   value={editStaff.role}
+                  disabled={editingStaffId === profile?.id || editingAccount?.isSuperAdmin}
                   onChange={(e) => setEditStaff({ ...editStaff, role: e.target.value })}
                 >
                   <option value="staff">Staff</option>
@@ -1087,6 +1129,30 @@ const AdminStaff = () => {
               >
                 {deletingId === confirmDeleteStaffId ? 'Deleting...' : 'Delete'}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {transferTarget && (
+        <div className="modal-overlay">
+          <div className="modal-content admin-staff-modal" role="dialog" aria-modal="true" aria-labelledby="super-admin-transfer-title">
+            <h2 id="super-admin-transfer-title">Transfer Super Admin access?</h2>
+            <p style={{ margin: '1rem 0', color: '#475569', lineHeight: 1.6 }}>
+              Make <strong>{transferTarget.fullName || transferTarget.username}</strong> the new Super Admin.
+              You will remain an admin. The new Super Admin can manage admin accounts and can delete your account after signing in.
+            </p>
+            <p style={{ marginBottom: '1.5rem', color: '#64748b', lineHeight: 1.6 }}>
+              There is one Super Admin at a time. You will need the new Super Admin to transfer access back to you.
+            </p>
+            {transferError && <p role="alert" style={{ color: '#b91c1c', marginBottom: '1rem' }}>{transferError}</p>}
+            <div className="admin-staff-modal-actions">
+              <button type="button" className="btn-pos-cancel" style={{ flex: 1 }}
+                disabled={isTransferring} onClick={() => setTransferTarget(null)}>Cancel</button>
+              <LoadingButton type="button" className="btn-add-item" style={{ flex: 1 }}
+                isLoading={isTransferring} onClick={handleTransferSuperAdmin}>
+                <Crown size={16} /> Transfer Access
+              </LoadingButton>
             </div>
           </div>
         </div>
