@@ -1,5 +1,6 @@
 import React from 'react';
 import ButtonLoadingDots from './ButtonLoadingDots';
+import './LoadingButton.css';
 
 const LoadingButton = ({
   isLoading = false,
@@ -15,20 +16,10 @@ const LoadingButton = ({
     type={type}
     disabled={disabled || isLoading}
     aria-busy={isLoading}
-    className={className}
+    className={`loading-button ${className}`.trim()}
   >
-    {isLoading ? (
-      <span className="relative inline-flex items-center justify-center">
-        <span className={`${contentClassName} opacity-0`} aria-hidden="true">
-          {children}
-        </span>
-        <span className="absolute inset-0 flex items-center justify-center">
-          <ButtonLoadingDots />
-        </span>
-      </span>
-    ) : (
-      <span className={contentClassName}>{children}</span>
-    )}
+    <span className={`loading-button-content ${contentClassName}`.trim()}>{children}</span>
+    {isLoading && <span className="loading-button-indicator" aria-hidden="true"><ButtonLoadingDots /></span>}
   </button>
 );
 

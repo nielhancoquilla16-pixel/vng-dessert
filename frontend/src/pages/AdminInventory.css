@@ -71,6 +71,8 @@
   align-items: center;
   gap: 0.35rem;
   flex-shrink: 0;
+  min-width: 0;
+  max-width: 100%;
   padding: 0.35rem;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.88);
@@ -79,6 +81,8 @@
 }
 
 .inventory-view-button {
+  min-width: 0;
+  max-width: 100%;
   min-height: 50px;
   padding: 0 1.2rem;
   border: none;
@@ -118,20 +122,33 @@
   align-items: center;
   justify-content: center;
   gap: 0.45rem;
+  min-width: 0;
+  max-width: 100%;
   min-height: 46px;
+  padding: 0.65rem 1rem;
   border-radius: 999px;
   cursor: pointer;
   font-weight: 700;
+  line-height: 1.35;
+  text-align: center;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.inventory-primary-button > svg,
+.inventory-secondary-button > svg,
+.inventory-card-button > svg {
+  flex-shrink: 0;
 }
 
 .inventory-primary-button {
+  padding: 0.75rem 1.25rem;
   background: linear-gradient(135deg, #ea580c 0%, #f97316 100%);
   color: white;
   box-shadow: 0 16px 30px rgba(249, 115, 22, 0.24);
 }
 
 .inventory-secondary-button {
-  padding: 0 1rem;
   background: white;
   border: 1px solid rgba(148, 163, 184, 0.24);
   color: #334155;
@@ -534,7 +551,11 @@
 }
 
 .inventory-batch-modal {
+  width: calc(100vw - 2rem);
   max-width: 760px;
+  max-height: calc(100dvh - 2rem);
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .inventory-modal-head {
@@ -637,6 +658,10 @@
 }
 
 @media (max-width: 768px) {
+  .inventory-batch-modal {
+    padding: 1.25rem;
+  }
+
   .inventory-batches-page {
     gap: 1rem;
   }

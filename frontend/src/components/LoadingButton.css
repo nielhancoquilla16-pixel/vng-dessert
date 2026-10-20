@@ -1,0 +1,38 @@
+.loading-button {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+  text-align: center;
+}
+
+.loading-button-content {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  min-width: 0;
+  max-width: 100%;
+  white-space: inherit;
+  overflow-wrap: anywhere;
+}
+
+.loading-button-content > svg {
+  flex-shrink: 0;
+}
+
+/* Keep the label in the layout so loading never changes the button's size. */
+.loading-button[aria-busy='true'] > .loading-button-content {
+  opacity: 0;
+}
+
+.loading-button-indicator {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}

@@ -1,11 +1,11 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { UserPlus, Trash2, Key, Calendar, ShieldCheck, Crown, Camera, ImagePlus, Save, X, Edit2 } from 'lucide-react';
+import React, { useRef, useState } from 'react';
+import { UserPlus, Trash2, Key, Calendar, ShieldCheck, Crown, Save, X, Edit2 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { PASSWORD_POLICY_MESSAGE, validatePassword } from '../utils/passwordValidation';
 import LoadingButton from '../components/LoadingButton';
+import { readImageFileAsDataUrl, validateImageFile } from '../utils/profileImages';
 import './AdminStaff.css';
 
-const MAX_PROFILE_IMAGE_BYTES = 2 * 1024 * 1024;
 const emptyStaffForm = {
   username: '',
   email: '',
@@ -29,27 +29,6 @@ const getInitials = (value = '') => (
     .join('')
     .toUpperCase() || 'ST'
 );
-
-const readImageFileAsDataUrl = (file) => new Promise((resolve, reject) => {
-  const reader = new FileReader();
-  reader.onload = () => resolve(String(reader.result || ''));
-  reader.onerror = () => reject(new Error('Unable to read the selected image.'));
-  reader.readAsDataURL(file);
-});
-
-const validateImageFile = (file) => {
-  if (!file) {
-    return;
-  }
-
-  if (!['image/png', 'image/jpeg'].includes(file.type)) {
-    throw new Error('Only PNG and JPG/JPEG profile pictures are supported.');
-  }
-
-  if (file.size > MAX_PROFILE_IMAGE_BYTES) {
-    throw new Error('Profile pictures must be 2MB or smaller.');
-  }
-};
 
 const AvatarPreview = ({ avatarUrl, label, size = 52, fontSize = '1rem' }) => (
   <div
@@ -84,7 +63,6 @@ const AdminStaff = () => {
     updateStaffAccount,
     resetStaffPassword,
     deleteStaffAccount,
-    updateMyProfile,
     transferSuperAdmin,
   } = useAuth();
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
@@ -95,18 +73,16 @@ const AdminStaff = () => {
   const [confirmDeleteStaffInfo, setConfirmDeleteStaffInfo] = useState(null);
   const [newStaff, setNewStaff] = useState({ ...emptyStaffForm });
   const [editStaff, setEditStaff] = useState({ ...emptyStaffForm });
-  const [adminAvatarDraft, setAdminAvatarDraft] = useState('');
   const [formError, setFormError] = useState('');
+  const [isCreatingStaff, setIsCreatingStaff] = useState(false);
+  const staffCreationInProgress = useRef(false);
   const [editFormError, setEditFormError] = useState('');
   const [isUpdatingStaff, setIsUpdatingStaff] = useState(false);
   const staffUpdateInProgress = useRef(false);
   const [actionError, setActionError] = useState('');
   const [actionNotice, setActionNotice] = useState('');
-  const [profileError, setProfileError] = useState('');
-  const [profileNotice, setProfileNotice] = useState('');
   const [deletingId, setDeletingId] = useState('');
   const [resettingId, setResettingId] = useState('');
-  const [isSavingProfilePhoto, setIsSavingProfilePhoto] = useState(false);
   const [isResetPasswordOpen, setIsResetPasswordOpen] = useState(false);
   const [resetStaffInfo, setResetStaffInfo] = useState(null);
   const [resetPasswordForm, setResetPasswordForm] = useState({ ...emptyResetPasswordForm });
@@ -120,9 +96,8 @@ const AdminStaff = () => {
   const canEditAccount = (staff) => staff?.role === 'staff'
     || (staff?.role === 'admin' && (staff.id === profile?.id || profile?.isSuperAdmin));
 
-  useEffect(() => {
-    setAdminAvatarDraft(profile?.avatarUrl || '');
-  }, [profile?.avatarUrl]);
+  const canDeleteAccount = (staff) => staff?.id !== profile?.id && !staff?.isSuperAdmin
+    && (staff?.role === 'staff' || (staff?.role === 'admin' && profile?.isSuperAdmin));
 
   const handleImageFileSelection = async (file, onResolved, onError) => {
     try {
@@ -136,6 +111,7 @@ const AdminStaff = () => {
 
   const handleAddStaff = async (e) => {
     e.preventDefault();
+    if (staffCreationInProgress.current) return;
     setFormError('');
     setActionError('');
     setActionNotice('');
@@ -146,12 +122,18 @@ const AdminStaff = () => {
       return;
     }
 
+    staffCreationInProgress.current = true;
+    setIsCreatingStaff(true);
     try {
       await createStaffAccount(newStaff);
       setIsCreateModalOpen(false);
       setNewStaff({ ...emptyStaffForm });
+      setActionNotice(newStaff.role === 'admin' ? 'new admin account created' : 'New staff account created.');
     } catch (nextError) {
       setFormError(nextError.message || 'Unable to create the staff account right now.');
+    } finally {
+      staffCreationInProgress.current = false;
+      setIsCreatingStaff(false);
     }
   };
 
@@ -164,6 +146,12 @@ const AdminStaff = () => {
 
     if (staff.id === profile?.id) {
       setActionError('You cannot delete your own admin account.');
+      return;
+    }
+    if (!canDeleteAccount(staff)) {
+      setActionError(staff.isSuperAdmin
+        ? 'Transfer Super Admin access before deleting this account.'
+        : 'Only the Super Admin can delete another admin account.');
       return;
     }
 
@@ -183,6 +171,7 @@ const AdminStaff = () => {
 
     try {
       await deleteStaffAccount(confirmDeleteStaffId);
+      setActionNotice(`${confirmDeleteStaffInfo?.role === 'admin' ? 'Admin' : 'Staff'} account deleted.`);
       setIsConfirmDeleteOpen(false);
       setConfirmDeleteStaffId(null);
       setConfirmDeleteStaffInfo(null);
@@ -267,9 +256,12 @@ const AdminStaff = () => {
     setIsUpdatingStaff(true);
 
     try {
+      const previousRole = staffAccounts.find((staff) => staff.id === editingStaffId)?.role;
       await updateStaffAccount(editingStaffId, editStaff);
       handleCloseEditModal();
-      setActionNotice('Staff account updated.');
+      setActionNotice(editStaff.role === 'admin' && previousRole !== 'admin'
+        ? 'new admin account created'
+        : `${editStaff.role === 'admin' ? 'Admin' : 'Staff'} account updated.`);
     } catch (nextError) {
       setEditFormError(nextError.message || 'Unable to update the staff account right now.');
     } finally {
@@ -348,23 +340,6 @@ const AdminStaff = () => {
     }
   };
 
-  const handleSaveAdminPhoto = async () => {
-    setProfileError('');
-    setProfileNotice('');
-    setIsSavingProfilePhoto(true);
-
-    try {
-      await updateMyProfile({
-        avatarUrl: adminAvatarDraft,
-      });
-      setProfileNotice('Your profile picture was updated.');
-    } catch (error) {
-      setProfileError(error.message || 'Unable to update your profile picture right now.');
-    } finally {
-      setIsSavingProfilePhoto(false);
-    }
-  };
-
   if (isAuthLoading) {
     return (
       <div className="recent-orders-card" style={{ marginTop: '2rem', padding: '2rem', color: '#475569' }}>
@@ -396,147 +371,6 @@ const AdminStaff = () => {
         </button>
       </div>
 
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
-          gap: '1.5rem',
-          marginTop: '1.5rem',
-        }}
-      >
-        <div
-          style={{
-            background: 'white',
-            borderRadius: '1.25rem',
-            padding: '1.5rem',
-            boxShadow: '0 12px 30px rgba(15, 23, 42, 0.08)',
-            border: '1px solid rgba(148, 163, 184, 0.14)',
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1rem' }}>
-            <Camera size={18} color="#f97316" />
-            <h2 style={{ margin: 0, fontSize: '1.1rem' }}>Admin Profile Photo</h2>
-          </div>
-
-          <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '1rem' }}>
-            <AvatarPreview
-              avatarUrl={adminAvatarDraft}
-              label={profile?.fullName || profile?.username || 'Admin'}
-              size={72}
-              fontSize="1.25rem"
-            />
-            <div>
-              <div style={{ fontWeight: 700, color: '#0f172a' }}>{profile?.fullName || profile?.username || 'Administrator'}</div>
-              <div style={{ color: '#64748b', fontSize: '0.9rem' }}>Upload a PNG/JPG or paste an image link.</div>
-            </div>
-          </div>
-
-          <div className="modal-form-group">
-            <label>Upload PNG or JPG</label>
-            <input
-              type="file"
-              className="modal-input"
-              accept="image/png,image/jpeg"
-              onChange={(e) => {
-                const file = e.target.files?.[0];
-                if (!file) {
-                  return;
-                }
-
-                setProfileError('');
-                setProfileNotice('');
-                handleImageFileSelection(
-                  file,
-                  setAdminAvatarDraft,
-                  setProfileError,
-                );
-                e.target.value = '';
-              }}
-            />
-          </div>
-
-          <div className="modal-form-group">
-            <label>Or paste image link</label>
-            <input
-              type="url"
-              className="modal-input"
-              placeholder="https://example.com/admin-photo.jpg"
-              value={adminAvatarDraft.startsWith('data:') ? '' : adminAvatarDraft}
-              onChange={(e) => {
-                setProfileError('');
-                setProfileNotice('');
-                setAdminAvatarDraft(e.target.value);
-              }}
-            />
-          </div>
-
-          {adminAvatarDraft.startsWith('data:') && (
-            <div style={{ marginBottom: '1rem', fontSize: '0.85rem', color: '#475569' }}>
-              Uploaded image selected. Save changes to apply it.
-            </div>
-          )}
-
-          {profileError && (
-            <div style={{ marginBottom: '1rem', color: '#b91c1c', fontWeight: 600, fontSize: '0.9rem' }}>
-              {profileError}
-            </div>
-          )}
-
-          {profileNotice && (
-            <div style={{ marginBottom: '1rem', color: '#15803d', fontWeight: 600, fontSize: '0.9rem' }}>
-              {profileNotice}
-            </div>
-          )}
-
-          <div style={{ display: 'flex', gap: '0.75rem' }}>
-            <button
-              type="button"
-              className="btn-pos-cancel"
-              style={{ flex: 1 }}
-              onClick={() => {
-                setAdminAvatarDraft('');
-                setProfileError('');
-                setProfileNotice('');
-              }}
-            >
-              <X size={16} /> Clear
-            </button>
-            <button
-              type="button"
-              className="btn-add-item"
-              style={{ flex: 1, justifyContent: 'center' }}
-              onClick={handleSaveAdminPhoto}
-              disabled={isSavingProfilePhoto}
-            >
-              <Save size={16} /> {isSavingProfilePhoto ? 'Saving...' : 'Save Photo'}
-            </button>
-          </div>
-
-          <div style={{ marginTop: '1rem', fontSize: '0.82rem', color: '#64748b', lineHeight: 1.6 }}>
-            PNG and JPG/JPEG files are supported. Keep uploads at 2MB or smaller for best results.
-          </div>
-        </div>
-
-        <div
-          style={{
-            background: 'linear-gradient(135deg, #fff7ed 0%, #ffffff 100%)',
-            borderRadius: '1.25rem',
-            padding: '1.5rem',
-            border: '1px solid rgba(251, 146, 60, 0.18)',
-            boxShadow: '0 12px 30px rgba(15, 23, 42, 0.05)',
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.75rem' }}>
-            <ImagePlus size={18} color="#ea580c" />
-            <h2 style={{ margin: 0, fontSize: '1.1rem' }}>Staff Photos Enabled</h2>
-          </div>
-          <p style={{ margin: 0, color: '#475569', lineHeight: 1.7 }}>
-            New staff accounts can now be created with either an uploaded PNG/JPG photo or an image link.
-            Their picture will appear in the staff list and the admin panel profile views.
-          </p>
-        </div>
-      </div>
-
       {actionError && (
         <div style={{ marginTop: '1rem', color: '#b91c1c', fontWeight: 600, fontSize: '0.9rem' }}>
           {actionError}
@@ -544,7 +378,7 @@ const AdminStaff = () => {
       )}
 
       {actionNotice && (
-        <div style={{ marginTop: actionError ? '0.5rem' : '1rem', color: '#15803d', fontWeight: 600, fontSize: '0.9rem' }}>
+        <div role="status" style={{ marginTop: actionError ? '0.5rem' : '1rem', color: '#15803d', fontWeight: 600, fontSize: '0.9rem' }}>
           {actionNotice}
         </div>
       )}
@@ -630,10 +464,10 @@ const AdminStaff = () => {
                       <button
                         className="btn-card-delete"
                         onClick={() => handleDeleteStaff(staff)}
-                        disabled={deletingId === staff.id || staff.id === profile?.id}
+                        disabled={deletingId === staff.id || !canDeleteAccount(staff) || isTransferring}
                         style={{ padding: '0.4rem 0.8rem' }}
                       >
-                        <Trash2 size={16} /> {staff.id === profile?.id ? 'Current Admin' : (deletingId === staff.id ? 'Deleting...' : 'Delete')}
+                        <Trash2 size={16} /> {staff.id === profile?.id ? 'Current Admin' : staff.isSuperAdmin ? 'Super Admin' : (deletingId === staff.id ? 'Deleting...' : 'Delete')}
                       </button>
                     </div>
                   </td>
@@ -650,7 +484,7 @@ const AdminStaff = () => {
             <h2 style={{ marginBottom: '1.5rem' }}>Create Staff Account</h2>
             <form onSubmit={handleAddStaff}>
               {formError && (
-                <div style={{ marginBottom: '1rem', color: '#b91c1c', fontWeight: 600, fontSize: '0.9rem' }}>
+                <div role="alert" style={{ marginBottom: '1rem', color: '#b91c1c', fontWeight: 600, fontSize: '0.9rem' }}>
                   {formError}
                 </div>
               )}
@@ -785,11 +619,12 @@ const AdminStaff = () => {
                 </ul>
               </div>
 
-              <div style={{ display: 'flex', gap: '1rem' }}>
+              <div className="admin-staff-modal-actions">
                 <button
                   type="button"
                   className="btn-pos-cancel"
                   style={{ flex: 1 }}
+                  disabled={isCreatingStaff}
                   onClick={() => {
                     setIsCreateModalOpen(false);
                     setFormError('');
@@ -798,14 +633,15 @@ const AdminStaff = () => {
                 >
                   Cancel
                 </button>
-                <button
+                <LoadingButton
                   type="submit"
                   className="btn-add-item"
                   style={{ flex: 1, justifyContent: 'center' }}
+                  isLoading={isCreatingStaff}
                   disabled={!validatePassword(newStaff.password).valid}
                 >
                   <Key size={16} /> Create Account
-                </button>
+                </LoadingButton>
               </div>
             </form>
           </div>
@@ -876,7 +712,7 @@ const AdminStaff = () => {
                 The new password takes effect immediately. Share it securely with the staff member so they can sign in again.
               </div>
 
-              <div style={{ display: 'flex', gap: '1rem' }}>
+              <div className="admin-staff-modal-actions">
                 <button
                   type="button"
                   className="btn-pos-cancel"
@@ -1046,7 +882,7 @@ const AdminStaff = () => {
                 </ul>
               </div>
 
-              <div style={{ display: 'flex', gap: '1rem' }}>
+              <div className="admin-staff-modal-actions">
                 <button
                   type="button"
                   className="btn-pos-cancel"
@@ -1103,14 +939,14 @@ const AdminStaff = () => {
               >
                 <Trash2 size={32} style={{ color: '#dc2626' }} />
               </div>
-              <h2 style={{ margin: '0 0 0.5rem', color: '#0f172a' }}>Delete Staff Account?</h2>
+              <h2 style={{ margin: '0 0 0.5rem', color: '#0f172a' }}>Delete {confirmDeleteStaffInfo.role === 'admin' ? 'Admin' : 'Staff'} Account?</h2>
               <p style={{ margin: '0', color: '#64748b', fontSize: '0.95rem' }}>
                 Are you sure you want to delete <strong>{confirmDeleteStaffInfo.fullName || confirmDeleteStaffInfo.username}</strong>? 
                 This action cannot be undone.
               </p>
             </div>
 
-            <div style={{ display: 'flex', gap: '1rem', marginTop: '1.5rem' }}>
+            <div className="admin-staff-modal-actions" style={{ marginTop: '1.5rem' }}>
               <button
                 type="button"
                 className="btn-pos-cancel"

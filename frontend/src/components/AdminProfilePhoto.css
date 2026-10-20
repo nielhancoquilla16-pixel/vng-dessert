@@ -1,0 +1,286 @@
+.admin-profile-photo {
+  position: fixed;
+  z-index: 200;
+  width: min(380px, calc(100vw - 24px));
+  max-height: calc(100vh - 24px);
+  max-height: calc(100dvh - 24px);
+  padding: 1.25rem;
+  overflow: auto;
+  overscroll-behavior: contain;
+  border: 1px solid #e2e8f0;
+  border-radius: 1rem;
+  background: #fff;
+  color: #1e293b;
+  box-shadow: 0 18px 65px rgba(2, 14, 29, 0.28), 0 2px 8px rgba(2, 14, 29, 0.1);
+  font-family: var(--font-body);
+  font-size: 0.82rem;
+  outline: none;
+}
+
+.admin-profile-photo-heading {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding-bottom: 0.85rem;
+  border-bottom: 1px solid #edf0f4;
+}
+
+.admin-profile-photo-heading h2 {
+  flex: 1;
+  font-family: inherit;
+  font-size: 1rem;
+  line-height: 1.4;
+  color: #17212f;
+}
+
+.admin-profile-photo-camera {
+  display: grid;
+  place-items: center;
+  flex: 0 0 33px;
+  height: 33px;
+  border-radius: 50%;
+  color: #fa7616;
+  background: #fff0db;
+}
+
+.admin-profile-photo-close {
+  display: grid;
+  place-items: center;
+  flex: 0 0 30px;
+  height: 30px;
+  border-radius: 0.4rem;
+  color: #64748b;
+}
+
+.admin-profile-photo-close:hover {
+  background: #f1f5f9;
+}
+
+.admin-profile-photo-account {
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+  margin: 1rem 0;
+}
+
+.admin-profile-photo-account > img {
+  width: 68px;
+  height: 68px;
+  border-radius: 50%;
+  object-fit: cover;
+  background: #fff0df;
+}
+
+.admin-profile-photo-account > div {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  overflow-wrap: anywhere;
+}
+
+.admin-profile-photo-account strong {
+  font-size: 1rem;
+}
+
+.admin-profile-photo-account span,
+.admin-profile-photo-instructions,
+.admin-profile-photo small,
+.admin-profile-photo-help {
+  color: #64748b;
+}
+
+.admin-profile-photo-instructions {
+  margin: 0 0 0.8rem;
+  line-height: 1.6;
+}
+
+.admin-profile-photo-preview {
+  display: grid;
+  place-items: center;
+  width: 94px;
+  height: 94px;
+  margin-bottom: 0.8rem;
+  padding: 5px;
+  border: 1px solid #d8dee7;
+  border-radius: 0.65rem;
+  color: #94a3b8;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06);
+}
+
+.admin-profile-photo-preview img {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.admin-profile-photo label {
+  display: block;
+  margin-bottom: 0.4rem;
+  font-weight: 600;
+}
+
+.admin-profile-photo input {
+  width: 100%;
+  min-width: 0;
+  min-height: 42px;
+  padding: 0.65rem 0.7rem;
+  border: 1px solid #d8dee7;
+  border-radius: 0.5rem;
+  background: #fff;
+  color: #334155;
+  font: inherit;
+}
+
+.admin-profile-photo input[type='file'] {
+  padding: 0.5rem;
+  font-size: 0.73rem;
+}
+
+.admin-profile-photo input::file-selector-button {
+  padding: 0.3rem 0.45rem;
+  margin-right: 0.5rem;
+  border: 1px solid #cbd5e1;
+  border-radius: 0.3rem;
+  background: #f8fafc;
+  color: #334155;
+  cursor: pointer;
+}
+
+.admin-profile-photo small {
+  display: block;
+  margin: 0.4rem 0 1.25rem;
+  font-size: 0.72rem;
+}
+
+.admin-profile-photo-url {
+  position: relative;
+}
+
+.admin-profile-photo-url > svg {
+  position: absolute;
+  left: 0.7rem;
+  top: 50%;
+  transform: translateY(-50%);
+  color: #64748b;
+}
+
+.admin-profile-photo-url input {
+  padding-left: 2.15rem;
+}
+
+.admin-profile-photo-actions {
+  display: flex;
+  gap: 0.7rem;
+  margin-top: 1.35rem;
+}
+
+.admin-profile-photo-actions button {
+  flex: 1;
+  min-height: 43px;
+  border-radius: 0.55rem;
+  font: inherit;
+  font-weight: 600;
+}
+
+.admin-profile-photo-clear {
+  border: 1px solid #ff5656;
+  background: #fff8f7;
+  color: #ef3333;
+}
+
+.admin-profile-photo-clear:hover {
+  background: #fff0ed;
+}
+
+.admin-profile-photo-save {
+  background: linear-gradient(110deg, #ff8a1c, #ff7013);
+  color: #fff;
+}
+
+.admin-profile-photo-save:hover {
+  background: #ed6c0c;
+}
+
+.admin-profile-photo button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.admin-profile-photo :is(button, input):focus-visible {
+  outline: 2px solid #fb923c;
+  outline-offset: 3px;
+}
+
+.admin-profile-photo-help {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.45rem;
+  margin-top: 0.85rem;
+  padding-top: 0.85rem;
+  border-top: 1px solid #edf0f4;
+  font-size: 0.68rem;
+  line-height: 1.6;
+}
+
+.admin-profile-photo :is(.admin-profile-photo-help, .admin-profile-photo-error, .admin-profile-photo-success) svg {
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.admin-profile-photo-error,
+.admin-profile-photo-success {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.4rem;
+  margin-top: 0.8rem;
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
+.admin-profile-photo-error {
+  color: #b91c1c;
+}
+
+.admin-profile-photo-success {
+  color: #15803d;
+}
+
+@media (max-width: 480px) {
+  .admin-profile-photo {
+    padding: 1rem;
+  }
+
+  .admin-profile-photo-heading {
+    padding-bottom: 0.6rem;
+  }
+
+  .admin-profile-photo-account {
+    margin: 0.7rem 0;
+  }
+
+  .admin-profile-photo-account > img {
+    width: 52px;
+    height: 52px;
+  }
+
+  .admin-profile-photo-preview {
+    width: 76px;
+    height: 76px;
+    margin-bottom: 0.6rem;
+  }
+
+  .admin-profile-photo small {
+    margin-bottom: 0.8rem;
+  }
+
+  .admin-profile-photo-actions {
+    margin-top: 1rem;
+  }
+
+  .admin-profile-photo-help {
+    margin-top: 0.6rem;
+    padding-top: 0.6rem;
+  }
+}
