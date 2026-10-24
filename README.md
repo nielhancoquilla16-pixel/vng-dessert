@@ -100,8 +100,8 @@ The system will be evaluated using **ISO/IEC 25010** software quality criteria:
 
 The technologies used depend on the project's actual implementation.
 
-- **Frontend:** HTML, CSS, JavaScript, and/or React
-- **Backend:** Node.js and/or the configured application backend
+- **Frontend:** React.js, Tailwind.css, and VITE
+- **Backend:** Node.js/Express.js and/or the configured application backend
 - **Database:** Supabase
 - **AI Integration:** Llama AI
 - **Version Control:** Git and GitHub
