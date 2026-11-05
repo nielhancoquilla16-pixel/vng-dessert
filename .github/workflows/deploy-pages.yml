@@ -23,7 +23,7 @@ jobs:
       VITE_PASSWORD_RECOVERY_MODE: link
       VITE_API_BASE_URL: https://vng-dessert-production.up.railway.app
       VITE_SUPABASE_URL: https://tuybevrjakpsubjhfcrq.supabase.co
-      VITE_SUPABASE_ANON_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InR1eWJldnJqYWtwc3ViamhmY3JxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODU4MzMyNzUsImV4cCI6MjEwMTQwOTI3NX0.k5s9tTqTP_v2k_OGDCvM3jDQNGViJtkPAaD3PKxE6P4
+      VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -38,10 +38,11 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
-      - name: Warn about missing frontend environment
+      - name: Validate frontend environment
         run: |
           if [ -z "$VITE_API_BASE_URL" ] || [ -z "$VITE_SUPABASE_URL" ] || [ -z "$VITE_SUPABASE_ANON_KEY" ]; then
-            echo "::warning::Missing frontend secrets. The site can still deploy, but API and Supabase features will not work until VITE_API_BASE_URL, VITE_SUPABASE_URL, and VITE_SUPABASE_ANON_KEY are set in GitHub repository secrets."
+            echo "::error::Missing frontend configuration. Set the VITE_SUPABASE_ANON_KEY repository secret and verify VITE_API_BASE_URL and VITE_SUPABASE_URL."
+            exit 1
           fi
 
       - name: Install frontend dependencies
