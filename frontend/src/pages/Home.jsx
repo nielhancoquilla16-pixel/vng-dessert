@@ -1,20 +1,25 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { ArrowRight, MapPin, Sparkles } from 'lucide-react';
+import { ArrowRight, BookOpen, MapPin, ShoppingBag, Sparkles } from 'lucide-react';
 import { useProducts } from '../context/ProductContext';
 import { useAI } from '../context/AIContext';
 import { useContent } from '../context/ContentContext';
 import { useShopSettings } from '../context/ShopSettingsContext';
 import { apiRequest } from '../lib/api';
 import { resolveAssetUrl } from '../lib/publicUrl';
-import { formatCurrency } from '../utils/orderAnalytics';
 import { getCustomerProducts } from '../utils/customerProducts';
 import MediaEmbed from '../components/MediaEmbed';
 import ShopProductCard from '../components/ShopProductCard';
+import storefrontPhoto from '../assets/storefront.png';
 import './Home.css';
 
 const BEST_SELLER_LIMIT = 3;
+const SIGNATURE_LECHE_FLAN_ID = '60c8c82a-0afd-49ab-8f89-25c4e13928d9';
 const FALLBACK_SHOP_LOCATION = { latitude: 14.455378, longitude: 120.974665 };
+
+const hasSignatureLecheFlanName = (product) => (
+  /^let?cheflan(?:330340g)?$/.test(String(product.name || product.productName || '').toLowerCase().replace(/[^a-z0-9]/g, ''))
+);
 
 const normalizeBestSeller = (product = {}, fallbackRank = 1) => ({
   ...product,
@@ -24,7 +29,7 @@ const normalizeBestSeller = (product = {}, fallbackRank = 1) => ({
   description: product.description || 'Freshly prepared dessert made with care.',
   price: Number(product.price) || 0,
   category: product.category || 'Dessert',
-  imageUrl: resolveAssetUrl(product.imageUrl || product.image_url || product.image, 'logo.png'),
+  imageUrl: resolveAssetUrl(product.imageUrl || product.image_url || product.image),
   image: resolveAssetUrl(product.imageUrl || product.image_url || product.image, 'logo.png'),
   soldCount: Number(product.soldCount) || 0,
   orderCount: Number(product.orderCount) || 0,
@@ -43,14 +48,6 @@ const buildFallbackBestSellers = (products = []) => (
       averageUnitsPerOrder: 0,
       rank: index + 1,
     }, index + 1))
-);
-
-const ProductPreviewCollage = ({ product, variant = 'card' }) => (
-  <div className={`preview-collage preview-collage-${variant}`}>
-    <div className="preview-collage-main">
-      <img src={product.image} alt={product.name} />
-    </div>
-  </div>
 );
 
 const Home = () => {
@@ -157,11 +154,13 @@ const Home = () => {
     .map((product) => ({ ...product, ...storeProducts.find((item) => String(item.id) === String(product.id)), rank: product.rank }));
   const hasLiveBestSellers = liveBestSellers.length > 0;
   const displayedBestSellers = hasLiveBestSellers ? liveBestSellers : fallbackBestSellers;
-  const featuredProduct = displayedBestSellers[0] || null;
+  const featuredProduct = storeProducts.find((product) => String(product.id) === SIGNATURE_LECHE_FLAN_ID)
+    || storeProducts.find(hasSignatureLecheFlanName)
+    || null;
   const recommendationSeedId = featuredProduct?.id || storeProducts[0]?.id;
   const aiRecommendations = getSmartRecommendations(recommendationSeedId).slice(0, 3);
 
-  const isHeroLoading = isProductsLoading || (isBestSellersLoading && !hasLiveBestSellers);
+  const isHeroLoading = isProductsLoading;
 
   return (
     <div className="home-container">
@@ -178,61 +177,58 @@ const Home = () => {
         </div>
       )}
 
-      <section className="hero-section">
-        <div className="hero-content">
-          <span className="hero-eyebrow">A little sweetness, every day</span>
-          <h1 className="hero-title">
-            Your favorite <span className="highlight">Filipino desserts.</span>
-          </h1>
+      <section className="hero-section" aria-labelledby="home-hero-title"
+        style={{ '--hero-storefront': `url("${storefrontPhoto}")` }}>
+        <div className="hero-inner">
+          <div className="hero-content">
+            <div className="hero-introduction">
+              <span className="hero-eyebrow">Sweet moments, made better.</span>
+              <svg className="hero-heart-accent" viewBox="0 0 120 60" fill="none" aria-hidden="true">
+                <path d="M5 51c24-3 34-20 36-39 1-12-12-8-12 2 0-13-16-13-14-2 1 8 14 21 18 26 22-19 50-23 81-8" />
+              </svg>
+            </div>
+            <h1 className="hero-title" id="home-hero-title">
+              <span>V &amp; G LecheFlan</span>
+              <span className="highlight">Desserts &amp; Snacks</span>
+            </h1>
 
-          <p className="hero-description">
-            Creamy leche flan and sweet treats from V &amp; G, made for sharing.
-          </p>
+            <p className="hero-description">
+              Indulge in our creamy leche flan, delicious desserts, and more, made with love, just for you.
+            </p>
 
-          <div className="hero-actions">
-            <Link to="/products" className="btn-primary hero-cta">Explore desserts <ArrowRight size={18} aria-hidden="true" /></Link>
-            <Link to="/about" className="hero-about-link">Our story</Link>
+            <div className="hero-actions">
+              <Link to="/products" className="btn-primary hero-cta"><ShoppingBag size={22} aria-hidden="true" />Explore Products <ArrowRight size={20} aria-hidden="true" /></Link>
+              <Link to="/about" className="hero-about-link"><BookOpen size={22} aria-hidden="true" />Our Story</Link>
+            </div>
+          </div>
+
+          <div className="hero-spotlight-card" aria-busy={isHeroLoading}>
+            {isHeroLoading ? (
+              <div className="hero-skeleton-card" role="status" aria-label="Loading featured dessert">
+                <div className="skeleton hero-skeleton-image" />
+                <div className="skeleton skeleton-title" />
+                <div className="skeleton skeleton-text" />
+                <div className="skeleton skeleton-text" />
+              </div>
+            ) : featuredProduct ? (
+              <ShopProductCard
+                product={featuredProduct}
+                badge="Signature"
+                variant="featured" />
+            ) : (
+              <p className="hero-empty-message" role="status">Our signature leche flan is currently unavailable.</p>
+            )}
           </div>
         </div>
-
-        <div className="hero-spotlight-card">
-          {isHeroLoading ? (
-            <div className="skeleton-card hero-skeleton-card">
-              <div className="skeleton skeleton-image" style={{ height: '360px', marginBottom: '1rem' }}></div>
-              <div style={{ display: 'flex', gap: '0.75rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
-                <div className="skeleton" style={{ width: '126px', height: '34px', borderRadius: '999px' }}></div>
-                <div className="skeleton" style={{ width: '110px', height: '34px', borderRadius: '999px' }}></div>
-              </div>
-              <div className="skeleton skeleton-title" style={{ width: '70%' }}></div>
-              <div className="skeleton skeleton-text"></div>
-              <div className="skeleton skeleton-text" style={{ width: '50%' }}></div>
-            </div>
-          ) : featuredProduct ? (
-            <>
-              <ProductPreviewCollage
-                product={featuredProduct}
-                variant="featured"
-              />
-
-              <div className="spotlight-body">
-                <div className="product-card-heading">
-                  <h3 className="hero-image-title">{featuredProduct.name}</h3>
-                  <span className="premium-price">{formatCurrency(featuredProduct.price)}</span>
-                </div>
-
-                <div className="spotlight-metrics">
-                  <span className="metric-pill metric-pill-highlight">
-                    {hasLiveBestSellers ? `#${featuredProduct.rank} Best Seller` : 'Fresh Pick'}
-                  </span>
-                  <span className="metric-pill metric-pill-soft">{featuredProduct.category}</span>
-                </div>
-              </div>
-            </>
-          ) : null}
-        </div>
-        {!isProductsLoading && !isBestSellersLoading && displayedBestSellers.length === 0 && (
-          <p>Our menu is on its way. Please check back shortly for available desserts.</p>
-        )}
+        <svg className="hero-corner hero-corner-left" viewBox="0 0 350 180" preserveAspectRatio="none" aria-hidden="true">
+          <path d="M0 0c77 18 60 117 144 113s103 37 206 67H0Z" fill="#FFB629" />
+          <path d="M0 145c67-69 107 3 172-1s119 2 178 36H0Z" fill="#FFD16D" />
+        </svg>
+        <svg className="hero-corner hero-corner-right" viewBox="0 0 350 180" preserveAspectRatio="none" aria-hidden="true">
+          <path d="M350 0c-93 22-57 106-142 131S81 126 0 180h350Z" fill="#FFB629" />
+          <path d="M350 142c-70-39-90 30-157 20S71 148 0 180h350Z" fill="#FFCF69" />
+          <path d="M278 140c-38-31-26-53-14-48 7 3 8 13 8 13s6-20 16-15c18 9-10 50-10 50Zm-36-30-12-4m14-20-8-9m32 2-2-12m28 13 6-9m1 27 13-4m-10 25 13 4" fill="none" stroke="#FFF7E8" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
       </section>
 
       <section className="best-sellers-section">

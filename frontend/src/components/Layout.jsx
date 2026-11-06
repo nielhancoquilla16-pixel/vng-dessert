@@ -14,7 +14,7 @@ const Layout = () => {
   useEffect(() => { window.scrollTo({ top: 0, left: 0, behavior: 'instant' }); }, [pathname]);
 
   return (
-    <div className={`app-container${isDeniedAdminCart ? ' app-container--cart-denied' : ''}`}>
+    <div className={`app-container${pathname === '/' ? ' app-container--home' : ''}${isDeniedAdminCart ? ' app-container--cart-denied' : ''}`}>
       <Header />
       {!isDeniedAdminCart && <CustomerOrderReminderBanner />}
       <main className="main-content" id="main-content" tabIndex={-1}>

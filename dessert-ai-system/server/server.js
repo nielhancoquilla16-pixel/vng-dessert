@@ -62,6 +62,8 @@ app.use((req, res, next) => {
 app.use(cors({ origin: process.env.CORS_ORIGIN || "*" }));
 app.use(publicErrorResponses);
 app.use('/api', createRateLimitMiddleware({ limiter: createRequestLimiter({ limit: 240, windowMs: 60000 }), category: 'api' }));
+// Chat needs bounded text, not the image-sized allowance used by other routes.
+app.use(['/api/ai', '/api/chat-messages'], express.json({ limit: '128kb' }));
 app.use(express.json({
   limit: "15mb",
   verify: (req, res, buffer) => {

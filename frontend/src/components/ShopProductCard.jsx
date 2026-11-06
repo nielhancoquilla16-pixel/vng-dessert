@@ -1,7 +1,7 @@
 import { customerErrorMessage } from '../lib/publicErrors';
 import { useId, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { CalendarDays, Check, Heart, Minus, Plus, ShoppingCart } from 'lucide-react';
+import { CalendarDays, Check, Crown, Heart, Minus, Plus, ShoppingCart } from 'lucide-react';
 import { useCart } from '../context/CartContext';
 import { useAuth } from '../context/AuthContext';
 import { useShopSettings } from '../context/ShopSettingsContext';
@@ -14,7 +14,7 @@ import LazyProductImage from './LazyProductImage';
 import PreOrderModal from './PreOrderModal';
 import './ShopProductCard.css';
 
-const ShopProductCard = ({ product, badge, onDetails, onPreOrder, preOrderUnavailableReason }) => {
+const ShopProductCard = ({ product, badge, variant = 'default', onDetails, onPreOrder, preOrderUnavailableReason }) => {
   const { addToCart, cartItems } = useCart();
   const { loggedInCustomer, isAdmin } = useAuth();
   const navigate = useNavigate();
@@ -66,6 +66,38 @@ const ShopProductCard = ({ product, badge, onDetails, onPreOrder, preOrderUnavai
         setFeedback(customerErrorMessage(error, 'Could not add this item. Please try again.'));
       });
   };
+
+  if (variant === 'featured') {
+    return (
+      <article className="hero-featured-product">
+        <DetailsControl {...controlProps} className="hero-product-image-link" aria-label={`View ${product.name}`}>
+          <LazyProductImage key={imageSrc} src={imageSrc} alt={product.name} />
+          {badge && (
+            <span className="hero-product-badge"><Crown size={18} aria-hidden="true" />{badge}</span>
+          )}
+        </DetailsControl>
+        <div className="hero-product-body">
+          <h2 className="hero-product-name">
+            <DetailsControl {...controlProps}>{product.name}</DetailsControl>
+          </h2>
+          <div className="hero-product-footer">
+            <div className="hero-product-details">
+              <span className="hero-product-price">{formatCurrency(pricing.unitPrice)}</span>
+              <span className="hero-product-category">{product.category || 'Dessert'}</span>
+            </div>
+            <button type="button" className="hero-product-add" disabled={!canAdd}
+              onClick={handleAdd} aria-label={`${buttonLabel}: ${product.name}`} title={buttonLabel}>
+              {feedback && !hasError ? <Check size={23} aria-hidden="true" /> : <ShoppingCart size={23} aria-hidden="true" />}
+            </button>
+          </div>
+          {!canAdd && <p className="hero-product-unavailable">{buttonLabel}</p>}
+          <p className={`shop-product-feedback${hasError ? ' has-error' : ''}`} role="status" aria-live="polite">
+            {feedback}
+          </p>
+        </div>
+      </article>
+    );
+  }
 
   return (
     <article className="shop-product-card">

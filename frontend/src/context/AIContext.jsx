@@ -1,13 +1,14 @@
 /* eslint-disable react-refresh/only-export-components */
-import React, { createContext, useContext, useState, useCallback, useEffect, useRef } from 'react';
+import React, { createContext, useContext, useState, useCallback, useEffect, useLayoutEffect, useRef, useSyncExternalStore } from 'react';
 import { useProducts } from './ProductContext';
 import { useShopSettings } from './ShopSettingsContext';
 import { apiRequest } from '../lib/api';
-import { createChatFallbackReply, getChatSecurityRefusal, normalizeChatHistory } from '../utils/customerSupportChat';
+import { createChatFallbackReply, createChatSession, normalizeChatHistory } from '../utils/customerSupportChat';
 import { getCustomerProducts } from '../utils/customerProducts';
+import { useAuth } from './AuthContext';
 
 const AIContext = createContext();
-const AI_REQUEST_TIMEOUT_MS = 12000;
+const AI_REQUEST_TIMEOUT_MS = 15000;
 export const useAI = () => {
   const context = useContext(AIContext);
   if (!context) {
@@ -18,6 +19,7 @@ export const useAI = () => {
 
 export const AIProvider = ({ children }) => {
   const { products } = useProducts();
+  const { profile, session: authSession } = useAuth();
   const { shopSettings, operatingHoursLabel, isShopOpen, isShopSettingsLoading, shopSettingsError } = useShopSettings();
   const currentShopHours = useRef({ shopSettings, operatingHoursLabel, isShopOpen, isShopSettingsLoading, shopSettingsError });
   const [recommendations] = useState([]);
@@ -32,10 +34,11 @@ export const AIProvider = ({ children }) => {
     createChatFallbackReply(question, currentShopHours.current)
   ), []);
 
-  const requestAIReply = useCallback(async (message, { history = [], productId } = {}) => {
-    const refusal = getChatSecurityRefusal(message, history);
-    if (refusal) return refusal;
+  const requestAIReply = useCallback(async (message, { history = [], productId, recommendationState, signal } = {}) => {
     const controller = new AbortController();
+    const abort = () => controller.abort();
+    signal?.addEventListener('abort', abort, { once: true });
+    if (signal?.aborted) controller.abort();
     const timeoutId = window.setTimeout(() => controller.abort(), AI_REQUEST_TIMEOUT_MS);
 
     let data;
@@ -46,16 +49,27 @@ export const AIProvider = ({ children }) => {
         body: JSON.stringify({
           content: message,
           history: normalizeChatHistory(history),
+          ...(recommendationState ? { recommendationState } : {}),
           ...(productId != null ? { productId } : {}),
         }),
         signal: controller.signal,
       });
     } finally {
       window.clearTimeout(timeoutId);
+      signal?.removeEventListener('abort', abort);
     }
 
-    return data?.data?.content || data?.reply || data?.answer;
+    return { reply: data?.data?.content || data?.reply || data?.answer,
+      recommendationState: data?.data?.ai?.recommendationState || data?.recommendationState };
   }, []);
+
+  const conversationRef = useRef(null);
+  if (!conversationRef.current) conversationRef.current = createChatSession({ requestReply: requestAIReply, fallback: createFallbackReply });
+  const conversation = conversationRef.current;
+  const chat = useSyncExternalStore(conversation.subscribe, conversation.getSnapshot, conversation.getSnapshot);
+  const identity = profile?.id || authSession?.user?.id || 'guest';
+  useLayoutEffect(() => { conversation.reset(); }, [conversation, identity]);
+  useEffect(() => () => conversation.reset(), [conversation]);
 
   const getSmartRecommendations = useCallback((currentProductId) => {
     const customerProducts = getCustomerProducts(products);
@@ -155,25 +169,8 @@ export const AIProvider = ({ children }) => {
     };
   }, []);
 
-  const queryProductAI = useCallback(async (product, question, history = []) => {
-    try {
-      const reply = await requestAIReply(question, { history, productId: product?.id });
-      return reply || createFallbackReply(question);
-    } catch (error) {
-      console.error('AI Error:', error);
-      return createFallbackReply(question);
-    }
-  }, [createFallbackReply, requestAIReply]);
-
-  const queryGeneralAI = useCallback(async (question, history = []) => {
-    try {
-      const reply = await requestAIReply(question, { history });
-      return reply || createFallbackReply(question);
-    } catch (error) {
-      console.error('AI Error:', error);
-      return createFallbackReply(question);
-    }
-  }, [createFallbackReply, requestAIReply]);
+  const queryProductAI = useCallback((product, question) => conversation.send(question, { productId: product?.id }), [conversation]);
+  const queryGeneralAI = useCallback((question) => conversation.send(question), [conversation]);
 
   return (
     <AIContext.Provider
@@ -184,6 +181,10 @@ export const AIProvider = ({ children }) => {
         generateIngredientCalculatorInsight,
         queryProductAI,
         queryGeneralAI,
+        chatMessages: chat.messages,
+        isChatSending: chat.isSending,
+        chatSessionVersion: chat.sessionVersion,
+        resetChat: conversation.reset,
       }}
     >
       {children}

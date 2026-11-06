@@ -3,15 +3,13 @@ import { createPortal } from 'react-dom';
 import { Send, MessageCircle, X } from 'lucide-react';
 import { useAI } from '../context/AIContext';
 import AssistantMessage from './AssistantMessage';
-import { CUSTOMER_SUPPORT_GREETING } from '../utils/customerSupportChat';
 import './FloatingAI.css';
 
 export default function FloatingAI({ inline = false }) {
   const [isOpen, setIsOpen] = useState(false);
-  const [messages, setMessages] = useState([{ role: 'ai', text: CUSTOMER_SUPPORT_GREETING }]);
   const [input, setInput] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
-  const { queryGeneralAI } = useAI();
+  const { queryGeneralAI, chatMessages: messages, isChatSending: isLoading, chatSessionVersion } = useAI();
+  useEffect(() => { setInput(''); }, [chatSessionVersion]);
   const dialogRef = useRef(null);
   const messageRef = useRef(null);
   const toggleRef = useRef(null);
@@ -49,14 +47,7 @@ export default function FloatingAI({ inline = false }) {
     const text = input.trim();
     if (!text || isLoading) return;
     setInput('');
-    setMessages((prev) => [...prev, { role: 'user', text }]);
-    setIsLoading(true);
-    try {
-      const reply = await queryGeneralAI(text, messages);
-      setMessages((prev) => [...prev, { role: 'ai', text: reply }]);
-    } catch {
-      setMessages((prev) => [...prev, { role: 'ai', text: 'Sorry, I had trouble connecting. Please try again.' }]);
-    } finally { setIsLoading(false); }
+    await queryGeneralAI(text);
   }
 
   return <>
@@ -68,7 +59,7 @@ export default function FloatingAI({ inline = false }) {
           {messages.map((message, index) => <div key={index} className={`shop-chat-message ${message.role}`}>{message.role === 'user' ? message.text : <AssistantMessage text={message.text} />}</div>)}
           {isLoading && <p className="shop-chat-message ai" role="status">Thinking…</p>}
         </div>
-        <form className="shop-chat-form" onSubmit={handleSend}><input aria-label="Message the dessert assistant" value={input} onChange={(event) => setInput(event.target.value)} placeholder="Type your question…" autoComplete="off" /><button type="submit" aria-label="Send message" disabled={isLoading || !input.trim()}><Send size={20} /></button></form>
+        <form className="shop-chat-form" onSubmit={handleSend}><input aria-label="Message the dessert assistant" value={input} onChange={(event) => setInput(event.target.value)} maxLength={2000} placeholder="Type your question…" autoComplete="off" /><button type="submit" aria-label="Send message" disabled={isLoading || !input.trim()}><Send size={20} /></button></form>
       </div>
     </dialog>, document.body)}
   </>;

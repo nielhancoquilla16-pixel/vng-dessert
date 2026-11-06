@@ -1,12 +1,12 @@
 import { hasValidShopHours, isWithinOperatingHours } from './operatingHours.js';
 import { formatExpiryForCustomer, isExpired } from './expiry.js';
 import { PUBLIC_BUSINESS_INFO } from './publicBusinessInfo.js';
-import { availableAiProducts, formatAiProductList } from './aiProducts.js';
+import { availableAiProducts, formatAiProductList, isRecommendationRequest, buildRecommendationState, selectRecommendations, formatRecommendations, productUnitPrice } from './aiProducts.js';
 import { AI_SECURITY_REFUSAL, guardCustomerAiReply, isRestrictedAiRequest } from '../../shared/customerAiPolicy.js';
 
 export const SUPPORT_FALLBACK = "Sorry, I don't have that information available right now. You can ask me about our products, prices, discounts, orders, location, contact information, delivery, payment, or account registration.";
-export const SUPPORT_INTENTS = ['owner', 'supplier', 'business_name', 'about_business', 'location', 'hours', 'contact', 'email', 'social_media', 'physical_store', 'services', 'discounts', 'promotions', 'signup', 'login', 'password_reset', 'guest_order', 'ordering', 'delivery', 'payment', 'order_status', 'products', 'pricing', 'availability', 'ingredients', 'nutrition', 'expiry', 'product_opinion', 'recommendation', 'greeting', 'thanks', 'help', 'unknown'];
-const PRODUCT_INTENTS = new Set(['pricing', 'availability', 'ingredients', 'nutrition', 'expiry', 'products', 'product_opinion', 'recommendation']);
+export const SUPPORT_INTENTS = ['owner', 'supplier', 'business_name', 'about_business', 'location', 'hours', 'contact', 'email', 'social_media', 'physical_store', 'services', 'discounts', 'promotions', 'signup', 'login', 'password_reset', 'guest_order', 'ordering', 'delivery', 'payment', 'order_status', 'products', 'pricing', 'availability', 'ingredients', 'nutrition', 'expiry', 'product_opinion', 'recommendation', 'greeting', 'thanks', 'help', 'unknown', 'general', 'time', 'date', 'math', 'cart', 'feedback', 'product_details', 'comparison'];
+const PRODUCT_INTENTS = new Set(['pricing', 'availability', 'ingredients', 'nutrition', 'expiry', 'products', 'product_opinion', 'recommendation', 'product_details', 'comparison']);
 const clean = (value) => typeof value === 'string' ? value.trim() : '';
 const resolveBusinessEmail = (value) => (
   clean(value).match(/[\w.+-]+@[\w.-]+\.[A-Z]{2,}/i)?.[0] || PUBLIC_BUSINESS_INFO.email
@@ -19,6 +19,41 @@ const normalize = (value) => clean(value).toLowerCase().normalize('NFKD').replac
 export const normalizeHistory = (history) => (Array.isArray(history) ? history : [])
   .filter((entry) => entry && ['user', 'assistant'].includes(entry.role) && typeof entry.content === 'string' && entry.content.trim())
   .slice(-10).map((entry) => ({ role: entry.role, content: entry.content.trim().slice(0, 1500) }));
+
+// A bounded arithmetic parser, never eval/Function or model-generated commands.
+export const calculateBasicMath = (message) => {
+  const expression = clean(message).toLowerCase().replace(/^(?:what is|whats|calculate|compute|solve|how much is|magkano ang)\s+/, '')
+    .replace(/\bplus\b/g, '+').replace(/\bminus\b/g, '-').replace(/\b(?:times|multiplied by)\b/g, '*')
+    .replace(/\bdivided by\b/g, '/').replace(/[×]/g, '*').replace(/[÷]/g, '/').replace(/[?=]\s*$/, '').trim();
+  if (!expression || expression.length > 200 || !/^[\d.\s+*/()\-]+$/.test(expression) || !/[+*/\-]/.test(expression)) return null;
+  const tokens = expression.match(/\d+(?:\.\d+)?|[()+*/-]/g) || [];
+  if (tokens.length > 64 || tokens.join('') !== expression.replace(/\s/g, '')) return null;
+  let index = 0;
+  const primary = (depth) => {
+    if (depth > 10) throw new Error('Too deep');
+    const token = tokens[index++];
+    if (token === '+') return primary(depth + 1);
+    if (token === '-') return -primary(depth + 1);
+    if (token === '(') { const value = sum(depth + 1); if (tokens[index++] !== ')') throw new Error('Missing parenthesis'); return value; }
+    if (!/^\d/.test(token || '')) throw new Error('Missing number');
+    return Number(token);
+  };
+  const multiply = (depth) => {
+    let value = primary(depth);
+    while (['*', '/'].includes(tokens[index])) { const op = tokens[index++]; const other = primary(depth); value = op === '*' ? value * other : value / other; }
+    return value;
+  };
+  const sum = (depth) => {
+    let value = multiply(depth);
+    while (['+', '-'].includes(tokens[index])) { const op = tokens[index++]; const other = multiply(depth); value = op === '+' ? value + other : value - other; }
+    return value;
+  };
+  try {
+    const value = sum(0);
+    if (index !== tokens.length) return null;
+    return Number.isFinite(value) ? `${expression} = ${Number(value.toPrecision(12))}.` : 'That calculation has no finite result; division by zero is undefined.';
+  } catch { return null; }
+};
 
 const visibleProducts = availableAiProducts;
 const matchesProduct = (message, products) => {
@@ -35,13 +70,19 @@ const matchesProduct = (message, products) => {
     .some((word) => word.length > 3 && !['classic', 'original', 'special', 'sweet', 'dessert', 'with'].includes(word) && words.has(word)));
 };
 
-export const detectSupportIntent = (message, { history = [], products = [], productId, now = new Date() } = {}) => {
+export const detectSupportIntent = (message, { history = [], products = [], productId, state, now = new Date() } = {}) => {
   if (isRestrictedAiRequest(message)) return { intents: ['restricted'] };
   const text = normalize(message);
   const intents = [];
   const add = (intent, matches) => { if (matches && !intents.includes(intent)) intents.push(intent); };
+  add('time', /\b(?:what (?:is the |s the )?(?:current )?time|what time is it|time (?:now|today)|anong oras|oras na)\b/.test(text));
+  add('date', /\b(?:what (?:day|date) (?:is it|is today)|todays date|current date|anong (?:araw|petsa)|araw ngayon|petsa ngayon)\b/.test(text));
+  add('math', Boolean(calculateBasicMath(message)));
+  const generalDefinition = /^(?:what (?:is|are) (?:a |an |leche ?flan\b)|ano (?:ang|ba ang) leche ?flan\b)/.test(text) && !/\byour\b/.test(text);
   const catalog = visibleProducts(products, now);
   const matches = matchesProduct(text, catalog);
+  add('comparison', /\b(?:compare|comparison|difference between|versus|vs)\b/.test(text));
+  add('product_details', !generalDefinition && /\b(?:tell me about|describe|description of|what is this|what is that)\b/.test(text) && (matches.length > 0 || productId != null));
   const account = /\b(account|sign\s*up|signup|register|registration|login|log\s*in|sign\s*in|password|passwrod)\b/.test(text);
   const discount = /\b(discount|discounts|bulk|wholesale|large orders?|buy \d+ or more|percent off|cheaper|price break|save money)\b/.test(text);
   const reset = /\b(reset|forgot|forgotten|recover|lost|change|cannot remember|cant remember)\b.*\b(password|passwrod|account)\b|\b(password|passwrod)\b.*\b(reset|forgot|recover|change)\b/.test(text);
@@ -68,6 +109,9 @@ export const detectSupportIntent = (message, { history = [], products = [], prod
   add('delivery', /\b(deliver(?:y)?|shipping|ship|pick\s*up|collection|courier)\b/.test(text));
   add('payment', /\b(pay(?:ment|ments)?|gcash|cash|cod|credit card|debit card|e wallet)\b/.test(text));
   add('ordering', !account && !intents.includes('order_status') && /\b(how (?:do|can|to).*(?:order|buy|purchase)|place (?:an? )?order|ordering process|pre\s*order|preorder)\b/.test(text) && !/\bhow (?:many|much)\b/.test(text));
+  add('ordering', /\bpaano\b.*\b(?:umorder|order|bumili)\b/.test(text));
+  add('cart', /\b(?:cart|basket)\b/.test(text));
+  add('feedback', /\b(?:feedback|review|rate (?:my|the) order|qr feedback)\b/.test(text));
   add('ingredients', !intents.includes('supplier') && /\b(ingredients?|made (?:of|with)|contain(?:s)?|allerg(?:y|ies|ens)|dairy|nuts?|gluten|vegan|sugar free)\b/.test(text));
   const selectedProductInContext = catalog.some((item) => String(item.id) === String(productId));
   const asksForCalories = /\b(calories?|kcal|nutrition(?:al)?(?: facts?| information| info)?)\b/.test(text);
@@ -82,7 +126,7 @@ export const detectSupportIntent = (message, { history = [], products = [], prod
   add('availability', !discount && !intents.some((intent) => ['hours', 'supplier', 'owner', 'signup', 'contact', 'promotions', 'payment', 'delivery'].includes(intent)) && /\b(stock|availability|available|unavailable|hidden|archived|removed|expired|discontinued|sold out|how many.*(?:order|buy|get)|in stock|left|remaining)\b/.test(text) && !/\b(promo|promotions?|discounts?|services?)\b/.test(text));
   const productOpinion = /\b(?:is|are) (?:this|that|it|these|those) (?:any )?(?:good|great|tasty|delicious|nice|worth it|popular)\b|\b(?:would|do) you recommend (?:this|that|it|these|those)\b/.test(text);
   add('product_opinion', productOpinion);
-  add('recommendation', !productOpinion && /\b(?:recommend(?:ation|ations)?|suggest(?:ion|ions)?|best seller|bestseller|popular|favorite|favourite|what should i (?:try|buy|get)|what can you recommend|which (?:dessert|product) should i (?:try|buy|get|choose)|what do you think i should (?:try|buy|get)|craving)\b/.test(text));
+  add('recommendation', !generalDefinition && !productOpinion && (isRecommendationRequest(message, { history, state }) || /\b(?:favorite|favourite|popular|which (?:dessert|product) should i (?:try|buy|get|choose))\b/.test(text)));
   add('products', /\b(?:what (?:products|desserts) do you sell|show (?:me )?(?:the |your )?menu|list (?:your |the )?(?:products|desserts))\b/.test(text) || (!intents.length && (
     (/\b(menu|catalog|products?|desserts?|flavou?rs?|selection)\b/.test(text) && /\b(sell|list|what|which|show|have|offer|buy|order|available|tell)\b/.test(text))
     || /\b(?:do you (?:have|sell)|what (?:can i (?:buy|order)|do you (?:have|sell)))\b/.test(text)
@@ -100,6 +144,7 @@ export const detectSupportIntent = (message, { history = [], products = [], prod
     const contextIntents = previous.intents.filter((intent) => ['discounts', 'promotions', ...PRODUCT_INTENTS].includes(intent));
     if (contextIntents.length && (matches.length || /\b(it|that|this|those|them|\d+|five|ten|more|less)\b/.test(text))) intents.push(...contextIntents);
   }
+  if (!intents.length && generalDefinition) intents.push('general');
   if (!intents.length && matches.length) intents.push('products');
   if (intents.some((intent) => PRODUCT_INTENTS.has(intent)) && !targetId && matches.length === 0) {
     // Only inherit a product for an actual product question or an elliptical
@@ -121,7 +166,7 @@ export const detectSupportIntent = (message, { history = [], products = [], prod
     add('thanks', /^(?:thanks|thank you|ty|salamat)[!. ]*$/.test(text));
     add('help', /^(?:help|help me|what can you do|can you help|who are you)[?!. ]*$/.test(text));
   }
-  return { intents: intents.length ? intents : ['unknown'], ...(targetId ? { productId: targetId } : {}) };
+  return { intents: intents.length ? intents : ['unknown'], ...(targetId ? { productId: targetId } : {}), ...(intents.includes('comparison') ? { productIds: matches.map((item) => item.id).slice(0, 3) } : {}) };
 };
 
 export const validateSemanticIntent = (value, products = []) => {
@@ -135,22 +180,51 @@ export const validateSemanticIntent = (value, products = []) => {
 
 const money = (value) => `PHP ${Number(value).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
-export const buildSupportReply = (plan, knowledge = {}, { now = new Date() } = {}) => {
+const publishedOffer = (value, now, topic) => {
+  const text = clean(value);
+  if (!text) return '';
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Manila', year: 'numeric', month: '2-digit', day: '2-digit' }).format(now);
+  const dates = text.match(/\b\d{4}-\d{2}-\d{2}\b/g) || [];
+  if (dates.length && dates.every((date) => date < today)) return `The published ${topic} dates have passed. Please contact the shop to confirm any current offers.`;
+  // Free-text policies are not an automatic promotion/eligibility engine.
+  return `Published ${topic} information: ${text}\n\nPlease confirm the offer's current validity and eligibility with the shop before ordering.`;
+};
+
+export const buildSupportReply = (plan, knowledge = {}, { now = new Date(), state, message = '', history = [] } = {}) => {
   const shop = knowledge.shop;
   const support = shop?.customerSupport || {};
+  const tl = state?.preferences?.language === 'tl';
   const products = visibleProducts(knowledge.products || [], now);
   const product = products.find((item) => String(item.id) === String(plan.productId));
   const missing = (topic) => `Sorry, ${topic} information is currently unavailable. Please contact the shop for confirmation.`;
   const needProduct = () => knowledge.productsLoaded === false ? missing('product') : 'Which dessert do you mean? Please tell me its name so I can check.';
   if (plan.intents?.some((intent) => ['restricted', 'supplier'].includes(intent))) return AI_SECURITY_REFUSAL;
-  if (plan.intents?.some((intent) => ['products', 'availability', 'recommendation'].includes(intent))) {
+  if (plan.intents?.includes('recommendation')) {
+    if (knowledge.productsLoaded === false) return 'Product information is currently unavailable. Please try again shortly.';
+    const context = state || buildRecommendationState(message, { history, products });
+    return formatRecommendations(selectRecommendations(products, context, { productId: plan.productId, now }), context);
+  }
+  if (plan.intents?.some((intent) => ['products', 'availability'].includes(intent))) {
     if (knowledge.productsLoaded === false) return '- Product information is currently unavailable. Please try again shortly.';
     const choices = product ? [product, ...products.filter((item) => item !== product)] : products;
-    const menu = plan.intents.includes('recommendation') ? choices.slice(0, 3) : product ? [product] : choices;
+    const unavailable = (knowledge.unavailableProducts || []).find((item) => String(item.id) === String(plan.unavailableProductId));
+    if (unavailable) return `${unavailable.name} is currently unavailable to order. Would you like an available alternative?`;
+    const menu = product ? [product] : choices;
     return formatAiProductList(menu) || '- No products are available right now.';
   }
   const replyFor = (intent) => {
     switch (intent) {
+      case 'time': return `${tl ? 'Ang oras ngayon ay' : "It's"} ${new Intl.DateTimeFormat('en-PH', { timeZone: 'Asia/Manila', hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true }).format(now)} ${tl ? 'dito sa Pilipinas' : 'here in the Philippines'}.`;
+      case 'date': return `${tl ? 'Ang petsa ngayon ay' : 'Today is'} ${new Intl.DateTimeFormat(tl ? 'fil-PH' : 'en-PH', { timeZone: 'Asia/Manila', weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }).format(now)}.`;
+      case 'math': return calculateBasicMath(message) || SUPPORT_FALLBACK;
+      case 'cart': return tl ? 'Pumili ng available na dessert at quantity, tapos piliin ang Add to Cart. Buksan ang Cart para baguhin ang quantity, alisin ang items, at tingnan ang total bago mag-checkout.' : 'Choose an available dessert and quantity, then select Add to Cart. Open Cart to update quantities, remove items, and review the total before proceeding to checkout.';
+      case 'feedback': return tl ? 'Buksan ang feedback QR code o link para sa order mo. Available ang feedback kapag delivered o completed na ang order. Piliin ang ratings, magdagdag ng optional na comment, at isumite.' : 'Use the feedback QR code or feedback link for your order. Feedback becomes available after the order is delivered or completed. Open the form, choose your ratings, add an optional comment, and submit.';
+      case 'comparison': {
+        const choices = products.filter((item) => plan.productIds?.includes(item.id));
+        return choices.length < 2 ? 'Which two desserts would you like to compare? Please tell me their names.'
+          : choices.map((item) => `${item.name}${productUnitPrice(item) != null ? ` — ${money(productUnitPrice(item))}` : ' — confirm the current price at checkout'}: ${clean(item.description) || 'No detailed description has been published yet.'}`).join('\n\n');
+      }
+      case 'product_details': return product ? `${product.name}: ${clean(product.description) || 'The menu does not yet include a detailed description.'}${productUnitPrice(product) != null ? ` It costs ${money(productUnitPrice(product))} per item.` : ''}` : needProduct();
       case 'owner': return clean(support.owner) || missing('owner');
       case 'business_name': return clean(shop?.shopName) || missing('business name');
       case 'about_business': return PUBLIC_BUSINESS_INFO.about;
@@ -164,26 +238,33 @@ export const buildSupportReply = (plan, knowledge = {}, { now = new Date() } = {
       }
       case 'physical_store': return clean(support.physicalStore) || missing('physical store');
       case 'services': return clean(support.services) || 'You can browse desserts, place orders for pickup or delivery, and schedule pre-orders through the shop. Sign in to place an order; ordering is available during the saved shop hours.';
-      case 'discounts': return clean(support.discounts) || 'Sorry, discount information is currently unavailable. I cannot confirm a discount for 5 or more items or bulk orders. Please contact the shop before ordering.';
-      case 'promotions': return clean(support.promotions) || missing('current promotion');
+      case 'discounts': {
+        const offers = (product ? [product] : products).flatMap((item) => item.discountEnabled === true && item.priceConfirmed !== false
+          ? (item.discountTiers || []).filter((tier) => tier.minQuantity <= Number(item.stock) && tier.minQuantity >= 2 && Number.isFinite(tier.price) && tier.price >= 0 && tier.price <= item.price)
+            .map((tier) => `${item.name}: ${money(tier.price)} each for ${tier.minQuantity} or more of that product.`) : []);
+        if (offers.length) return `These quantity discounts are currently configured:\n\n${offers.slice(0, 10).map((offer) => '- ' + offer).join('\n')}\n\nCheckout confirms eligibility and the final total.`;
+        return publishedOffer(support.discounts, now, 'discount') || 'Sorry, discount information is currently unavailable. Please contact the shop before ordering.';
+      }
+      case 'promotions': return publishedOffer(support.promotions, now, 'promotion') || missing('current promotion');
       case 'signup': return 'To sign up: 1. Open /login and select Signup. 2. Enter a username, email, password, and password confirmation. Follow the password requirements shown. 3. Answer the CAPTCHA, read the Terms and Conditions to the end, and accept them. 4. Select Signup and open the verification link emailed to you. Then return to Login. If needed, check spam/junk or use Resend Verification Email.';
       case 'login': return 'To log in: 1. Open /login and select Login. 2. Enter your email or username and password. 3. Select Login. Verify your email first if prompted. You can use Remember me or Forgot password? on that screen.';
       case 'password_reset': return 'To reset your password: 1. Open /login and select Forgot password? 2. Enter your email or username and request the reset email. 3. Follow the emailed reset link (or enter the emailed verification code if the screen asks for a code). 4. Enter and confirm your new password, then log in. Check spam/junk if the email is missing. Never share your password or verification code in chat.';
       case 'guest_order': return 'A customer account is required to place an online order. You can browse products first, then sign up or log in at /login to use the cart and checkout.';
-      case 'ordering': return 'To order: 1. Sign up or log in at /login. 2. Choose available products and quantities, then add them to your cart. 3. Open the cart and proceed to checkout. 4. Select pickup or delivery, enter the required details, and choose an available payment method. 5. Review the total and submit. Orders and pre-orders can be submitted during shop hours; pre-orders are scheduled for a future day.';
+      case 'ordering': return tl ? 'Para umorder: mag-sign up o mag-log in sa /login, pumili ng available na products at quantity, at piliin ang Add to Cart. Buksan ang Cart at mag-checkout. Piliin ang pickup o delivery, ilagay ang kinakailangang detalye at payment method, tingnan ang total, at isumite. Sa shop hours puwedeng magsumite ng orders at pre-orders; ang pre-order ay para sa susunod na araw.' : 'To order: 1. Sign up or log in at /login. 2. Choose available products and quantities, then add them to your cart. 3. Open the cart and proceed to checkout. 4. Select pickup or delivery, enter the required details, and choose an available payment method. 5. Review the total and submit. Orders and pre-orders can be submitted during shop hours; pre-orders are scheduled for a future day.';
       case 'order_status': return 'To check your order, sign in and open My Orders. Open the order for its status and available actions. I cannot access your personal order details in this chat; contact the shop if you need help with that order.';
-      case 'delivery': return `You can choose pickup or delivery at checkout. ${Number.isFinite(knowledge.deliveryFee) ? `The current delivery fee is ${money(knowledge.deliveryFee)}. ` : ''}For delivery, provide the recipient, contact number, address, and exact map pin; checkout confirms delivery eligibility and the total before you submit.`;
+      case 'delivery': return `You can choose pickup or delivery at checkout. ${Number.isFinite(knowledge.deliveryFee) ? `The current delivery fee is ${money(knowledge.deliveryFee)}. ` : ''}For delivery, provide the recipient, contact number, address, and exact map pin. Leche flan orders may require a delivery-distance notice and acknowledgment; checkout confirms the applicable restrictions, eligibility, and total before you submit.`;
       case 'payment': return `Cash is supported for pickup and cash on delivery. ${knowledge.onlinePaymentConfigured === true ? `Online payment options currently include ${(knowledge.paymentMethods || []).join(', ') || 'the methods shown at checkout'}.` : knowledge.onlinePaymentConfigured === false ? 'Online payment is not currently configured; check the available methods at checkout.' : 'Please check checkout for the currently available online payment methods.'}`;
-      case 'pricing': return product ? (Number.isFinite(product.price) ? `${product.name} costs ${money(product.price)} per item.` : missing(`price for ${product.name}`)) : needProduct();
+      case 'pricing': { const price = product && productUnitPrice(product, state?.preferences?.quantity || 1); return product ? (price != null ? `${product.name} costs ${money(price)} per item${state?.preferences?.quantity > 1 ? ` for ${state.preferences.quantity} items` : ''}.` : `Please confirm the current price for ${product.name} at checkout.`) : needProduct(); }
       case 'nutrition': {
         if (!product) return 'Which dessert would you like calorie information for?';
-        return 'I can\'t estimate calories for **' + product.name + '** right now. Please try again shortly.';
+        return 'To estimate calories for **' + product.name + '**, please share the serving size and published ingredients. Any estimate would be approximate, not a measured nutrition value.';
       }
       case 'product_opinion': {
         if (!product) return needProduct();
         const details = clean(product.description);
-        if (!details) return `${product.name} is on our menu${Number.isFinite(product.price) ? ` for ${money(product.price)}` : ''}. I don't have a detailed tasting description, but tell me what flavors you like and I can help you choose.`;
-        return `Our menu describes ${product.name} this way: ${details} If that sounds like the kind of dessert you enjoy, it could be a good choice${Number.isFinite(product.price) ? ` at ${money(product.price)}` : ''}.`;
+        const price = productUnitPrice(product);
+        if (!details) return `${product.name} is on our menu${price != null ? ` for ${money(price)}` : ''}. I don't have a detailed tasting description, but tell me what flavors you like and I can help you choose.`;
+        return `Our menu describes ${product.name} this way: ${details} If that sounds like the kind of dessert you enjoy, it could be a good choice${price != null ? ` at ${money(price)}` : ''}.`;
       }
       // Production recipes are staff-only and may be estimates. They are not
       // evidence for public ingredient lists or allergy safety guarantees.

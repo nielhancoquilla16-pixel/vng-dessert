@@ -11,7 +11,6 @@ import { useShopSettings } from '../context/ShopSettingsContext';
 import { formatCurrency } from '../utils/orderAnalytics';
 import { getProductPricing } from '../../../dessert-ai-system/shared/productPricing.js';
 import { getCustomerProducts, isProductExpired } from '../utils/customerProducts';
-import { CUSTOMER_SUPPORT_GREETING } from '../utils/customerSupportChat';
 import AssistantMessage from '../components/AssistantMessage';
 import { getPreOrderUnavailableReason as getProductPreOrderUnavailableReason } from '../utils/preOrders';
 import useDialogFocus from '../hooks/useDialogFocus';
@@ -24,7 +23,7 @@ const Products = () => {
   const [selectedCategory, setSelectedCategory] = useState('All Categories');
   const { products, isProductsLoading } = useProducts();
   const { addToCart, cartItems } = useCart();
-  const { queryProductAI } = useAI();
+  const { queryProductAI, chatMessages: messages, isChatSending: isSending, chatSessionVersion } = useAI();
   const { loggedInCustomer, isAdmin } = useAuth();
   const { isShopOpen, isShopSettingsLoading, shopSettingsError, operatingHoursLabel, closingTimeLabel } = useShopSettings();
   const navigate = useNavigate();
@@ -32,14 +31,12 @@ const Products = () => {
   const [selectedChatProduct, setChatProduct] = useState(null);
   const [selectedPreOrderProduct, setPreOrderProduct] = useState(null);
   const [preOrderQuantity, setPreOrderQuantity] = useState(1);
-  const [messages, setMessages] = useState([]);
   const [inputValue, setInputValue] = useState('');
-  const [isSending, setIsSending] = useState(false);
   const [detailQuantity, setDetailQuantity] = useState(1);
   const [purchaseMessage, setPurchaseMessage] = useState('');
   const [purchaseError, setPurchaseError] = useState(false);
   const messagesEndRef = useRef(null);
-  const chatRequestRef = useRef(0);
+  useEffect(() => { setInputValue(''); setChatProduct(null); }, [chatSessionVersion]);
 
   const storeProducts = getCustomerProducts(products);
   const chatProduct = storeProducts.find((product) => product.id === selectedChatProduct?.id) || null;
@@ -93,11 +90,8 @@ const Products = () => {
   }
 
   function closeChat() {
-    chatRequestRef.current += 1;
     setChatProduct(null);
-    setMessages([]);
     setInputValue('');
-    setIsSending(false);
   }
 
   const detailDialogRef = useDialogFocus({ isOpen: Boolean(detailProduct), onClose: closeDetails });
@@ -109,9 +103,7 @@ const Products = () => {
 
   function openChat(product) {
     closeDetails();
-    chatRequestRef.current += 1;
     setChatProduct(product);
-    setMessages([{ role: 'ai', text: CUSTOMER_SUPPORT_GREETING }]);
     setInputValue('');
     setPurchaseMessage('');
   }
@@ -143,18 +135,8 @@ const Products = () => {
     event.preventDefault();
     const text = inputValue.trim();
     if (!text || isSending) return;
-    const requestId = chatRequestRef.current;
     setInputValue('');
-    setMessages((previous) => [...previous, { role: 'user', text }]);
-    setIsSending(true);
-    try {
-      const reply = await queryProductAI(chatProduct, text, messages);
-      if (requestId === chatRequestRef.current) setMessages((previous) => [...previous, { role: 'ai', text: reply }]);
-    } catch {
-      if (requestId === chatRequestRef.current) setMessages((previous) => [...previous, { role: 'ai', text: 'Sorry, something went wrong. Please try again.' }]);
-    } finally {
-      if (requestId === chatRequestRef.current) setIsSending(false);
-    }
+    await queryProductAI(chatProduct, text);
   }
 
   const selectedQuantity = Math.max(1, Math.min(detailQuantity, remainingStock(detailProduct)));
@@ -317,7 +299,7 @@ const Products = () => {
               <div ref={messagesEndRef} />
             </div>
             <form className="dessert-chat-form" onSubmit={sendMessage}>
-              <input type="text" aria-label="Ask the dessert assistant" value={inputValue} onChange={(event) => setInputValue(event.target.value)} placeholder="Ask about products, orders, or our shop…" disabled={isSending} />
+              <input type="text" aria-label="Ask the dessert assistant" value={inputValue} onChange={(event) => setInputValue(event.target.value)} maxLength={2000} placeholder="Ask about products, orders, or our shop…" disabled={isSending} />
               <button type="submit" className="dessert-icon-button" aria-label="Send message" disabled={isSending || !inputValue.trim()}><Send size={20} /></button>
             </form>
             <footer className="dessert-chat-footer">

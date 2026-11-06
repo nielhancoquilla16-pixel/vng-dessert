@@ -5,6 +5,16 @@ import {
   detectSupportIntent as detectIntent,
   buildSupportReply,
 } from '../../dessert-ai-system/server/lib/aiSupport.js';
+import { buildRecommendationState, normalizeRecommendationState, selectRecommendations, formatRecommendations } from '../../dessert-ai-system/server/lib/aiProducts.js';
+
+const choiceProducts = [
+  { id: 'choco-cake', name: 'Cocoa Cake', category: 'Cakes', description: 'Rich chocolate slices in a sharing box.', price: 95, stock: 12, availability: 'available' },
+  { id: 'choco-cookies', name: 'Chocolate Cookies', category: 'Cookies', description: 'Soft cocoa cookies.', price: 75, stock: 12, availability: 'available' },
+  { id: 'choco-bites', name: 'Brownie Bites', category: 'Chocolate', description: 'Small chocolate bites.', price: 85, stock: 12, availability: 'available' },
+  { id: 'choco-box', name: 'Chocolate Sharing Box', category: 'Boxes', description: 'A chocolate selection for sharing.', price: 140, stock: 12, availability: 'available' },
+  { id: 'ube', name: 'Ube Dessert', category: 'Ube', description: 'Creamy purple yam dessert.', price: 100, stock: 12, availability: 'available' },
+  { id: 'mango', name: 'Mango Dessert', category: 'Fruit', description: 'Mango and cream.', price: 90, stock: 12, availability: 'available' },
+];
 
 const now = new Date('2026-09-30T03:00:00Z');
 const detectSupportIntent = (question, context = {}) => detectIntent(question, { now, ...context });
@@ -30,7 +40,7 @@ const knowledge = (customerSupport = {}, overrides = {}) => ({
 });
 
 const answer = (question, { support = {}, context = {}, data = {} } = {}) => (
-  buildSupportReply(detectSupportIntent(question, { products, ...context }), knowledge(support, data), { now })
+  buildSupportReply(detectSupportIntent(question, { products, ...context }), knowledge(support, data), { now, message: question, history: context.history })
 );
 
 const assertUnavailable = (reply) => {
@@ -169,15 +179,19 @@ test('recommendations handle common misspellings and use the selected dessert co
     ...products,
     { id: 'cake', name: 'Chocolate Cake', description: 'Soft chocolate cake.', price: 100, stock: 4, availability: 'available' },
   ] }), { now });
-  assert.equal(reply, '- Leche Flan = PHP 120.00\n- Chocolate Cake = PHP 100.00');
+  assert.match(reply, /\*\*Leche Flan\*\*.*PHP 120\.00/);
+  assert.match(reply, /creamy caramel dessert/);
+  assert.match(reply, /Soft chocolate cake/);
   assert.match(reply, /Chocolate Cake/);
   assert.doesNotMatch(reply, /Chocolate Crinkles/);
   assert.doesNotMatch(reply, /Secret Test Cake|Old Mango Float/);
 });
 
-test('recommendations without a selected dessert return available names and prices only', () => {
+test('recommendations introduce eligible desserts and explain them using published descriptions', () => {
   const reply = answer('What can you recommend?');
-  assert.equal(reply, '- Leche Flan = PHP 120.00');
+  assert.match(reply, /Of course!/);
+  assert.match(reply, /\*\*Leche Flan\*\*.*PHP 120\.00/);
+  assert.match(reply, /A creamy caramel dessert/);
   assert.doesNotMatch(reply, /Chocolate Crinkles/);
   assert.doesNotMatch(reply, /Secret Test Cake|Old Mango Float/);
 });
@@ -266,7 +280,7 @@ test('calorie fallback does not invent a value when the estimate service is unav
   assert.deepEqual(plan.intents, ['nutrition']);
   assert.equal(plan.productId, 'flan');
   const missingReply = buildSupportReply(plan, knowledge(), { now });
-  assert.match(missingReply, /can't estimate calories/i);
+  assert.match(missingReply, /serving size and published ingredients/i);
   assert.doesNotMatch(missingReply, /shop has not published verified calorie information/i);
   assert.doesNotMatch(missingReply, /\b\d+\s*calories\b/i);
 });
@@ -377,4 +391,99 @@ test('history accepts conversation roles only and ignores malformed inputs', () 
   assert.equal(normalized.length, 2);
   assert.deepEqual(normalized.map((entry) => entry.role), ['user', 'assistant']);
   assert.match(normalized[0].content, /Where are you located/);
+});
+
+test('recommendations match tastes, avoid earlier IDs, and explain exhaustion', () => {
+  let state = buildRecommendationState('I love chocolate. Recommend something for breakfast.');
+  const first = selectRecommendations(choiceProducts, state, { now });
+  assert.equal(first.products.length, 2);
+  assert.ok(first.products.every((item) => item.id.startsWith('choco-')));
+  state = { ...state, recommendedProductIds: first.products.map((item) => item.id) };
+  state = buildRecommendationState('Can you recommend more?', { state });
+  const second = selectRecommendations(choiceProducts, state, { now });
+  assert.equal(second.products.length, 2);
+  assert.ok(second.products.every((item) => !state.recommendedProductIds.includes(item.id)));
+  state.recommendedProductIds.push(...second.products.map((item) => item.id));
+  const last = selectRecommendations(choiceProducts, buildRecommendationState('Something else?', { state }), { now });
+  assert.equal(last.products.length, 0);
+  assert.equal(last.exhausted, true);
+  assert.match(formatRecommendations(last, state), /already shared/);
+  assert.match(formatRecommendations(first, state), /morning treat/);
+});
+
+test('budget bounds, flavor changes, exclusions and quantity rules remain hard constraints', () => {
+  const budget = buildRecommendationState('I love chocolate. Recommend something under ₱100.');
+  const selection = selectRecommendations(choiceProducts, budget, { now, limit: 10 });
+  assert.equal(selection.products.length, 3);
+  assert.ok(selection.products.every((item) => item.price < 100 && item.id.startsWith('choco-')));
+  const changed = buildRecommendationState('I want ube instead, up to PHP 100.', { state: budget });
+  assert.deepEqual(selectRecommendations(choiceProducts, changed, { now }).products.map((item) => item.id), ['ube']);
+  const excluded = buildRecommendationState('Recommend something without chocolate.');
+  assert.ok(selectRecommendations(choiceProducts, excluded, { now, limit: 10 }).products.every((item) => !item.id.startsWith('choco-')));
+  const bulk = [{ ...choiceProducts[0], discountEnabled: true, discountTiers: [{ minQuantity: 5, price: 65 }] }];
+  assert.equal(selectRecommendations(bulk, buildRecommendationState('Recommend 5 packs of chocolate under PHP 70 each.'), { now }).products.length, 1);
+  assert.equal(selectRecommendations(bulk, buildRecommendationState('Recommend 5 packs of chocolate under PHP 100 total.'), { now }).products.length, 0);
+  assert.equal(selectRecommendations(bulk, buildRecommendationState('Recommend 20 packs of chocolate.'), { now }).products.length, 0);
+  assert.equal(selectRecommendations([{ ...bulk[0], priceConfirmed: false }], budget, { now }).products.length, 0);
+  const limited = buildRecommendationState('I only have 90 pesos. What can I buy?');
+  assert.ok(selectRecommendations(choiceProducts, limited, { now, limit: 10 }).products.every((item) => item.price <= 90));
+  assert.equal(buildRecommendationState('May I have a recommendation?').preferences.language, 'en');
+});
+
+test('new flavors participate through catalog text without hardcoded products', () => {
+  const extra = { id: 'new', name: 'Pistachio Dessert', category: 'Seasonal', description: 'Pistachio cream.', price: 90, stock: 5, availability: 'available' };
+  const state = buildRecommendationState('I love pistachio.');
+  assert.deepEqual(selectRecommendations([...choiceProducts, extra], state, { now }).products.map((item) => item.id), ['new']);
+});
+
+test('Tagalog and Taglish follow-ups retain the budget and recommend new products', () => {
+  let state = buildRecommendationState('Gusto ko ng chocolate, budget ko ₱100. Ano ang mairerekomenda mo sa meryenda?');
+  const first = selectRecommendations(choiceProducts, state, { now });
+  assert.equal(state.preferences.language, 'tl');
+  assert.equal(state.preferences.maxPrice, 100);
+  assert.match(formatRecommendations(first, state), /Sige!|Narito/);
+  state.recommendedProductIds = first.products.map((item) => item.id);
+  state = buildRecommendationState('May iba pa?', { state });
+  assert.equal(detectSupportIntent('May iba pa?', { state }).intents[0], 'recommendation');
+  assert.ok(selectRecommendations(choiceProducts, state, { now }).products.every((item) => !state.recommendedProductIds.includes(item.id)));
+});
+
+test('dietary safety constraints survive follow-ups without inferring ingredients', () => {
+  const state = buildRecommendationState('Recommend something nut-free.');
+  const next = buildRecommendationState('Can you recommend more?', { state });
+  const selection = selectRecommendations(choiceProducts, next, { now });
+  assert.deepEqual(selection.products, []);
+  assert.match(formatRecommendations(selection, next), /confirm.*ingredients and allergens/);
+});
+
+test('ordinary menu lists do not count as earlier recommendations', () => {
+  const state = buildRecommendationState('Recommend something.', { products: choiceProducts, history: [
+    { role: 'user', content: 'Show the menu.' }, { role: 'assistant', content: '- Cocoa Cake = PHP 95.00' },
+  ] });
+  assert.deepEqual(state.recommendedProductIds, []);
+  assert.equal(normalizeRecommendationState({ recommendedProductIds: Array.from({ length: 100 }, (_, i) => `id-${i}`) }).recommendedProductIds.length, 100);
+});
+
+test('time and date use Manila across a UTC day boundary and math uses precedence', () => {
+  const clock = new Date('2026-11-07T16:01:00Z');
+  assert.match(buildSupportReply(detectSupportIntent('What time is it?'), {}, { now: clock, message: 'What time is it?' }), /12:01:00.*AM.*Philippines/);
+  assert.match(buildSupportReply(detectSupportIntent('What day is today?'), {}, { now: clock }), /Sunday.*8.*November.*2026|Sunday.*November.*8.*2026/);
+  for (const [question, expected] of [['What is 150 plus 250?', '= 400.'], ['2 + 3 * 4', '= 14.'], ['(2 + 3) * 4', '= 20.'], ['0.1 + 0.2', '= 0.3.']]) {
+    assert.ok(answer(question).endsWith(expected), question);
+  }
+  assert.match(answer('1 / 0'), /division by zero/);
+  assert.deepEqual(detectSupportIntent('What is leche flan?', { products }).intents, ['general']);
+});
+
+test('product descriptions, comparisons and active tiers use only saved public facts', () => {
+  const plan = detectSupportIntent('Compare Cocoa Cake versus Ube Dessert', { products: choiceProducts });
+  assert.ok(plan.intents.includes('comparison'));
+  const comparison = buildSupportReply(plan, { products: choiceProducts }, { now });
+  assert.match(comparison, /Cocoa Cake.*95\.00.*Rich chocolate/);
+  assert.match(comparison, /Ube Dessert.*100\.00.*purple yam/);
+  const details = detectSupportIntent('Tell me about Cocoa Cake', { products: choiceProducts });
+  assert.match(buildSupportReply(details, { products: choiceProducts }, { now }), /Rich chocolate slices/);
+  const offers = buildSupportReply({ intents: ['discounts'] }, { products: [{ ...choiceProducts[0], discountEnabled: true, discountTiers: [{ minQuantity: 5, price: 65 }] }] }, { now });
+  assert.match(offers, /65\.00 each for 5 or more/);
+  assert.match(answer('Do you have promotions?', { support: { promotions: 'Valid until 2026-01-01: 10% off.' } }), /dates have passed/);
 });

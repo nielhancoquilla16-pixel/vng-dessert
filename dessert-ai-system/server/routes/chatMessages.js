@@ -1,5 +1,5 @@
 import express from "express";
-import { buildSafeAiReply } from "./ai.js";
+import { buildSafeAiReply, validateAiRequest } from "./ai.js";
 import { limitAiRequests } from '../middleware/rateLimit.js';
 
 const buildAssistantMessageResource = (payload) => ({
@@ -12,6 +12,8 @@ const buildAssistantMessageResource = (payload) => ({
     ok: payload.ok,
     mode: 'assistant',
     source: 'assistant',
+    recommendedProductIds: payload.recommendedProductIds || [],
+    recommendationState: payload.recommendationState,
   },
 });
 
@@ -24,7 +26,9 @@ export const createChatMessagesRouter = ({ reply = buildSafeAiReply } = {}) => {
         return res.status(400).json({ error: "content is required." });
       }
       if (userContent.length > 2000) return res.status(400).json({ error: 'Please keep your message under 2,000 characters.' });
-      const payload = await reply(userContent, '', { history: req.body?.history, productId: req.body?.productId });
+      const invalid = validateAiRequest(req.body);
+      if (invalid) return res.status(400).json({ error: invalid });
+      const payload = await reply(userContent, '', { history: req.body?.history, productId: req.body?.productId, recommendationState: req.body?.recommendationState });
       return res.status(201).json({
         data: buildAssistantMessageResource(payload),
         meta: {

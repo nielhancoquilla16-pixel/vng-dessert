@@ -1,6 +1,6 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
-import { Facebook, Instagram } from 'lucide-react';
+import { Facebook } from 'lucide-react';
 import './Footer.css';
 
 const Footer = () => {
@@ -10,8 +10,7 @@ const Footer = () => {
         {/* Brand Column */}
         <div className="footer-column">
           <div className="footer-brand-title">
-            <span role="img" aria-label="dessert"></span>
-          V&G LECHEFLAN
+            V&G LECHEFLAN
           </div>
           <p className="footer-description">
             Authentic Filipino desserts made with love, tradition, and the freshest local ingredients.
@@ -37,11 +36,6 @@ const Footer = () => {
             <li>
               <a href="https://www.facebook.com/VnG.LecheFlan" target="_blank" rel="noopener noreferrer" className="footer-social-link">
                 <Facebook size={20} color="#1877f2" /> Facebook
-              </a>
-            </li>
-            <li>
-              <a href="https://www.instagram.com/vng.lecheflan/" className="footer-social-link">
-                <Instagram size={20} color="#e4405f" /> Instagram
               </a>
             </li>
           </ul>

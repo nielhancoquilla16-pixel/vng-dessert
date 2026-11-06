@@ -14,18 +14,19 @@ const SECRET_OUTPUT = /\b(?:sk|pk)_(?:live|test)_[a-z0-9]+|\b(?:sk-|gsk_)[a-z0-9
 const PRIVATE_TOPICS = /\b(?:secrets?|dotenv|env|backend|inventory|unit costs?|internal costs?|implementation details?)\b|\b(?:your|the|original)\s+(?:prompts?|instructions?|configuration|config)\b|\bstock\s+(?:count|quantity|numbers?)\b/i;
 const PRIVATE_OUTPUT = /\byou are (?:the |a |an )?.{0,60}\bassistant\b|\btreat (?:the )?(?:user|conversation|catalog).{0,100}\b(?:data|instructions)\b|\b(?:backend|database|server)\b.{0,50}\b(?:uses?|hosted|tables?|schema|middleware|endpoints?|configuration)\b/i;
 const ENVIRONMENT_NAME = /\b(?:[A-Z][A-Z0-9]*_)+[A-Z0-9]+\b/;
+const TAGALOG_OVERRIDE = /\b(?:huwag sundin|wag sundin|kalimutan|balewalain|lampasan)\b.{0,80}\b(?:utos|patakaran|tagubilin|panuntunan|rules|instructions)\b/i;
 
 export const containsUnsafeAiOutput = (value) => {
   if (value === AI_SECURITY_REFUSAL) return false;
   const text = normalize(value);
-  return PROTECTED_TOPICS.test(text) || PRIVATE_TOPICS.test(text) || OVERRIDE_REQUEST.test(text)
+  return PROTECTED_TOPICS.test(text) || PRIVATE_TOPICS.test(text) || OVERRIDE_REQUEST.test(text) || TAGALOG_OVERRIDE.test(text)
     || CODE_OUTPUT.test(String(value || '')) || SECRET_OUTPUT.test(String(value || ''))
     || ENVIRONMENT_NAME.test(String(value || '')) || PRIVATE_OUTPUT.test(text);
 };
 
 export const isRestrictedAiRequest = (value) => {
   const text = normalize(value);
-  if (PROTECTED_TOPICS.test(text) || PRIVATE_TOPICS.test(text) || OVERRIDE_REQUEST.test(text)
+  if (PROTECTED_TOPICS.test(text) || PRIVATE_TOPICS.test(text) || OVERRIDE_REQUEST.test(text) || TAGALOG_OVERRIDE.test(text)
     || ENVIRONMENT_NAME.test(String(value || ''))
     || CODE_OUTPUT.test(String(value || '')) || SECRET_OUTPUT.test(String(value || ''))) return true;
   if (CODE_TOPIC.test(text.replace(CUSTOMER_CODE, '')) || CODE_ACTION.test(text)) return true;
