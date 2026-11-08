@@ -39,3 +39,4 @@ tmp/
 /SECURITY_UPDATE.md
 
 .vercel
+/.github/workflows/
